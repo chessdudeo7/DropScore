@@ -105,6 +105,54 @@ main {
   color: var(--text-dim); font-size: 1.02rem; line-height: 1.6;
 }
 
+/* ── source tabs ──────────────────────────────────────────────────── */
+.tabs {
+  display: inline-flex; gap: 0.25rem; margin-bottom: 1.1rem; padding: 0.25rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+}
+.tab {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.5rem 0.9rem; border: 0; border-radius: 9px; cursor: pointer;
+  background: transparent; color: var(--text-dim);
+  font: 500 0.86rem/1 Inter, sans-serif;
+  transition: background 0.18s, color 0.18s;
+}
+.tab svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.tab:hover { color: var(--text); }
+.tab.is-active { background: var(--surface-hi); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+
+.pane { animation: rise 0.25s ease both; }
+#submit-btn { margin-top: 1.4rem; }
+
+.note-tos {
+  margin: 1.25rem 0 0; padding: 0.7rem 0.85rem;
+  border-left: 2px solid rgba(245, 215, 110, 0.4); border-radius: 0 8px 8px 0;
+  background: rgba(245, 215, 110, 0.05);
+  font-size: 0.8rem; line-height: 1.55; color: var(--text-dim);
+}
+
+/* ── dropzone ─────────────────────────────────────────────────────── */
+.dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.5rem; padding: 2.4rem 1.5rem; cursor: pointer; text-align: center;
+  background: var(--surface); border: 1.5px dashed var(--line-hi);
+  border-radius: var(--radius-lg);
+  transition: border-color 0.18s, background 0.18s, transform 0.18s;
+}
+.dropzone:hover { border-color: rgba(245, 215, 110, 0.45); background: var(--surface-hi); }
+.dropzone.dragover {
+  border-color: var(--accent); background: rgba(245, 215, 110, 0.07);
+  transform: scale(1.005);
+}
+.dropzone input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.dz-icon { width: 30px; height: 30px; fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+.dz-title { font-size: 0.98rem; font-weight: 500; }
+.dz-title u { text-decoration-color: rgba(245, 215, 110, 0.6); text-underline-offset: 3px; }
+.dz-sub { font-size: 0.8rem; color: var(--text-faint); }
+
+#file-thumb { width: 100%; height: 100%; display: block; object-fit: cover; background: #000; }
+#file-meta { font-size: 0.78rem; }
+
 /* ── url form ─────────────────────────────────────────────────────── */
 .url-form { display: flex; gap: 0.7rem; flex-wrap: wrap; }
 

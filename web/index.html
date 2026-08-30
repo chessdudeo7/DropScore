@@ -33,43 +33,93 @@
   <section class="hero" id="input-stage">
     <h1>Turn falling-tile piano videos<br /><em>into real sheet music.</em></h1>
     <p class="sub">
-      Paste a YouTube link to a Synthesia-style performance. DropScore watches the tiles,
-      calibrates the keyboard, and reconstructs the notes as MIDI and notation.
+      Point DropScore at a Synthesia-style performance — a YouTube link or your own
+      video file. It watches the tiles, calibrates the keyboard, and reconstructs the
+      notes as MIDI and notation.
     </p>
 
-    <form class="url-form" id="url-form" autocomplete="off" novalidate>
-      <div class="field">
-        <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
-        <input id="url-input" type="text" inputmode="url" spellcheck="false"
-               placeholder="https://www.youtube.com/watch?v=..." aria-label="YouTube video URL" />
-        <button type="button" class="ghost-btn" id="paste-btn" title="Paste from clipboard">Paste</button>
+    <div class="tabs" role="tablist" aria-label="Video source">
+      <button class="tab is-active" id="tab-link" role="tab" aria-selected="true" aria-controls="pane-link" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
+        <span>YouTube link</span>
+      </button>
+      <button class="tab" id="tab-file" role="tab" aria-selected="false" aria-controls="pane-file" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4" /><path d="M7 9l5-5 5 5" /><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" /></svg>
+        <span>Upload a file</span>
+      </button>
+    </div>
+
+    <form id="source-form" autocomplete="off" novalidate>
+      <!-- link pane -->
+      <div class="pane" id="pane-link" role="tabpanel" aria-labelledby="tab-link">
+        <div class="url-form">
+          <div class="field">
+            <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
+            <input id="url-input" type="text" inputmode="url" spellcheck="false"
+                   placeholder="https://www.youtube.com/watch?v=..." aria-label="YouTube video URL" />
+            <button type="button" class="ghost-btn" id="paste-btn" title="Paste from clipboard">Paste</button>
+          </div>
+        </div>
+
+        <p class="hint" id="hint">Also accepts youtu.be, /shorts/ and /embed/ links.</p>
+
+        <div class="samples">
+          <span>Try:</span>
+          <button class="chip" type="button" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ">watch?v=…</button>
+          <button class="chip" type="button" data-url="https://youtu.be/9bZkp7q19f0?t=42">youtu.be/…</button>
+          <button class="chip" type="button" data-url="https://www.youtube.com/shorts/aqz-KE-bpKQ">/shorts/…</button>
+        </div>
+
+        <div class="preview" id="preview" hidden>
+          <div class="preview-thumb">
+            <img id="preview-img" alt="Video thumbnail" />
+            <span class="preview-badge mono" id="preview-id"></span>
+          </div>
+          <div class="preview-meta">
+            <h3>Source detected</h3>
+            <p>DropScore will fetch this video and sample it at <b>30 fps</b> for tile tracking.</p>
+            <button class="link-btn" id="clear-btn" type="button">Use a different link</button>
+          </div>
+        </div>
+
+        <p class="note-tos">
+          Downloading from YouTube is against their Terms of Service. For anything beyond
+          local experimentation, use your own file instead.
+        </p>
       </div>
+
+      <!-- file pane -->
+      <div class="pane" id="pane-file" role="tabpanel" aria-labelledby="tab-file" hidden>
+        <label class="dropzone" id="dropzone" for="file-input">
+          <input id="file-input" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.webm,.mov,.mkv,.m4v" />
+          <svg class="dz-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 16V4" /><path d="M7 9l5-5 5 5" />
+            <path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" />
+          </svg>
+          <span class="dz-title">Drop a video here, or <u>browse</u></span>
+          <span class="dz-sub">MP4, WebM, MOV or MKV · up to 2 GB · never leaves your machine</span>
+        </label>
+
+        <p class="hint" id="file-hint">The file is read locally — nothing is uploaded in this prototype.</p>
+
+        <div class="preview" id="file-preview" hidden>
+          <div class="preview-thumb">
+            <canvas id="file-thumb" width="320" height="180"></canvas>
+            <span class="preview-badge mono" id="file-badge"></span>
+          </div>
+          <div class="preview-meta">
+            <h3 id="file-name">video.mp4</h3>
+            <p class="mono" id="file-meta"></p>
+            <button class="link-btn" id="file-clear-btn" type="button">Choose a different file</button>
+          </div>
+        </div>
+      </div>
+
       <button type="submit" class="primary-btn" id="submit-btn">
         <span>Transcribe</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13" /><path d="M13 6l6 6-6 6" /></svg>
       </button>
     </form>
-
-    <p class="hint" id="hint">Also accepts youtu.be, /shorts/ and /embed/ links.</p>
-
-    <div class="samples">
-      <span>Try:</span>
-      <button class="chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ">watch?v=…</button>
-      <button class="chip" data-url="https://youtu.be/9bZkp7q19f0?t=42">youtu.be/…</button>
-      <button class="chip" data-url="https://www.youtube.com/shorts/aqz-KE-bpKQ">/shorts/…</button>
-    </div>
-
-    <div class="preview" id="preview" hidden>
-      <div class="preview-thumb">
-        <img id="preview-img" alt="Video thumbnail" />
-        <span class="preview-badge mono" id="preview-id"></span>
-      </div>
-      <div class="preview-meta">
-        <h3>Source detected</h3>
-        <p>DropScore will fetch this video and sample it at <b>30 fps</b> for tile tracking.</p>
-        <button class="link-btn" id="clear-btn" type="button">Use a different link</button>
-      </div>
-    </div>
 
     <details class="options" id="options">
       <summary>

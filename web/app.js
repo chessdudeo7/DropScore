@@ -60,12 +60,60 @@ function seededRandom(seed) {
   };
 }
 
+const fmtBytes = (b) => {
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return `${b < 10 && i > 0 ? b.toFixed(1) : Math.round(b)} ${u[i]}`;
+};
+
+const fmtClock = (secs) => {
+  if (!isFinite(secs)) return '—';
+  const s = Math.round(secs);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+};
+
 // ── state ────────────────────────────────────────────────────────────
-const state = { videoId: null, job: null, cancelled: false, timer: null, t0: 0 };
+/** `source` is either {kind:'youtube', id} or {kind:'file', file, meta}. */
+const state = { tab: 'link', videoId: null, file: null, cancelled: false, timer: null, t0: 0 };
 
 const inputStage = $('#input-stage');
 const procStage = $('#processing-stage');
 const resStage = $('#result-stage');
+
+/** The source the active tab currently holds, or null if it is incomplete. */
+function currentSource() {
+  if (state.tab === 'link') {
+    return state.videoId ? { kind: 'youtube', id: state.videoId } : null;
+  }
+  return state.file ? { kind: 'file', ...state.file } : null;
+}
+
+/** Short label used for the job line and download filenames. */
+const sourceSlug = (src) =>
+  src.kind === 'youtube' ? src.id : src.file.name.replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_').slice(0, 48);
+
+// ── tabs ─────────────────────────────────────────────────────────────
+function selectTab(which) {
+  state.tab = which;
+  for (const [name, tab, pane] of [
+    ['link', $('#tab-link'), $('#pane-link')],
+    ['file', $('#tab-file'), $('#pane-file')],
+  ]) {
+    const on = name === which;
+    tab.classList.toggle('is-active', on);
+    tab.setAttribute('aria-selected', String(on));
+    pane.hidden = !on;
+  }
+  syncSubmit();
+}
+
+$('#tab-link').addEventListener('click', () => selectTab('link'));
+$('#tab-file').addEventListener('click', () => selectTab('file'));
+
+function syncSubmit() {
+  $('#submit-btn').disabled = !currentSource();
+}
 
 // ── URL input ────────────────────────────────────────────────────────
 const urlInput = $('#url-input');
@@ -96,7 +144,7 @@ function refreshPreview() {
     setHint(urlInput.value.trim() ? 'Could not find a video id in that link.' : DEFAULT_HINT,
             Boolean(urlInput.value.trim()));
   }
-  submitBtn.disabled = !id;
+  syncSubmit();
 }
 
 urlInput.addEventListener('input', refreshPreview);
@@ -124,21 +172,154 @@ document.querySelectorAll('.chip').forEach((chip) => {
   });
 });
 
-$('#url-form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  if (!state.videoId) {
-    setHint('Paste a YouTube link first.', true);
-    urlInput.focus();
+// ── file input ───────────────────────────────────────────────────────
+const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
+const ALLOWED_EXT = ['mp4', 'webm', 'mov', 'mkv', 'm4v'];
+const DEFAULT_FILE_HINT = 'The file is read locally — nothing is uploaded in this prototype.';
+
+const dropzone = $('#dropzone');
+const fileInput = $('#file-input');
+const fileHint = $('#file-hint');
+
+function setFileHint(msg, isError = false) {
+  fileHint.textContent = msg;
+  fileHint.classList.toggle('error', isError);
+}
+
+function clearFile() {
+  if (state.file) URL.revokeObjectURL(state.file.url);
+  state.file = null;
+  fileInput.value = '';
+  $('#file-preview').hidden = true;
+  setFileHint(DEFAULT_FILE_HINT);
+  syncSubmit();
+}
+
+/**
+ * Pull metadata and a representative frame straight from the file. Doubles as a
+ * decodability check: if the browser cannot open it, neither will the backend.
+ */
+function probeVideo(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.src = url;
+
+    let settled = false;
+    const fail = (why) => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      reject(new Error(why));
+    };
+    video.addEventListener('error', () => fail('This file could not be decoded in the browser.'));
+    // covers both "never loaded" and "loaded but the seek never completed"
+    setTimeout(() => fail('Timed out reading that file.'), 12000);
+
+    video.addEventListener('loadedmetadata', () => {
+      // a frame a quarter of the way in is far likelier to show tiles than frame 0
+      video.currentTime = Math.min(video.duration * 0.25 || 0, 30);
+    }, { once: true });
+
+    video.addEventListener('seeked', () => {
+      const canvas = $('#file-thumb');
+      const ctx = canvas.getContext('2d');
+      const scale = Math.min(canvas.width / video.videoWidth, canvas.height / video.videoHeight);
+      const w = video.videoWidth * scale;
+      const h = video.videoHeight * scale;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+      settled = true;
+      resolve({
+        url,
+        duration: video.duration,
+        width: video.videoWidth,
+        height: video.videoHeight,
+      });
+    }, { once: true });
+  });
+}
+
+async function acceptFile(file) {
+  if (!file) return;
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+
+  if (!ALLOWED_EXT.includes(ext) && !file.type.startsWith('video/')) {
+    setFileHint(`${file.name} is not a video file DropScore can read.`, true);
     return;
   }
-  startJob(state.videoId);
+  if (file.size > MAX_BYTES) {
+    setFileHint(`That file is ${fmtBytes(file.size)} — the limit is ${fmtBytes(MAX_BYTES)}.`, true);
+    return;
+  }
+
+  setFileHint('Reading video…');
+  try {
+    const meta = await probeVideo(file);
+    if (state.file) URL.revokeObjectURL(state.file.url);
+    state.file = { file, ...meta };
+
+    $('#file-name').textContent = file.name;
+    $('#file-badge').textContent = ext.toUpperCase();
+    $('#file-meta').textContent =
+      `${meta.width}×${meta.height} · ${fmtClock(meta.duration)} · ${fmtBytes(file.size)}`;
+    $('#file-preview').hidden = false;
+    setFileHint(DEFAULT_FILE_HINT);
+  } catch (err) {
+    state.file = null;
+    $('#file-preview').hidden = true;
+    setFileHint(err.message, true);
+  }
+  syncSubmit();
+}
+
+fileInput.addEventListener('change', () => acceptFile(fileInput.files[0]));
+$('#file-clear-btn').addEventListener('click', clearFile);
+
+['dragenter', 'dragover'].forEach((evt) =>
+  dropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    dropzone.classList.add('dragover');
+  }));
+
+['dragleave', 'drop'].forEach((evt) =>
+  dropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    if (evt === 'dragleave' && dropzone.contains(e.relatedTarget)) return;
+    dropzone.classList.remove('dragover');
+  }));
+
+dropzone.addEventListener('drop', (e) => acceptFile(e.dataTransfer.files[0]));
+
+// a drop anywhere else on the page should not navigate away from the app
+['dragover', 'drop'].forEach((evt) =>
+  window.addEventListener(evt, (e) => { if (!dropzone.contains(e.target)) e.preventDefault(); }));
+
+// ── submit ───────────────────────────────────────────────────────────
+$('#source-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const src = currentSource();
+  if (!src) {
+    if (state.tab === 'link') {
+      setHint('Paste a YouTube link first.', true);
+      urlInput.focus();
+    } else {
+      setFileHint('Choose a video file first.', true);
+    }
+    return;
+  }
+  startJob(src);
 });
 
 submitBtn.disabled = true;
 
 // ── pipeline simulation ──────────────────────────────────────────────
 const STEPS = [
-  { key: 'fetch',   label: 'Fetching video stream',        note: '720p · 30 fps', ms: 1400 },
+  { key: 'fetch',   label: 'Fetching video stream',        note: '720p · 30 fps', ms: 1400,
+    fileLabel: 'Reading video file',                       fileNote: 'local' },
   { key: 'keys',    label: 'Calibrating keyboard geometry', note: '88 keys',      ms: 1200 },
   { key: 'tiles',   label: 'Detecting and tracking tiles',  note: 'per frame',    ms: 2400 },
   { key: 'timing',  label: 'Solving fall speed and onsets', note: 'px → seconds', ms: 1200 },
@@ -147,8 +328,14 @@ const STEPS = [
 ];
 
 /** Log lines per step. `n` is the note count so the console agrees with the stats. */
-const logLines = (n) => ({
-  fetch: ['resolving stream manifest…', 'container mp4 · 1280x720 · 30.00 fps', 'decoding 3421 frames'],
+const logLines = (n, src) => ({
+  fetch: src.kind === 'youtube'
+    ? ['resolving stream manifest…', 'container mp4 · 1280x720 · 30.00 fps', 'decoding 3421 frames']
+    : [
+        `opening ${src.file.name} (${fmtBytes(src.file.size)})`,
+        `container ${(src.file.name.split('.').pop() || '').toLowerCase()} · ${src.width}x${src.height} · ${fmtClock(src.duration)}`,
+        'decoding 3421 frames',
+      ],
   keys: [
     'keybed strip found at y = 372..478',
     'black-key pattern locked (2-3 grouping, 36 sharps)',
@@ -165,13 +352,18 @@ const logLines = (n) => ({
   score: ['tempo estimate 96.4 BPM', 'meter 4/4 · key F major', 'engraving 2 staves'],
 });
 
-function renderSteps() {
+function renderSteps(src) {
   const list = $('#steps');
+  const local = src.kind === 'file';
   list.innerHTML = '';
   STEPS.forEach((s) => {
     const li = el('li');
     li.dataset.key = s.key;
-    li.append(el('span', 'dot', '✓'), el('span', 'step-label', s.label), el('span', 'step-note', s.note));
+    li.append(
+      el('span', 'dot', '✓'),
+      el('span', 'step-label', (local && s.fileLabel) || s.label),
+      el('span', 'step-note', (local && s.fileNote) || s.note),
+    );
     list.append(li);
   });
 }
@@ -197,20 +389,21 @@ function show(stage) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
-async function startJob(videoId) {
+async function startJob(src) {
   state.cancelled = false;
   $('#console').innerHTML = '';
   $('#progress-bar').style.width = '0%';
   $('#elapsed').textContent = '00:00';
-  renderSteps();
+  renderSteps(src);
   show(procStage);
   startElapsed();
 
-  log(`job queued for youtube:${videoId}`, true);
+  const slug = sourceSlug(src);
+  log(`job queued for ${src.kind === 'youtube' ? 'youtube:' + src.id : 'file:' + src.file.name}`, true);
 
   // generated up front so the console numbers match the result panel
-  const notes = synthesizeNotes(videoId);
-  const lookup = logLines(notes.length);
+  const notes = synthesizeNotes(slug);
+  const lookup = logLines(notes.length, src);
 
   for (let i = 0; i < STEPS.length; i++) {
     if (state.cancelled) return;
@@ -232,7 +425,7 @@ async function startJob(videoId) {
   }
 
   clearInterval(state.timer);
-  finish(videoId, notes);
+  finish(slug, notes);
 }
 
 $('#cancel-btn').addEventListener('click', () => {
@@ -356,10 +549,10 @@ function stat(k, v, unit) {
   return s;
 }
 
-function finish(videoId, notes) {
+function finish(slug, notes) {
   show(resStage);
 
-  const rnd = seededRandom(videoId + ':conf');
+  const rnd = seededRandom(slug + ':conf');
   const conf = (0.86 + rnd() * 0.11).toFixed(2);
   $('#result-conf').textContent = `confidence ${conf}`;
 
@@ -387,7 +580,7 @@ function finish(videoId, notes) {
     const b = el('button', 'dl');
     b.disabled = true;
     b.title = 'Backend not implemented yet';
-    b.append(el('span', 'ext', ext[f].slice(1).toUpperCase()), el('span', null, `${videoId}${ext[f]}`));
+    b.append(el('span', 'ext', ext[f].slice(1).toUpperCase()), el('span', null, `${slug}${ext[f]}`));
     dl.append(b);
   }
 
