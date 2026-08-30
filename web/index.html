@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DropScore — falling-tile piano video to sheet music</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="glow-field" aria-hidden="true">
+  <span class="orb orb-a"></span>
+  <span class="orb orb-b"></span>
+  <span class="orb orb-c"></span>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="brand-text">Drop<b>Score</b></span>
+  </div>
+  <nav class="topnav">
+    <a href="#how">How it works</a>
+    <a href="../docs/PIPELINE.md">Pipeline notes</a>
+    <span class="pill pill-warn">prototype · frontend only</span>
+  </nav>
+</header>
+
+<main>
+  <!-- INPUT -->
+  <section class="hero" id="input-stage">
+    <h1>Turn falling-tile piano videos<br /><em>into real sheet music.</em></h1>
+    <p class="sub">
+      Paste a YouTube link to a Synthesia-style performance. DropScore watches the tiles,
+      calibrates the keyboard, and reconstructs the notes as MIDI and notation.
+    </p>
+
+    <form class="url-form" id="url-form" autocomplete="off" novalidate>
+      <div class="field">
+        <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
+        <input id="url-input" type="text" inputmode="url" spellcheck="false"
+               placeholder="https://www.youtube.com/watch?v=..." aria-label="YouTube video URL" />
+        <button type="button" class="ghost-btn" id="paste-btn" title="Paste from clipboard">Paste</button>
+      </div>
+      <button type="submit" class="primary-btn" id="submit-btn">
+        <span>Transcribe</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13" /><path d="M13 6l6 6-6 6" /></svg>
+      </button>
+    </form>
+
+    <p class="hint" id="hint">Also accepts youtu.be, /shorts/ and /embed/ links.</p>
+
+    <div class="samples">
+      <span>Try:</span>
+      <button class="chip" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ">watch?v=…</button>
+      <button class="chip" data-url="https://youtu.be/9bZkp7q19f0?t=42">youtu.be/…</button>
+      <button class="chip" data-url="https://www.youtube.com/shorts/aqz-KE-bpKQ">/shorts/…</button>
+    </div>
+
+    <div class="preview" id="preview" hidden>
+      <div class="preview-thumb">
+        <img id="preview-img" alt="Video thumbnail" />
+        <span class="preview-badge mono" id="preview-id"></span>
+      </div>
+      <div class="preview-meta">
+        <h3>Source detected</h3>
+        <p>DropScore will fetch this video and sample it at <b>30 fps</b> for tile tracking.</p>
+        <button class="link-btn" id="clear-btn" type="button">Use a different link</button>
+      </div>
+    </div>
+
+    <details class="options" id="options">
+      <summary>
+        <span>Transcription settings</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+      </summary>
+      <div class="options-grid">
+        <label class="opt">
+          <span class="opt-label">Hand assignment</span>
+          <select id="opt-hands">
+            <option value="color">By tile colour (recommended)</option>
+            <option value="split">Fixed split at middle C</option>
+            <option value="pitch">Adaptive pitch clustering</option>
+            <option value="none">Single staff</option>
+          </select>
+        </label>
+        <label class="opt">
+          <span class="opt-label">Quantization</span>
+          <select id="opt-quant">
+            <option value="16">1/16 note</option>
+            <option value="32">1/32 note</option>
+            <option value="8">1/8 note</option>
+            <option value="0">None (raw timing)</option>
+          </select>
+        </label>
+        <label class="opt">
+          <span class="opt-label">Tempo</span>
+          <select id="opt-tempo">
+            <option value="auto">Estimate from note onsets</option>
+            <option value="fixed">Fix at 120 BPM</option>
+          </select>
+        </label>
+        <label class="opt">
+          <span class="opt-label">Key signature</span>
+          <select id="opt-key">
+            <option value="auto">Detect automatically</option>
+            <option value="C">C major / A minor</option>
+            <option value="G">G major / E minor</option>
+            <option value="F">F major / D minor</option>
+          </select>
+        </label>
+        <div class="opt opt-wide">
+          <span class="opt-label">Outputs</span>
+          <div class="checks">
+            <label><input type="checkbox" checked data-fmt="MIDI" /> <span>MIDI</span></label>
+            <label><input type="checkbox" checked data-fmt="MusicXML" /> <span>MusicXML</span></label>
+            <label><input type="checkbox" data-fmt="PDF" /> <span>PDF score</span></label>
+            <label><input type="checkbox" data-fmt="JSON" /> <span>Note JSON</span></label>
+          </div>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <!-- PROCESSING -->
+  <section class="stage" id="processing-stage" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Transcribing</h2>
+        <span class="mono" id="elapsed">00:00</span>
+      </div>
+      <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+      <ol class="steps" id="steps"></ol>
+      <div class="console mono" id="console" aria-live="polite"></div>
+      <button class="ghost-btn danger" id="cancel-btn" type="button">Cancel</button>
+    </div>
+  </section>
+
+  <!-- RESULT -->
+  <section class="stage" id="result-stage" hidden>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Transcription complete</h2>
+        <span class="pill pill-ok" id="result-conf">confidence 0.00</span>
+      </div>
+
+      <div class="stats" id="stats"></div>
+
+      <div class="roll-wrap">
+        <div class="roll-head">
+          <span>Piano roll</span>
+          <span class="mono" id="roll-range"></span>
+        </div>
+        <canvas id="roll" height="240"></canvas>
+        <div class="keybed" id="keybed" aria-hidden="true"></div>
+      </div>
+
+      <div class="downloads" id="downloads"></div>
+
+      <p class="disclaimer">
+        This build renders a simulated result — the vision backend is not wired up yet.
+        See <a href="../docs/PIPELINE.md">docs/PIPELINE.md</a> for the planned approach.
+      </p>
+
+      <button class="ghost-btn" id="again-btn" type="button">Transcribe another video</button>
+    </div>
+  </section>
+
+  <!-- HOW -->
+  <section class="how" id="how">
+    <h2>How DropScore reads a video</h2>
+    <div class="cards">
+      <article class="card">
+        <span class="card-num">01</span>
+        <h3>Find the keyboard</h3>
+        <p>Locate the keybed strip, then fit the 88-key grid from the black-key pattern so every x-position maps to a MIDI pitch.</p>
+      </article>
+      <article class="card">
+        <span class="card-num">02</span>
+        <h3>Track the tiles</h3>
+        <p>Segment falling rectangles by colour and motion, follow them frame to frame, and read their height as note duration.</p>
+      </article>
+      <article class="card">
+        <span class="card-num">03</span>
+        <h3>Convert to time</h3>
+        <p>Estimate the fall speed in pixels per second and turn each strike-line crossing into a precise note onset.</p>
+      </article>
+      <article class="card">
+        <span class="card-num">04</span>
+        <h3>Engrave</h3>
+        <p>Quantize onsets to a detected tempo grid, split hands, spell accidentals against the key, and emit MIDI / MusicXML.</p>
+      </article>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>DropScore · prototype</span>
+  <span class="mono">frontend only — no video is uploaded or processed</span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
