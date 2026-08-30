@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dropscore"
+version = "0.1.0"
+description = "Turn falling-tile piano videos into sheet music"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+]
+
+[project.optional-dependencies]
+# Only needed for the YouTube source path, which is a local-experimentation
+# convenience — see docs/PIPELINE.md on why the file path is the primary one.
+youtube = ["yt-dlp>=2024.1.1"]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+dropscore = "dropscore.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dropscore*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

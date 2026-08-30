@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# DropScore working output
+out/
+debug/
+*.mid
+*.musicxml
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
