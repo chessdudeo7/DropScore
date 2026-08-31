@@ -62,6 +62,44 @@ def cmd_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate(args: argparse.Namespace) -> int:
+    """Fit the keyboard grid, optionally scoring it against ground truth."""
+    import json  # noqa: PLC0415
+
+    from .calibrate import calibrate  # noqa: PLC0415
+
+    source = resolve(args.source)
+    with VideoReader(source.path, _config_from_args(args)) as reader:
+        result = calibrate(reader.sample(args.samples))
+
+    print(result)
+
+    truth_path = args.check
+    if truth_path is None:
+        candidate = source.path.with_suffix(".truth.json")
+        truth_path = str(candidate) if candidate.exists() else None
+
+    if truth_path is None:
+        return 0
+
+    truth = json.loads(Path(truth_path).read_text(encoding="utf-8"))["geometry"]
+    checks = [
+        ("first_pitch", result.layout.first_pitch, truth["first_pitch"], 0),
+        ("last_pitch", result.layout.last_pitch, truth["last_pitch"], 0),
+        ("strike_y", result.strike_y, truth["strike_y"], args.tolerance),
+        ("white_width", result.white_width, truth["white_key_width"], 0.5),
+        ("x0", result.layout.x0, truth["x0"], args.tolerance),
+    ]
+
+    failed = 0
+    for name, got, want, tolerance in checks:
+        ok = abs(got - want) <= tolerance
+        failed += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {name:12} got {got:>10.3f}  want {want:>10.3f}")
+
+    return 1 if failed else 0
+
+
 def cmd_synth(args: argparse.Namespace) -> int:
     """Render synthetic clips with exact ground truth, for evaluation."""
     from .synth import RenderSpec, generate, get_theme, render  # noqa: PLC0415
@@ -124,6 +162,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe.set_defaults(func=cmd_probe)
 
+    calib = sub.add_parser(
+        "calibrate",
+        help="fit the keyboard grid to a video",
+        description=(
+            "Locates the keybed, measures the white-key grid and anchors it to "
+            "pitch via the black-key pattern. Given a .truth.json sidecar (found "
+            "automatically next to synthetic clips) it also scores the fit."
+        ),
+    )
+    calib.add_argument("source", help="path to a video file, or a YouTube URL")
+    calib.add_argument("--check", metavar="TRUTH", help="ground-truth JSON to score against")
+    calib.add_argument(
+        "--tolerance", type=float, default=2.0, help="pixel tolerance when scoring"
+    )
+    calib.add_argument(
+        "--samples",
+        type=int,
+        default=DEFAULT.video.calibration_samples,
+        help="frames to sample",
+    )
+    calib.set_defaults(func=cmd_calibrate)
+
     synth = sub.add_parser(
         "synth",
         help="render synthetic falling-tile clips with exact ground truth",
@@ -168,11 +228,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _configure_logging(args.verbose)
 
+    from .calibrate import CalibrationError  # noqa: PLC0415
     from .synth.renderer import RenderError  # noqa: PLC0415
 
     try:
         return args.func(args)
-    except (SourceError, VideoError, RenderError) as exc:
+    except (SourceError, VideoError, RenderError, CalibrationError) as exc:
         log.error("%s", exc)
         return 1
     except KeyboardInterrupt:

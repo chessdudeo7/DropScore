@@ -2,11 +2,11 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: frontend prototype, backend stage 2 of 10.** The UI is complete and
+**Status: frontend prototype, backend stage 3 of 10.** The UI is complete and
 interactive but still simulates its results. The Python pipeline has its
-foundation — video I/O, note and keyboard models, and a synthetic clip generator
-that produces ground truth to score against — and none of the vision work yet.
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
+foundation — video I/O, note and keyboard models, a synthetic clip generator that
+produces ground truth to score against, and the first vision stage: fitting the
+keyboard grid. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
 
 ## The backend
 
@@ -31,7 +31,18 @@ vision code so stages 3–5 can be scored against an exact answer instead of bei
 tuned by eye. Six themes and four keyboard ranges, so a change that only works on
 one look shows up as a regression on the rest.
 
-`transcribe` is registered but raises until stages 3–8 land.
+```bash
+dropscore calibrate out/synth/classic_88key_seed0.mp4
+```
+
+`calibrate` fits the keyboard: it locates the keybed from temporal activity,
+measures the white-key grid from the dominant spatial frequency of the separator
+edges, and anchors that grid to pitch via the black-key 2-3 grouping. Given a
+`.truth.json` sidecar — found automatically next to synthetic clips — it also
+scores the fit and exits non-zero on a mismatch, so it doubles as the stage-3
+regression check.
+
+`transcribe` is registered but raises until stages 4–8 land.
 
 Reading from a YouTube URL needs the optional extra (`pip install -e ".[youtube]"`)
 and violates YouTube's Terms of Service — it exists for local experimentation.
@@ -76,6 +87,7 @@ dropscore/    the Python pipeline
   sources.py    path or URL -> local file
   notes.py      Note / NoteSequence, the currency every stage trades in
   keyboard.py   pitch <-> pixel-column geometry
+  calibrate.py  fits that geometry to a real video
   synth/        synthetic clip generation with ground truth
 tests/        pytest suite; generates its own video fixtures
 web/          static frontend (index.html, styles.css, app.js)
