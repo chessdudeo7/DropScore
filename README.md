@@ -2,12 +2,12 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: frontend prototype, backend stage 4 of 10.** The UI is complete and
+**Status: frontend prototype, backend stage 5 of 10.** The UI is complete and
 interactive but still simulates its results. The Python pipeline has its
 foundation — video I/O, note and keyboard models, a synthetic clip generator that
-produces ground truth to score against, and two vision stages: fitting the
-keyboard grid and reading the tiles off it. What is missing is turning tiles into
-timed notes. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
+produces ground truth to score against, and a working vision path from video to
+raw timed notes. What is missing is the musical half: tempo, quantization, hands,
+and notation. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
 
 ## The backend
 
@@ -53,7 +53,18 @@ sampled frames and which key each sits over. Detection classifies pixels by
 excludes bloom halos without eroding real tiles; merged tiles are split on the key
 grid horizontally and at thin rows vertically.
 
-`transcribe` is registered but raises until stages 5–8 land.
+```bash
+dropscore transcribe out/synth/synthesia_88key_seed0.mp4
+```
+
+`transcribe` runs the whole vision path and writes note JSON. Timing comes from
+tile geometry rather than frame indices, so it is **sub-frame accurate**: a tile's
+bottom edge crossing the strike line is the note-on, its top edge crossing is the
+note-off, and both are extrapolated from frames where that edge is unclipped. At
+30fps a frame is 33ms while sixteenths at 140 BPM are 107ms apart, so rounding to
+frames would quantize badly before any musical quantization happened.
+
+Output is raw and unquantized — tempo, hands and notation arrive in stages 7–8.
 
 Reading from a YouTube URL needs the optional extra (`pip install -e ".[youtube]"`)
 and violates YouTube's Terms of Service — it exists for local experimentation.
@@ -100,6 +111,7 @@ dropscore/    the Python pipeline
   keyboard.py   pitch <-> pixel-column geometry
   calibrate.py  fits that geometry to a real video
   tiles.py      palette discovery, blob extraction, blob -> key
+  tracking.py   scroll speed, tile tracks, geometry -> timed notes
   synth/        synthetic clip generation with ground truth
 tests/        pytest suite; generates its own video fixtures
 web/          static frontend (index.html, styles.css, app.js)

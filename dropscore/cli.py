@@ -159,10 +159,39 @@ def cmd_synth(args: argparse.Namespace) -> int:
 
 
 def cmd_transcribe(args: argparse.Namespace) -> int:
-    raise SystemExit(
-        "transcribe is not implemented yet — the vision pipeline lands in stages "
-        "3-8. See docs/ROADMAP.md. Use `dropscore probe` to check a video opens."
+    """Calibrate, detect, track and time — the pipeline as far as it goes."""
+    from .calibrate import calibrate  # noqa: PLC0415
+    from .tiles import discover_palette  # noqa: PLC0415
+    from .tracking import estimate_speed, transcribe  # noqa: PLC0415
+
+    source = resolve(args.source)
+    config = _config_from_args(args)
+
+    with VideoReader(source.path, config) as reader:
+        samples = reader.sample()
+        calibration = calibrate(samples, config)
+        palette = discover_palette(samples, calibration, config)
+        log.info("%s", calibration)
+
+        # Speed needs consecutive frames, so take a run from a third of the way
+        # in — past any title card, and into the busy part of the piece.
+        start = (reader.info.frame_count or 0) // 3
+        window = list(reader.frames(start=start, stop=start + args.speed_frames))
+        speed = estimate_speed(window, calibration, config=config)
+        log.info("scroll speed %.2f px/s (confidence %.2f)", speed.value, speed.confidence)
+
+        sequence = transcribe(reader.frames(), calibration, palette, speed, config)
+
+    sequence.source = f"dropscore:{source.label}"
+    output = Path(args.output or f"{source.label}.notes.json")
+    sequence.save(output)
+
+    print(f"{len(sequence)} notes over {sequence.duration:.1f}s -> {output}")
+    print(
+        "Note timing is raw; tempo, quantization and hand assignment land in "
+        "stage 7, and MIDI/MusicXML in stage 8."
     )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -260,9 +289,23 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--fps", type=float, default=30.0)
     synth.set_defaults(func=cmd_synth)
 
-    transcribe = sub.add_parser("transcribe", help="transcribe a video (not yet implemented)")
+    transcribe = sub.add_parser(
+        "transcribe",
+        help="transcribe a video to raw note events",
+        description=(
+            "Runs calibration, tile detection, tracking and timing, writing a "
+            "note JSON. Timing is recovered from tile geometry and is sub-frame "
+            "accurate, but unquantized: tempo, hands and notation come later."
+        ),
+    )
     transcribe.add_argument("source", help="path to a video file, or a YouTube URL")
-    transcribe.add_argument("-o", "--output", help="output file")
+    transcribe.add_argument("-o", "--output", help="output file (default: <name>.notes.json)")
+    transcribe.add_argument(
+        "--speed-frames",
+        type=int,
+        default=40,
+        help="consecutive frames used to measure the scroll speed",
+    )
     transcribe.set_defaults(func=cmd_transcribe)
 
     return parser
@@ -275,10 +318,18 @@ def main(argv: list[str] | None = None) -> int:
     from .calibrate import CalibrationError  # noqa: PLC0415
     from .synth.renderer import RenderError  # noqa: PLC0415
     from .tiles import TileError  # noqa: PLC0415
+    from .tracking import TrackingError  # noqa: PLC0415
 
     try:
         return args.func(args)
-    except (SourceError, VideoError, RenderError, CalibrationError, TileError) as exc:
+    except (
+        SourceError,
+        VideoError,
+        RenderError,
+        CalibrationError,
+        TileError,
+        TrackingError,
+    ) as exc:
         log.error("%s", exc)
         return 1
     except KeyboardInterrupt:

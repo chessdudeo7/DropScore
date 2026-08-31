@@ -107,12 +107,39 @@ class TileConfig:
 
 
 @dataclass(frozen=True)
+class TrackingConfig:
+    """Following tiles and converting them to times (stage 5)."""
+
+    # Scroll-speed measurement. Correlation runs on the background-subtracted
+    # residual, so a pair with nothing falling has almost no signal and is
+    # skipped rather than contributing a spurious zero.
+    min_residual: float = 2.0
+    min_correlation: float = 0.05
+    min_speed: float = 20.0  # px/s
+    max_speed: float = 2000.0
+    min_speed_samples: int = 5
+
+    # Association. A tile can only be where the known speed puts it, so the gate
+    # is a fraction of the distance it should have travelled since last seen.
+    min_match_px: float = 4.0
+    match_ratio: float = 0.60
+    max_gap: float = 0.12  # seconds a track survives unmatched
+
+    # Timing. Edges within this many pixels of a frame boundary or the strike
+    # line are clipped, so they carry no usable position.
+    edge_margin: float = 2.0
+    min_observations: int = 2
+    min_duration: float = 0.02  # seconds; below this it is a detection artefact
+
+
+@dataclass(frozen=True)
 class Config:
     """Root config. Sub-configs are added by later stages."""
 
     video: VideoConfig = field(default_factory=VideoConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     tiles: TileConfig = field(default_factory=TileConfig)
+    tracking: TrackingConfig = field(default_factory=TrackingConfig)
 
     def evolve(self, **changes: Any) -> "Config":
         """Return a copy with top-level fields replaced."""
