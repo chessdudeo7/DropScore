@@ -27,12 +27,11 @@ import numpy as np
 
 from ..keyboard import COMMON_RANGES, KeyboardLayout, is_black
 from ..notes import Note, NoteSequence
+from ..video import VideoError, open_writer
 from .themes import DEFAULT_THEME, RGB, Theme, get_theme
 
 log = logging.getLogger(__name__)
 
-# Tried in order; availability varies by OpenCV build.
-_ENCODERS = (("mp4v", ".mp4"), ("MJPG", ".avi"), ("XVID", ".avi"))
 
 
 class RenderError(RuntimeError):
@@ -350,26 +349,12 @@ def render(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    writer = None
-    target = path
-    for fourcc_name, suffix in _ENCODERS:
-        target = path if path.suffix == suffix else path.with_suffix(suffix)
-        candidate = cv2.VideoWriter(
-            str(target),
-            cv2.VideoWriter_fourcc(*fourcc_name),
-            renderer.spec.fps,
-            (renderer.spec.width, renderer.spec.height),
+    try:
+        writer, target = open_writer(
+            path, renderer.spec.fps, (renderer.spec.width, renderer.spec.height)
         )
-        if candidate.isOpened():
-            writer = candidate
-            break
-        candidate.release()
-
-    if writer is None:
-        raise RenderError(
-            "No usable video encoder in this OpenCV build "
-            f"(tried {', '.join(name for name, _ in _ENCODERS)})."
-        )
+    except VideoError as exc:
+        raise RenderError(str(exc)) from exc
 
     try:
         for index in range(renderer.frame_count):

@@ -35,8 +35,37 @@ log = logging.getLogger(__name__)
 FALLBACK_FPS = 30.0
 
 
+# Encoders tried in order when writing. Availability varies by OpenCV build.
+ENCODERS = (("mp4v", ".mp4"), ("MJPG", ".avi"), ("XVID", ".avi"))
+
+
 class VideoError(RuntimeError):
-    """Raised when a video cannot be opened or decoded."""
+    """Raised when a video cannot be opened, decoded or written."""
+
+
+def open_writer(
+    path: "str | Path", fps: float, size: tuple[int, int]
+) -> tuple[cv2.VideoWriter, "Path"]:
+    """Open a writer, falling back through encoders this build actually has.
+
+    Returns the writer and the path finally used — the extension may change if
+    the preferred container is unavailable, so callers must not assume the one
+    they passed in.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    for fourcc, suffix in ENCODERS:
+        target = path if path.suffix == suffix else path.with_suffix(suffix)
+        writer = cv2.VideoWriter(str(target), cv2.VideoWriter_fourcc(*fourcc), fps, size)
+        if writer.isOpened():
+            return writer, target
+        writer.release()
+
+    raise VideoError(
+        "No usable video encoder in this OpenCV build "
+        f"(tried {', '.join(name for name, _ in ENCODERS)})."
+    )
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: frontend prototype, backend stage 5 of 10.** The UI is complete and
+**Status: frontend prototype, backend stage 6 of 10.** The UI is complete and
 interactive but still simulates its results. The Python pipeline has its
 foundation — video I/O, note and keyboard models, a synthetic clip generator that
 produces ground truth to score against, and a working vision path from video to
@@ -66,6 +66,16 @@ frames would quantize badly before any musical quantization happened.
 
 Output is raw and unquantized — tempo, hands and notation arrive in stages 7–8.
 
+```bash
+dropscore debug out/synth/classic_88key_seed0.mp4 --video
+```
+
+`debug` draws the fitted grid, strike line and detected tiles onto the video.
+**Check this first when a transcription looks wrong.** If the bright C lines do
+not land on the real C keys, calibration is off and everything downstream is
+transposed — a failure that is obvious here and invisible in the note output.
+`--grid-only` skips detection; without `--video` it writes stills instead.
+
 Reading from a YouTube URL needs the optional extra (`pip install -e ".[youtube]"`)
 and violates YouTube's Terms of Service — it exists for local experimentation.
 Pass a local file for anything else.
@@ -112,6 +122,7 @@ dropscore/    the Python pipeline
   calibrate.py  fits that geometry to a real video
   tiles.py      palette discovery, blob extraction, blob -> key
   tracking.py   scroll speed, tile tracks, geometry -> timed notes
+  overlay.py    annotated frames for debugging the vision stages
   synth/        synthetic clip generation with ground truth
 tests/        pytest suite; generates its own video fixtures
 web/          static frontend (index.html, styles.css, app.js)

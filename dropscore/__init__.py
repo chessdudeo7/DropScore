@@ -13,6 +13,7 @@ from .config import (
 )
 from .keyboard import COMMON_RANGES, KeyboardLayout, is_black, is_white
 from .notes import Hand, Note, NoteSequence, pitch_name
+from .overlay import annotate, dump_frames, dump_video
 from .sources import ResolvedSource, SourceError, parse_youtube_id, resolve
 from .tiles import Palette, Tile, TileError, detect, detect_in_frame, discover_palette
 from .tracking import SpeedEstimate, TileTrack, TrackingError, estimate_speed, transcribe
@@ -59,6 +60,10 @@ __all__ = [
     "Note",
     "NoteSequence",
     "pitch_name",
+    # overlays
+    "annotate",
+    "dump_frames",
+    "dump_video",
     # keyboard
     "COMMON_RANGES",
     "KeyboardLayout",

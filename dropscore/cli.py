@@ -130,6 +130,61 @@ def cmd_tiles(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_debug(args: argparse.Namespace) -> int:
+    """Write annotated frames or an annotated video showing what was detected."""
+    from .calibrate import calibrate  # noqa: PLC0415
+    from .overlay import dump_frames, dump_video  # noqa: PLC0415
+    from .tiles import discover_palette  # noqa: PLC0415
+    from .tracking import estimate_speed  # noqa: PLC0415
+
+    source = resolve(args.source)
+    config = _config_from_args(args)
+    out_dir = Path(args.out_dir)
+
+    with VideoReader(source.path, config) as reader:
+        samples = reader.sample()
+        calibration = calibrate(samples, config)
+        print(calibration)
+
+        palette = None if args.grid_only else discover_palette(samples, calibration, config)
+
+        speed = None
+        if not args.grid_only:
+            start = (reader.info.frame_count or 0) // 3
+            window = list(reader.frames(start=start, stop=start + 40))
+            try:
+                speed = estimate_speed(window, calibration, config=config)
+            except Exception as exc:  # noqa: BLE001 - speed is optional here
+                log.warning("could not measure scroll speed: %s", exc)
+
+        if args.video:
+            frames = reader.frames(step=args.step)
+            target = dump_video(
+                frames,
+                calibration,
+                out_dir / f"{source.label}.debug.mp4",
+                reader.info.fps / args.step,
+                (reader.info.width, reader.info.height),
+                palette,
+                speed,
+                config,
+            )
+            print(f"wrote {target}")
+        else:
+            written = dump_frames(
+                reader.sample(args.frames),
+                calibration,
+                out_dir,
+                palette,
+                speed,
+                prefix=source.label,
+                config=config,
+            )
+            print(f"wrote {len(written)} frames to {out_dir}")
+
+    return 0
+
+
 def cmd_synth(args: argparse.Namespace) -> int:
     """Render synthetic clips with exact ground truth, for evaluation."""
     from .synth import RenderSpec, generate, get_theme, render  # noqa: PLC0415
@@ -256,6 +311,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--samples", type=int, default=12, help="frames to sample"
     )
     tiles.set_defaults(func=cmd_tiles)
+
+    debug = sub.add_parser(
+        "debug",
+        help="write annotated frames showing the fitted grid and detected tiles",
+        description=(
+            "Draws the fitted key grid, strike line and detected tiles onto the "
+            "video. If the bright C lines do not land on the real C keys, the "
+            "calibration is wrong and everything downstream is transposed."
+        ),
+    )
+    debug.add_argument("source", help="path to a video file, or a YouTube URL")
+    debug.add_argument("-o", "--out-dir", default="out/debug", help="where to write")
+    debug.add_argument("--frames", type=int, default=12, help="how many stills to write")
+    debug.add_argument("--video", action="store_true", help="write an annotated video instead")
+    debug.add_argument("--step", type=int, default=1, help="frame step when writing a video")
+    debug.add_argument(
+        "--grid-only",
+        action="store_true",
+        help="skip tile detection and draw only the calibration",
+    )
+    debug.set_defaults(func=cmd_debug)
 
     synth = sub.add_parser(
         "synth",
