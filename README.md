@@ -2,12 +2,12 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: frontend prototype, backend stage 8 of 10.** The UI is complete and
+**Status: frontend prototype, backend stage 9 of 10.** The UI is complete and
 interactive but still simulates its results. The Python pipeline has its
 foundation — video I/O, note and keyboard models, a synthetic clip generator that
 produces ground truth to score against, and a working path from video all the way
-to MIDI and MusicXML. What is missing is measured accuracy and the web service.
-See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
+to MIDI and MusicXML, plus a harness that scores it. What is missing is the web
+service. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
 
 ## The backend
 
@@ -80,6 +80,22 @@ problem, and this does the mechanical part only. PDF hands the MusicXML to
 MuseScore, which must be installed separately.
 
 ```bash
+dropscore synth --theme all -o out/synth
+dropscore eval --save-baseline baseline.json
+dropscore eval --baseline baseline.json
+```
+
+`eval` transcribes every clip that has a `.truth.json` sidecar and reports
+note-level precision, recall and F1, plus how far the fitted geometry landed from
+the geometry that drew each clip. With a baseline it exits non-zero when any clip
+gets worse, so it works as a CI gate.
+
+Corpus F1 pools notes rather than averaging per-clip scores — averaging would let
+a two-note clip outvote a thousand-note one. A clip that disappears from the
+corpus counts as a regression to zero, since quietly dropping an awkward case is
+how a corpus stops catching anything.
+
+```bash
 dropscore debug out/synth/classic_88key_seed0.mp4 --video
 ```
 
@@ -138,6 +154,7 @@ dropscore/    the Python pipeline
   overlay.py    annotated frames for debugging the vision stages
   score.py      tempo, downbeat, key, hands, quantization
   export/       MIDI, MusicXML, PDF writers
+  evaluate.py   note-level scoring, corpus runs, regression detection
   synth/        synthetic clip generation with ground truth
 tests/        pytest suite; generates its own video fixtures
 web/          static frontend (index.html, styles.css, app.js)

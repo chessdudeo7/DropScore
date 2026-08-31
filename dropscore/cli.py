@@ -213,6 +213,62 @@ def cmd_synth(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Score the pipeline over a corpus and compare against a baseline."""
+    import json  # noqa: PLC0415
+
+    from .evaluate import find_clips, find_regressions, run_corpus  # noqa: PLC0415
+
+    corpus = Path(args.corpus)
+    pairs = find_clips(corpus)
+    if not pairs:
+        log.error(
+            "no clips with truth sidecars in %s — run `dropscore synth --theme all "
+            "-o %s` first",
+            corpus,
+            corpus,
+        )
+        return 1
+
+    report = run_corpus(pairs, _config_from_args(args))
+
+    width = max(len(c.name) for c in report.clips)
+    for clip in report.clips:
+        if clip.error:
+            print(f"  {clip.name:<{width}}  FAILED  {clip.error}")
+            continue
+        print(f"  {clip.name:<{width}}  {clip.metrics}")
+        if clip.geometry and args.verbose:
+            print(f"  {'':<{width}}  {clip.geometry}")
+
+    print(f"\ncorpus F1 {report.f1:.4f} over {len(report.clips)} clips")
+    if report.failures:
+        print(f"{len(report.failures)} clip(s) failed outright")
+
+    if args.save_baseline:
+        print(f"wrote baseline {report.save(args.save_baseline)}")
+        return 0
+
+    if args.baseline:
+        baseline_path = Path(args.baseline)
+        if not baseline_path.exists():
+            log.error("no baseline at %s; write one with --save-baseline", baseline_path)
+            return 1
+
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        regressions = find_regressions(baseline, report, _config_from_args(args))
+        delta = report.f1 - float(baseline.get("f1", 0.0))
+        print(f"corpus F1 change {delta:+.4f} against {baseline_path}")
+
+        if regressions:
+            print(f"\n{len(regressions)} regression(s):")
+            for regression in regressions:
+                print(f"  {regression}")
+            return 1
+
+    return 0
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     """Write an existing note JSON out as MIDI, MusicXML or PDF."""
     from .export import EngraverNotFound, extension, write  # noqa: PLC0415
@@ -458,6 +514,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="may be given more than once (default: json)",
     )
     transcribe.set_defaults(func=cmd_transcribe, format=None)
+
+    evaluate = sub.add_parser(
+        "eval",
+        help="score the pipeline over a corpus of clips with ground truth",
+        description=(
+            "Transcribes every clip that has a .truth.json sidecar and reports "
+            "note-level precision, recall and F1, plus how far the fitted "
+            "geometry was from the geometry that drew each clip. With a "
+            "baseline it exits non-zero when any clip gets worse."
+        ),
+    )
+    evaluate.add_argument(
+        "-c", "--corpus", default="out/synth", help="directory of clips and sidecars"
+    )
+    evaluate.add_argument("-b", "--baseline", help="baseline JSON to compare against")
+    evaluate.add_argument("--save-baseline", metavar="PATH", help="write a new baseline")
+    evaluate.set_defaults(func=cmd_eval)
 
     export = sub.add_parser(
         "export",

@@ -8,10 +8,12 @@ from .config import (
     CalibrationConfig,
     Config,
     TileConfig,
+    EvaluationConfig,
     ScoreConfig,
     TrackingConfig,
     VideoConfig,
 )
+from .evaluate import ClipResult, Metrics, Report, compare, run_clip, run_corpus
 from .export import EngraverNotFound
 from .keyboard import COMMON_RANGES, KeyboardLayout, is_black, is_white
 from .notes import Hand, Note, NoteSequence, pitch_name
@@ -28,6 +30,7 @@ __all__ = [
     "CalibrationConfig",
     "TrackingConfig",
     "ScoreConfig",
+    "EvaluationConfig",
     "TileConfig",
     "Config",
     "DEFAULT",
@@ -72,6 +75,13 @@ __all__ = [
     "Analysis",
     "ScoreError",
     "EngraverNotFound",
+    # evaluation
+    "ClipResult",
+    "Metrics",
+    "Report",
+    "compare",
+    "run_clip",
+    "run_corpus",
     "analyze",
     "assign_hands",
     "postprocess",

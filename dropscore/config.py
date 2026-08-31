@@ -163,6 +163,20 @@ class ScoreConfig:
 
 
 @dataclass(frozen=True)
+class EvaluationConfig:
+    """Scoring a transcription against ground truth (stage 9)."""
+
+    # A reference and an estimate note match when pitches are equal and onsets
+    # fall within this. 50ms is the conventional tolerance for note transcription
+    # and is comfortably tighter than a sixteenth at any realistic tempo.
+    onset_tolerance: float = 0.05
+
+    # How far a clip's F1 may fall against the stored baseline before it counts
+    # as a regression rather than noise.
+    regression_tolerance: float = 0.02
+
+
+@dataclass(frozen=True)
 class Config:
     """Root config. Sub-configs are added by later stages."""
 
@@ -171,6 +185,7 @@ class Config:
     tiles: TileConfig = field(default_factory=TileConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
 
     def evolve(self, **changes: Any) -> "Config":
         """Return a copy with top-level fields replaced."""

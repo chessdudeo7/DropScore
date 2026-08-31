@@ -16,7 +16,7 @@ being eyeballed.
 | 6 | **Debug overlays** | Annotated frame dumps: keybed, key grid, blob boxes with assigned pitch | ✅ done |
 | 7 | **Symbolic post-processing** | Hand assignment, tempo/downbeat, quantization, key detection | ✅ done |
 | 8 | **Export** | MIDI, then MusicXML, then PDF | ✅ done |
-| 9 | **Evaluation harness** | Note-level P/R/F1 against ground truth, over a corpus, with a regression report | ⬜ |
+| 9 | **Evaluation harness** | Note-level P/R/F1 against ground truth, over a corpus, with a regression report | ✅ done |
 | 10 | **Service + frontend wiring** | FastAPI, job queue, progress events matching the UI's existing stage list | ⬜ |
 
 ## Ground truth (stage 2)
