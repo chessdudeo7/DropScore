@@ -2,12 +2,16 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: frontend prototype, backend stage 9 of 10.** The UI is complete and
-interactive but still simulates its results. The Python pipeline has its
-foundation — video I/O, note and keyboard models, a synthetic clip generator that
-produces ground truth to score against, and a working path from video all the way
-to MIDI and MusicXML, plus a harness that scores it. What is missing is the web
-service. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
+**Status: all 10 stages built, none executed.** The pipeline runs video → MIDI and
+MusicXML, with a synthetic corpus and a scoring harness, and the frontend is wired
+to a real API. See [docs/ROADMAP.md](docs/ROADMAP.md) for what each stage does.
+
+> **Nothing here has ever been run.** The machine this was written on has no
+> Python interpreter — only the Windows Store stub — so every module is
+> hand-reviewed and unverified. Install Python 3.11+, `pip install -e ".[dev]"`,
+> and run `pytest` before trusting any of it. `dropscore eval` is what will show
+> whether the vision stages actually work; until it runs, their accuracy is
+> design intent rather than measurement.
 
 ## The backend
 
@@ -112,17 +116,29 @@ Pass a local file for anything else.
 Run the tests with `pytest`. They render their own synthetic clip, so there are no
 fixture files to check out.
 
-## The frontend
-
-No build step, no dependencies — open the file:
+## The web app
 
 ```bash
-start web/index.html
+pip install -e ".[service]"
+dropscore serve
 ```
 
-(Or serve `web/` with any static server if you prefer a real origin.)
+Serves the API and the frontend from one origin at `http://127.0.0.1:8000`. Upload
+a video, watch the real pipeline run stage by stage, and download the MIDI,
+MusicXML and note JSON it produces.
 
-**What works:**
+Jobs run in a thread pool in-process, and the frontend polls — no Redis, no
+separate worker, no websockets. Transcription takes seconds, so polling is
+sufficient, and shipping infrastructure before there is evidence it is needed
+would be the wrong trade. The stage keys the API reports are exactly the ones the
+UI already rendered, so progress needed no new vocabulary.
+
+Opening `web/index.html` straight from disk still works and falls back to a
+simulation, which is the quickest way to look at the UI. **Demo mode says so on
+screen** — a badge in the header and a note under the results — rather than
+quietly presenting invented notes as though they were transcribed.
+
+**What the frontend does:**
 
 - Two source paths behind a tab switcher:
   - **YouTube link** — parses `watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`,
@@ -130,14 +146,17 @@ start web/index.html
   - **Upload a file** — drag-and-drop or browse, with type/size checks, and a
     local probe that reads duration and resolution and grabs a real frame for the
     preview. Prefer this path: downloading from YouTube violates their ToS.
-- Transcription settings: hand assignment, quantization, tempo, key, output formats
-- Staged progress view with a log console, elapsed timer, and cancel
-- Result view: stats, a rendered piano roll on a keybed, download slots
+- Staged progress view with a live log from the server, elapsed timer, and cancel
+- Result view: stats, a rendered piano roll on a keybed, downloads
 
-**What is simulated:** everything after the source is chosen. Note data comes from
-a seeded PRNG keyed on the video id or filename, so the same input always produces
-the same fake result. Download buttons are deliberately disabled. The frontend
-gets wired to the real pipeline in stage 10.
+The **transcription settings** panel is not yet wired to the API — the server
+currently runs with defaults and ignores those choices. They are honoured by the
+CLI equivalents (`--raw`, and the knobs in `dropscore/config.py`); plumbing them
+through the job submission is the obvious next piece of work.
+
+Against a live API the piano roll and stats come from the real transcription and
+the download buttons are real links. In demo mode the notes come from a seeded
+PRNG keyed on the video id or filename, and the download buttons are disabled.
 
 ## Layout
 
@@ -155,6 +174,7 @@ dropscore/    the Python pipeline
   score.py      tempo, downbeat, key, hands, quantization
   export/       MIDI, MusicXML, PDF writers
   evaluate.py   note-level scoring, corpus runs, regression detection
+  service/      FastAPI app and the in-process job queue
   synth/        synthetic clip generation with ground truth
 tests/        pytest suite; generates its own video fixtures
 web/          static frontend (index.html, styles.css, app.js)

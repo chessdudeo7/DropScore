@@ -1,8 +1,12 @@
-/* DropScore — prototype frontend.
+/* DropScore — frontend.
  *
- * Everything below the URL parsing is a *simulation*: there is no backend yet.
- * The pipeline stages mirror the real plan in docs/PIPELINE.md so that swapping
- * in a live API is mostly a matter of replacing runPipeline() with polling a job.
+ * Talks to the API when one is reachable, and falls back to a simulation when it
+ * is not — opening this file straight from disk still demonstrates the whole
+ * flow, which is how it was built and is still the quickest way to look at the
+ * UI. Demo mode says so on screen rather than quietly showing invented notes as
+ * though they were real.
+ *
+ * Run the real thing with:  dropscore serve
  */
 
 // ── helpers ──────────────────────────────────────────────────────────
@@ -72,6 +76,28 @@ const fmtClock = (secs) => {
   const s = Math.round(secs);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
+
+// ── backend ──────────────────────────────────────────────────────────
+const api = { available: false, jobId: null, poll: null };
+
+/** Probe for a live API once, at startup. */
+async function detectApi() {
+  if (location.protocol !== 'file:') {
+    try {
+      const response = await fetch('/api/health', { cache: 'no-store' });
+      api.available = response.ok;
+    } catch {
+      api.available = false;
+    }
+  }
+
+  document.body.classList.toggle('demo', !api.available);
+  const pill = $('#mode-pill');
+  pill.textContent = api.available ? 'connected' : 'demo mode · simulated results';
+  pill.classList.toggle('pill-ok', api.available);
+  pill.classList.toggle('pill-warn', !api.available);
+  return api.available;
+}
 
 // ── state ────────────────────────────────────────────────────────────
 /** `source` is either {kind:'youtube', id} or {kind:'file', file, meta}. */
@@ -391,12 +417,17 @@ function show(stage) {
 
 async function startJob(src) {
   state.cancelled = false;
+  api.jobId = null;
   $('#console').innerHTML = '';
   $('#progress-bar').style.width = '0%';
   $('#elapsed').textContent = '00:00';
   renderSteps(src);
   show(procStage);
   startElapsed();
+
+  if (api.available) {
+    return runRemoteJob(src);
+  }
 
   const slug = sourceSlug(src);
   log(`job queued for ${src.kind === 'youtube' ? 'youtube:' + src.id : 'file:' + src.file.name}`, true);
@@ -428,9 +459,92 @@ async function startJob(src) {
   finish(slug, notes);
 }
 
+// ── the real job ─────────────────────────────────────────────────────
+
+/** Submit to the API and poll until it settles. */
+async function runRemoteJob(src) {
+  let submitted;
+  try {
+    if (src.kind === 'file') {
+      const body = new FormData();
+      body.append('file', src.file);
+      submitted = await postJson('/api/jobs/upload', { method: 'POST', body });
+    } else {
+      submitted = await postJson('/api/jobs/url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${src.id}` }),
+      });
+    }
+  } catch (err) {
+    return failJob(err.message);
+  }
+
+  api.jobId = submitted.id;
+  log(`job ${submitted.id.slice(0, 8)} queued`, true);
+  pollJob();
+}
+
+async function postJson(url, options) {
+  const response = await fetch(url, options);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status})`);
+  return payload;
+}
+
+function pollJob() {
+  clearInterval(api.poll);
+  let seen = 0;
+
+  api.poll = setInterval(async () => {
+    if (state.cancelled) return;
+
+    let job;
+    try {
+      job = await postJson(`/api/jobs/${api.jobId}`, { cache: 'no-store' });
+    } catch (err) {
+      clearInterval(api.poll);
+      return failJob(err.message);
+    }
+
+    // The server owns the log; append only what has not been shown yet.
+    for (const line of job.log.slice(seen)) log(line);
+    seen = job.log.length;
+
+    for (const stage of job.stages) {
+      const li = document.querySelector(`.steps li[data-key="${stage.key}"]`);
+      if (!li) continue;
+      li.classList.toggle('active', stage.state === 'active');
+      li.classList.toggle('done', stage.state === 'done');
+    }
+    $('#progress-bar').style.width = `${job.progress * 100}%`;
+
+    if (job.status === 'done') {
+      clearInterval(api.poll);
+      clearInterval(state.timer);
+      finishRemote(job);
+    } else if (job.status === 'error' || job.status === 'cancelled') {
+      clearInterval(api.poll);
+      failJob(job.error || 'Transcription was cancelled');
+    }
+  }, 700);
+}
+
+function failJob(message) {
+  clearInterval(state.timer);
+  log(`error: ${message}`);
+  const hintEl = state.tab === 'link' ? setHint : setFileHint;
+  hintEl(message, true);
+  show(inputStage);
+}
+
 $('#cancel-btn').addEventListener('click', () => {
   state.cancelled = true;
   clearInterval(state.timer);
+  clearInterval(api.poll);
+  if (api.jobId) {
+    fetch(`/api/jobs/${api.jobId}`, { method: 'DELETE' }).catch(() => {});
+  }
   show(inputStage);
 });
 
@@ -473,6 +587,11 @@ function drawRoll(notes) {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth;
   const h = 240;
+
+  // The canvas measures zero until the stage it lives in has been laid out.
+  // Drawing then would silently produce an empty roll, so bail and let the
+  // caller retry on the next frame.
+  if (!w) return 0;
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   const ctx = canvas.getContext('2d');
@@ -549,43 +668,105 @@ function stat(k, v, unit) {
   return s;
 }
 
+const PITCH_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const pitchName = (p) => `${PITCH_NAMES[p % 12]}${Math.floor(p / 12) - 1}`;
+
+/** Render a completed API job. */
+function finishRemote(job) {
+  const r = job.result || {};
+  const notes = (r.notes || []).map((n) => ({ ...n, hand: n.hand || 'R' }));
+
+  showResult({
+    notes,
+    confidence: r.confidence,
+    stats: [
+      ['Notes', String(r.count ?? notes.length)],
+      ['Tempo', r.tempo ? String(r.tempo) : '—', r.tempo ? 'BPM' : ''],
+      ['Key', r.key || '—'],
+      ['Meter', r.meter || '—'],
+      ['Length', (r.duration ?? 0).toFixed(1), 's'],
+      [
+        'Range',
+        r.lowest != null ? `${pitchName(r.lowest)}–${pitchName(r.highest)}` : '—',
+      ],
+    ],
+    downloads: (job.formats || []).map((format) => ({
+      label: format.toUpperCase(),
+      name: `${job.label}.${format === 'midi' ? 'mid' : format}`,
+      href: `/api/jobs/${job.id}/download/${format}`,
+    })),
+  });
+}
+
+/** Render a simulated result, for demo mode. */
 function finish(slug, notes) {
+  const rnd = seededRandom(slug + ':conf');
+  const dur = Math.max(...notes.map((n) => n.t + n.dur));
+  const fmts = [...document.querySelectorAll('.checks input:checked')].map((i) => i.dataset.fmt);
+  const ext = { MIDI: '.mid', MusicXML: '.musicxml', PDF: '.pdf', JSON: '.json' };
+
+  showResult({
+    notes,
+    confidence: 0.86 + rnd() * 0.11,
+    stats: [
+      ['Notes', String(notes.length)],
+      ['Tempo', '96.4', 'BPM'],
+      ['Key', 'F major'],
+      ['Meter', '4/4'],
+      ['Length', dur.toFixed(1), 's'],
+      ['Range', 'F2–C6'],
+    ],
+    downloads: (fmts.length ? fmts : ['MIDI']).map((f) => ({
+      label: ext[f].slice(1).toUpperCase(),
+      name: `${slug}${ext[f]}`,
+      href: null,
+    })),
+  });
+}
+
+function showResult({ notes, confidence, stats: rows, downloads }) {
   show(resStage);
 
-  const rnd = seededRandom(slug + ':conf');
-  const conf = (0.86 + rnd() * 0.11).toFixed(2);
-  $('#result-conf').textContent = `confidence ${conf}`;
+  $('#result-conf').textContent = `confidence ${(confidence ?? 0).toFixed(2)}`;
 
   const stats = $('#stats');
   stats.innerHTML = '';
-  const dur = Math.max(...notes.map((n) => n.t + n.dur));
-  stats.append(
-    stat('Notes', String(notes.length)),
-    stat('Tempo', '96.4', 'BPM'),
-    stat('Key', 'F major'),
-    stat('Meter', '4/4'),
-    stat('Length', dur.toFixed(1), 's'),
-    stat('Range', 'F2–C6'),
-  );
+  for (const [key, value, unit] of rows) stats.append(stat(key, value, unit));
 
   drawKeybed();
-  drawRoll(notes);
+
+  const dur = notes.length ? Math.max(...notes.map((n) => n.t + n.dur)) : 0;
   $('#roll-range').textContent = `0.0s – ${dur.toFixed(1)}s · ${notes.length} events`;
+
+  // The canvas is still zero-width in the task that unhides its section, and
+  // requestAnimationFrame does not run at all while the page is hidden. A
+  // ResizeObserver covers both: it fires once the element has a real size, and
+  // again whenever that size changes, so it doubles as the resize handler.
+  const paint = () => notes.length && drawRoll(notes);
+  paint();
+  state.rollObserver?.disconnect();
+  state.rollObserver = new ResizeObserver(paint);
+  state.rollObserver.observe($('#roll'));
 
   const dl = $('#downloads');
   dl.innerHTML = '';
-  const fmts = [...document.querySelectorAll('.checks input:checked')].map((i) => i.dataset.fmt);
-  const ext = { MIDI: '.mid', MusicXML: '.musicxml', PDF: '.pdf', JSON: '.json' };
-  for (const f of fmts.length ? fmts : ['MIDI']) {
-    const b = el('button', 'dl');
-    b.disabled = true;
-    b.title = 'Backend not implemented yet';
-    b.append(el('span', 'ext', ext[f].slice(1).toUpperCase()), el('span', null, `${slug}${ext[f]}`));
-    dl.append(b);
+  for (const item of downloads) {
+    const node = item.href ? el('a', 'dl') : el('button', 'dl');
+    if (item.href) {
+      node.href = item.href;
+      node.setAttribute('download', item.name);
+    } else {
+      node.disabled = true;
+      node.title = 'Demo mode — run `dropscore serve` for real output';
+    }
+    node.append(el('span', 'ext', item.label), el('span', null, item.name));
+    dl.append(node);
   }
 
-  window.addEventListener('resize', () => drawRoll(notes), { once: true });
+  $('#disclaimer').hidden = api.available;
 }
+
+detectApi();
 
 // roundRect polyfill for older engines
 if (!CanvasRenderingContext2D.prototype.roundRect) {

@@ -24,7 +24,7 @@
   <nav class="topnav">
     <a href="#how">How it works</a>
     <a href="../docs/PIPELINE.md">Pipeline notes</a>
-    <span class="pill pill-warn">prototype · frontend only</span>
+    <span class="pill pill-warn" id="mode-pill">checking backend…</span>
   </nav>
 </header>
 
@@ -209,9 +209,9 @@
 
       <div class="downloads" id="downloads"></div>
 
-      <p class="disclaimer">
-        This build renders a simulated result — the vision backend is not wired up yet.
-        See <a href="../docs/PIPELINE.md">docs/PIPELINE.md</a> for the planned approach.
+      <p class="disclaimer" id="disclaimer">
+        Demo mode: these notes are simulated, not transcribed. Run
+        <code>dropscore serve</code> and open the page it prints to transcribe for real.
       </p>
 
       <button class="ghost-btn" id="again-btn" type="button">Transcribe another video</button>

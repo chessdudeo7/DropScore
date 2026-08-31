@@ -17,7 +17,8 @@ dependencies = [
 # Only needed for the YouTube source path, which is a local-experimentation
 # convenience — see docs/PIPELINE.md on why the file path is the primary one.
 youtube = ["yt-dlp>=2024.1.1"]
-dev = ["pytest>=7.4"]
+service = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
+dev = ["pytest>=7.4", "httpx>=0.27"]
 
 [project.scripts]
 dropscore = "dropscore.cli:main"

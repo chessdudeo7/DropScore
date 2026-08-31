@@ -213,6 +213,22 @@ def cmd_synth(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Run the web service and serve the frontend from it."""
+    try:
+        import uvicorn  # noqa: PLC0415
+
+        from .service import create_app  # noqa: PLC0415
+    except ImportError as exc:
+        log.error('%s (install with: pip install -e ".[service]")', exc)
+        return 1
+
+    app = create_app(workdir=args.workdir, config=_config_from_args(args))
+    print(f"DropScore on http://{args.host}:{args.port}")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def cmd_eval(args: argparse.Namespace) -> int:
     """Score the pipeline over a corpus and compare against a baseline."""
     import json  # noqa: PLC0415
@@ -514,6 +530,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="may be given more than once (default: json)",
     )
     transcribe.set_defaults(func=cmd_transcribe, format=None)
+
+    serve = sub.add_parser(
+        "serve",
+        help="run the web service and frontend",
+        description=(
+            "Serves the API and the static frontend from one origin. Needs the "
+            'optional extra: pip install -e ".[service]"'
+        ),
+    )
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--workdir", default="out/jobs", help="where job output is kept")
+    serve.set_defaults(func=cmd_serve)
 
     evaluate = sub.add_parser(
         "eval",
