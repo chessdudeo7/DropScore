@@ -69,11 +69,50 @@ class CalibrationConfig:
 
 
 @dataclass(frozen=True)
+class TileConfig:
+    """Finding and identifying falling tiles (stage 4)."""
+
+    # Lab lightness is downweighted so a gradient-filled tile stays one colour.
+    # The cost is that hands distinguished only by brightness merge into one
+    # track; stage 7 separates those by pitch instead.
+    lightness_weight: float = 0.35
+
+    # Distance from the static background before a pixel is a tile candidate.
+    background_distance: float = 18.0
+
+    # Palette discovery.
+    max_palettes: int = 4
+    merge_distance: float = 12.0  # chroma distance below which colours are one
+    min_palette_share: float = 0.05
+    max_sample_pixels: int = 200_000
+
+    # How close a pixel must sit to a palette colour to count as solid tile.
+    # Bloom is a blend of tile and background, so it lands outside this and is
+    # excluded without any erosion.
+    color_tolerance: float = 22.0
+
+    # Blob filtering.
+    min_tile_height: int = 3
+    min_tile_width_ratio: float = 0.35  # of a white key; black tiles are ~0.62
+
+    # A key must be this covered by a blob to be claimed from it.
+    min_coverage: float = 0.60
+
+    # Rows at least this filled are part of a tile; the gaps split repeated notes.
+    row_fill_ratio: float = 0.50
+
+    # A region less filled than this is an outlined tile, whose middle is empty
+    # by design, rather than two stacked tiles with a seam between them.
+    outline_fill_ratio: float = 0.45
+
+
+@dataclass(frozen=True)
 class Config:
     """Root config. Sub-configs are added by later stages."""
 
     video: VideoConfig = field(default_factory=VideoConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
+    tiles: TileConfig = field(default_factory=TileConfig)
 
     def evolve(self, **changes: Any) -> "Config":
         """Return a copy with top-level fields replaced."""

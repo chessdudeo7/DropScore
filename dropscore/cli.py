@@ -100,6 +100,36 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_tiles(args: argparse.Namespace) -> int:
+    """Report the palette and the tiles found in a few frames."""
+    from .calibrate import calibrate  # noqa: PLC0415
+    from .notes import pitch_name  # noqa: PLC0415
+    from .tiles import detect  # noqa: PLC0415
+
+    source = resolve(args.source)
+    with VideoReader(source.path, _config_from_args(args)) as reader:
+        frames = reader.sample(args.samples)
+        calibration = calibrate(frames)
+        palette, per_frame = detect(frames, calibration)
+
+    print(calibration)
+    print(f"palette: {palette.track_count} track(s)")
+    for index, (color, count) in enumerate(zip(palette.colors, palette.counts)):
+        lab = ", ".join(f"{v:.0f}" for v in color)
+        print(f"  track {index}  Lab({lab})  {count} px")
+
+    total = sum(len(tiles) for tiles in per_frame)
+    print(f"{total} tile(s) across {len(per_frame)} sampled frames")
+
+    for frame, tiles in zip(frames, per_frame):
+        if not tiles:
+            continue
+        names = " ".join(sorted({pitch_name(t.pitch) for t in tiles}))
+        print(f"  t={frame.time:7.2f}s  {len(tiles):3d}  {names}")
+
+    return 0
+
+
 def cmd_synth(args: argparse.Namespace) -> int:
     """Render synthetic clips with exact ground truth, for evaluation."""
     from .synth import RenderSpec, generate, get_theme, render  # noqa: PLC0415
@@ -184,6 +214,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     calib.set_defaults(func=cmd_calibrate)
 
+    tiles = sub.add_parser(
+        "tiles",
+        help="detect falling tiles and the keys they belong to",
+        description=(
+            "Discovers the video's tile palette, then reports the tiles found in "
+            "sampled frames and which key each one sits over."
+        ),
+    )
+    tiles.add_argument("source", help="path to a video file, or a YouTube URL")
+    tiles.add_argument(
+        "--samples", type=int, default=12, help="frames to sample"
+    )
+    tiles.set_defaults(func=cmd_tiles)
+
     synth = sub.add_parser(
         "synth",
         help="render synthetic falling-tile clips with exact ground truth",
@@ -230,10 +274,11 @@ def main(argv: list[str] | None = None) -> int:
 
     from .calibrate import CalibrationError  # noqa: PLC0415
     from .synth.renderer import RenderError  # noqa: PLC0415
+    from .tiles import TileError  # noqa: PLC0415
 
     try:
         return args.func(args)
-    except (SourceError, VideoError, RenderError, CalibrationError) as exc:
+    except (SourceError, VideoError, RenderError, CalibrationError, TileError) as exc:
         log.error("%s", exc)
         return 1
     except KeyboardInterrupt:

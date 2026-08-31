@@ -164,6 +164,36 @@ class KeyboardLayout:
         whites = white_pitches(self.first_pitch, self.last_pitch)
         return whites[index]
 
+    def keys_covered(self, x0: float, x1: float, min_coverage: float = 0.6) -> list[int]:
+        """Which keys a horizontal span covers, for splitting merged tiles.
+
+        White keys win ties. A black key is only claimed when neither white key
+        beside it was: a black tile is 0.62 of a white key wide and centred on
+        their boundary, so it can never cover 60% of either neighbour — whereas
+        two merged white tiles cover both neighbours fully *and* the boundary
+        between them, which would otherwise read as a phantom accidental.
+        """
+        if x1 < x0:
+            x0, x1 = x1, x0
+
+        def coverage(pitch: int) -> float:
+            left, right = self.key_span(pitch)
+            overlap = min(x1, right) - max(x0, left)
+            return overlap / (right - left)
+
+        whites = {p for p in self.pitches if is_white(p) and coverage(p) >= min_coverage}
+
+        blacks = set()
+        for pitch in self.pitches:
+            if not is_black(pitch) or coverage(pitch) < min_coverage:
+                continue
+            index = self.white_index(pitch)
+            neighbours = white_pitches(self.first_pitch, self.last_pitch)[index : index + 2]
+            if not any(n in whites for n in neighbours):
+                blacks.add(pitch)
+
+        return sorted(whites | blacks)
+
     def _require_in_range(self, pitch: int) -> None:
         if not self.contains(pitch):
             raise ValueError(

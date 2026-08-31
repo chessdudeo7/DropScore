@@ -11,7 +11,7 @@ being eyeballed.
 | 1 | **Skeleton, config, video I/O** | Package layout, CLI, frame iteration, source resolution, `probe` command | ✅ done |
 | 2 | **Synthetic renderer** | Generate Synthesia-style videos from known note data, in six themes and four key ranges — free perfect ground truth | ✅ done |
 | 3 | **Keyboard calibration** | Keybed detection, white-key grid fit, black-key anchoring → `x → MIDI pitch` | ✅ done |
-| 4 | **Tile detection** | Palette clustering, masking, blob extraction, blob → key mapping | ⬜ |
+| 4 | **Tile detection** | Palette clustering, masking, blob extraction, blob → key mapping | ✅ done |
 | 5 | **Tracking and timing** | Scroll-speed estimation, onset/duration from geometry → raw note events | ⬜ |
 | 6 | **Debug overlays** | Annotated frame dumps: keybed, key grid, blob boxes with assigned pitch | ⬜ |
 | 7 | **Symbolic post-processing** | Hand assignment, tempo/downbeat, quantization, key detection | ⬜ |

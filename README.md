@@ -2,11 +2,12 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: frontend prototype, backend stage 3 of 10.** The UI is complete and
+**Status: frontend prototype, backend stage 4 of 10.** The UI is complete and
 interactive but still simulates its results. The Python pipeline has its
 foundation — video I/O, note and keyboard models, a synthetic clip generator that
-produces ground truth to score against, and the first vision stage: fitting the
-keyboard grid. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
+produces ground truth to score against, and two vision stages: fitting the
+keyboard grid and reading the tiles off it. What is missing is turning tiles into
+timed notes. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
 
 ## The backend
 
@@ -42,7 +43,17 @@ edges, and anchors that grid to pitch via the black-key 2-3 grouping. Given a
 scores the fit and exits non-zero on a mismatch, so it doubles as the stage-3
 regression check.
 
-`transcribe` is registered but raises until stages 4–8 land.
+```bash
+dropscore tiles out/synth/synthesia_88key_seed0.mp4
+```
+
+`tiles` discovers the video's own tile colours, then reports the tiles found in
+sampled frames and which key each sits over. Detection classifies pixels by
+*closeness to a tile colour* rather than difference from the background, which
+excludes bloom halos without eroding real tiles; merged tiles are split on the key
+grid horizontally and at thin rows vertically.
+
+`transcribe` is registered but raises until stages 5–8 land.
 
 Reading from a YouTube URL needs the optional extra (`pip install -e ".[youtube]"`)
 and violates YouTube's Terms of Service — it exists for local experimentation.
@@ -88,6 +99,7 @@ dropscore/    the Python pipeline
   notes.py      Note / NoteSequence, the currency every stage trades in
   keyboard.py   pitch <-> pixel-column geometry
   calibrate.py  fits that geometry to a real video
+  tiles.py      palette discovery, blob extraction, blob -> key
   synth/        synthetic clip generation with ground truth
 tests/        pytest suite; generates its own video fixtures
 web/          static frontend (index.html, styles.css, app.js)
