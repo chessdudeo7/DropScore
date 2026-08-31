@@ -12,6 +12,7 @@ from .config import (
     TrackingConfig,
     VideoConfig,
 )
+from .export import EngraverNotFound
 from .keyboard import COMMON_RANGES, KeyboardLayout, is_black, is_white
 from .notes import Hand, Note, NoteSequence, pitch_name
 from .overlay import annotate, dump_frames, dump_video
@@ -70,6 +71,7 @@ __all__ = [
     # score
     "Analysis",
     "ScoreError",
+    "EngraverNotFound",
     "analyze",
     "assign_hands",
     "postprocess",

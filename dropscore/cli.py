@@ -213,6 +213,32 @@ def cmd_synth(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export(args: argparse.Namespace) -> int:
+    """Write an existing note JSON out as MIDI, MusicXML or PDF."""
+    from .export import EngraverNotFound, extension, write  # noqa: PLC0415
+    from .notes import NoteSequence  # noqa: PLC0415
+    from .score import ScoreError, analyze  # noqa: PLC0415
+
+    sequence = NoteSequence.load(args.notes)
+
+    analysis = None
+    try:
+        analysis = analyze(sequence, _config_from_args(args))
+    except ScoreError as exc:
+        log.warning("could not analyse the notes (%s); using defaults", exc)
+
+    stem = Path(args.output) if args.output else Path(args.notes).with_suffix("")
+    for format in args.format:
+        target = stem if stem.suffix == extension(format) else stem.with_suffix(extension(format))
+        try:
+            print(write(sequence, target, format, analysis))
+        except EngraverNotFound as exc:
+            log.error("%s", exc)
+            return 1
+
+    return 0
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     """Run stage 7 over an existing note JSON."""
     from .notes import NoteSequence  # noqa: PLC0415
@@ -257,6 +283,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         sequence = transcribe(reader.frames(), calibration, palette, speed, config)
 
     sequence.source = f"dropscore:{source.label}"
+    analysis = None
 
     if not args.raw and len(sequence):
         from .score import ScoreError, postprocess  # noqa: PLC0415
@@ -267,11 +294,21 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         except ScoreError as exc:
             log.warning("could not analyse the notes (%s); leaving them raw", exc)
 
-    output = Path(args.output or f"{source.label}.notes.json")
-    sequence.save(output)
+    from .export import EngraverNotFound, extension  # noqa: PLC0415
+    from .export import write as export_write  # noqa: PLC0415
 
-    print(f"{len(sequence)} notes over {sequence.duration:.1f}s -> {output}")
-    print("MIDI and MusicXML output lands in stage 8.")
+    stem = Path(args.output) if args.output else Path(f"{source.label}.notes")
+    stem = stem.with_suffix("")
+    print(f"{len(sequence)} notes over {sequence.duration:.1f}s")
+
+    for format in args.format or ["json"]:
+        target = stem.with_suffix(extension(format))
+        try:
+            print(f"  wrote {export_write(sequence, target, format, analysis)}")
+        except EngraverNotFound as exc:
+            log.error("%s", exc)
+            return 1
+
     return 0
 
 
@@ -413,7 +450,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip tempo, key, hand and quantization analysis",
     )
-    transcribe.set_defaults(func=cmd_transcribe)
+    transcribe.add_argument(
+        "-f",
+        "--format",
+        action="append",
+        choices=["midi", "musicxml", "pdf", "json"],
+        help="may be given more than once (default: json)",
+    )
+    transcribe.set_defaults(func=cmd_transcribe, format=None)
+
+    export = sub.add_parser(
+        "export",
+        help="write a note JSON as MIDI, MusicXML or PDF",
+        description=(
+            "MIDI is exactly what the tiles said. MusicXML is mechanically "
+            "correct but musically approximate — one voice per staff, no "
+            "beaming. PDF needs MuseScore installed separately."
+        ),
+    )
+    export.add_argument("notes", help="a .notes.json written by transcribe")
+    export.add_argument(
+        "-f",
+        "--format",
+        action="append",
+        choices=["midi", "musicxml", "pdf", "json"],
+        help="may be given more than once (default: midi)",
+    )
+    export.add_argument("-o", "--output", help="output path; extension is set per format")
+    export.set_defaults(func=cmd_export, format=None)
 
     analyse = sub.add_parser(
         "analyze",

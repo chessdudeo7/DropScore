@@ -2,12 +2,12 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: frontend prototype, backend stage 7 of 10.** The UI is complete and
+**Status: frontend prototype, backend stage 8 of 10.** The UI is complete and
 interactive but still simulates its results. The Python pipeline has its
 foundation — video I/O, note and keyboard models, a synthetic clip generator that
 produces ground truth to score against, and a working path from video all the way
-to quantized, hand-split notes with a tempo and key. What is missing is notation
-output. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
+to MIDI and MusicXML. What is missing is measured accuracy and the web service.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
 
 ## The backend
 
@@ -65,7 +65,19 @@ note-off, and both are extrapolated from frames where that edge is unclipped. At
 frames would quantize badly before any musical quantization happened.
 
 By default it then runs stage 7: tempo, downbeat, key, hand assignment and
-quantization. `--raw` skips that. Notation output arrives in stage 8.
+quantization. `--raw` skips that. Add `-f midi -f musicxml` to write those
+directly.
+
+```bash
+dropscore export video.notes.json -f midi -f musicxml
+```
+
+**Trust the MIDI over the notation.** MIDI says exactly what the tiles said, with
+no editorial decisions. MusicXML is mechanically correct but musically
+approximate: one voice per staff, notes tied across barlines, no beaming or
+dynamics. Turning a note stream into *readable* notation is a partly aesthetic
+problem, and this does the mechanical part only. PDF hands the MusicXML to
+MuseScore, which must be installed separately.
 
 ```bash
 dropscore debug out/synth/classic_88key_seed0.mp4 --video
@@ -125,6 +137,7 @@ dropscore/    the Python pipeline
   tracking.py   scroll speed, tile tracks, geometry -> timed notes
   overlay.py    annotated frames for debugging the vision stages
   score.py      tempo, downbeat, key, hands, quantization
+  export/       MIDI, MusicXML, PDF writers
   synth/        synthetic clip generation with ground truth
 tests/        pytest suite; generates its own video fixtures
 web/          static frontend (index.html, styles.css, app.js)
