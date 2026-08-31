@@ -15,7 +15,9 @@ from pathlib import Path
 
 from . import __version__
 from .config import DEFAULT, Config, VideoConfig
+from .keyboard import COMMON_RANGES
 from .sources import SourceError, resolve
+from .synth.themes import DEFAULT_THEME, THEMES
 from .video import VideoError, VideoReader
 
 log = logging.getLogger("dropscore")
@@ -60,6 +62,34 @@ def cmd_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_synth(args: argparse.Namespace) -> int:
+    """Render synthetic clips with exact ground truth, for evaluation."""
+    from .synth import RenderSpec, generate, get_theme, render  # noqa: PLC0415
+
+    out_dir = Path(args.out_dir)
+    themes = sorted(THEMES) if args.theme == "all" else [args.theme]
+
+    for theme_name in themes:
+        theme = get_theme(theme_name)
+        for index in range(args.count):
+            seed = args.seed + index
+            sequence = generate(seed=seed, bars=args.bars, tempo=args.tempo)
+            spec = RenderSpec(
+                width=args.width,
+                height=args.height,
+                fps=args.fps,
+                theme=theme,
+                key_range=args.key_range,
+            )
+            name = f"{theme_name}_{args.key_range}key_seed{seed}"
+            video, truth = render(sequence, out_dir / f"{name}.mp4", spec)
+            print(f"{video}  ({len(sequence)} notes, {sequence.key})")
+            if truth:
+                print(f"  truth {truth}")
+
+    return 0
+
+
 def cmd_transcribe(args: argparse.Namespace) -> int:
     raise SystemExit(
         "transcribe is not implemented yet — the vision pipeline lands in stages "
@@ -94,6 +124,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe.set_defaults(func=cmd_probe)
 
+    synth = sub.add_parser(
+        "synth",
+        help="render synthetic falling-tile clips with exact ground truth",
+        description=(
+            "Generates videos from procedurally written music, each with a "
+            ".truth.json sidecar giving the notes and the geometry that drew "
+            "them. This is the evaluation corpus the vision stages are scored "
+            "against."
+        ),
+    )
+    synth.add_argument("-o", "--out-dir", default="out/synth", help="where to write clips")
+    synth.add_argument(
+        "--theme",
+        default=DEFAULT_THEME,
+        choices=[*sorted(THEMES), "all"],
+        help="visual preset, or 'all' to render one clip per theme",
+    )
+    synth.add_argument("--count", type=int, default=1, help="clips per theme")
+    synth.add_argument("--seed", type=int, default=0, help="first seed; increments per clip")
+    synth.add_argument("--bars", type=int, default=16, help="length in bars")
+    synth.add_argument("--tempo", type=float, default=96.0, help="BPM")
+    synth.add_argument(
+        "--key-range",
+        default="88",
+        choices=sorted(COMMON_RANGES),
+        help="how many keys the keyboard shows",
+    )
+    synth.add_argument("--width", type=int, default=1280)
+    synth.add_argument("--height", type=int, default=720)
+    synth.add_argument("--fps", type=float, default=30.0)
+    synth.set_defaults(func=cmd_synth)
+
     transcribe = sub.add_parser("transcribe", help="transcribe a video (not yet implemented)")
     transcribe.add_argument("source", help="path to a video file, or a YouTube URL")
     transcribe.add_argument("-o", "--output", help="output file")
@@ -106,9 +168,11 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _configure_logging(args.verbose)
 
+    from .synth.renderer import RenderError  # noqa: PLC0415
+
     try:
         return args.func(args)
-    except (SourceError, VideoError) as exc:
+    except (SourceError, VideoError, RenderError) as exc:
         log.error("%s", exc)
         return 1
     except KeyboardInterrupt:
