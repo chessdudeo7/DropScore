@@ -2,12 +2,12 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: frontend prototype, backend stage 6 of 10.** The UI is complete and
+**Status: frontend prototype, backend stage 7 of 10.** The UI is complete and
 interactive but still simulates its results. The Python pipeline has its
 foundation — video I/O, note and keyboard models, a synthetic clip generator that
-produces ground truth to score against, and a working vision path from video to
-raw timed notes. What is missing is the musical half: tempo, quantization, hands,
-and notation. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
+produces ground truth to score against, and a working path from video all the way
+to quantized, hand-split notes with a tempo and key. What is missing is notation
+output. See [docs/ROADMAP.md](docs/ROADMAP.md) for the staged plan.
 
 ## The backend
 
@@ -64,7 +64,8 @@ note-off, and both are extrapolated from frames where that edge is unclipped. At
 30fps a frame is 33ms while sixteenths at 140 BPM are 107ms apart, so rounding to
 frames would quantize badly before any musical quantization happened.
 
-Output is raw and unquantized — tempo, hands and notation arrive in stages 7–8.
+By default it then runs stage 7: tempo, downbeat, key, hand assignment and
+quantization. `--raw` skips that. Notation output arrives in stage 8.
 
 ```bash
 dropscore debug out/synth/classic_88key_seed0.mp4 --video
@@ -123,6 +124,7 @@ dropscore/    the Python pipeline
   tiles.py      palette discovery, blob extraction, blob -> key
   tracking.py   scroll speed, tile tracks, geometry -> timed notes
   overlay.py    annotated frames for debugging the vision stages
+  score.py      tempo, downbeat, key, hands, quantization
   synth/        synthetic clip generation with ground truth
 tests/        pytest suite; generates its own video fixtures
 web/          static frontend (index.html, styles.css, app.js)

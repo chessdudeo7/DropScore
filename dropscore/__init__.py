@@ -8,12 +8,14 @@ from .config import (
     CalibrationConfig,
     Config,
     TileConfig,
+    ScoreConfig,
     TrackingConfig,
     VideoConfig,
 )
 from .keyboard import COMMON_RANGES, KeyboardLayout, is_black, is_white
 from .notes import Hand, Note, NoteSequence, pitch_name
 from .overlay import annotate, dump_frames, dump_video
+from .score import Analysis, ScoreError, analyze, assign_hands, postprocess, quantize
 from .sources import ResolvedSource, SourceError, parse_youtube_id, resolve
 from .tiles import Palette, Tile, TileError, detect, detect_in_frame, discover_palette
 from .tracking import SpeedEstimate, TileTrack, TrackingError, estimate_speed, transcribe
@@ -24,6 +26,7 @@ __all__ = [
     # config
     "CalibrationConfig",
     "TrackingConfig",
+    "ScoreConfig",
     "TileConfig",
     "Config",
     "DEFAULT",
@@ -64,6 +67,13 @@ __all__ = [
     "annotate",
     "dump_frames",
     "dump_video",
+    # score
+    "Analysis",
+    "ScoreError",
+    "analyze",
+    "assign_hands",
+    "postprocess",
+    "quantize",
     # keyboard
     "COMMON_RANGES",
     "KeyboardLayout",

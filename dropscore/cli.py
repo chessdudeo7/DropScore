@@ -213,6 +213,25 @@ def cmd_synth(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """Run stage 7 over an existing note JSON."""
+    from .notes import NoteSequence  # noqa: PLC0415
+    from .score import postprocess  # noqa: PLC0415
+
+    sequence = NoteSequence.load(args.notes)
+    result, analysis = postprocess(sequence, _config_from_args(args))
+
+    print(analysis)
+    print(f"  beat      {analysis.beat:.4f}s, grid from {analysis.beat_phase:.4f}s")
+    print(f"  downbeat  {analysis.downbeat_phase:.4f}s")
+    print(f"  hands     {len(result.hand('L'))} left, {len(result.hand('R'))} right")
+
+    if args.output:
+        result.save(args.output)
+        print(f"  wrote     {args.output}")
+    return 0
+
+
 def cmd_transcribe(args: argparse.Namespace) -> int:
     """Calibrate, detect, track and time — the pipeline as far as it goes."""
     from .calibrate import calibrate  # noqa: PLC0415
@@ -238,14 +257,21 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         sequence = transcribe(reader.frames(), calibration, palette, speed, config)
 
     sequence.source = f"dropscore:{source.label}"
+
+    if not args.raw and len(sequence):
+        from .score import ScoreError, postprocess  # noqa: PLC0415
+
+        try:
+            sequence, analysis = postprocess(sequence, config)
+            print(analysis)
+        except ScoreError as exc:
+            log.warning("could not analyse the notes (%s); leaving them raw", exc)
+
     output = Path(args.output or f"{source.label}.notes.json")
     sequence.save(output)
 
     print(f"{len(sequence)} notes over {sequence.duration:.1f}s -> {output}")
-    print(
-        "Note timing is raw; tempo, quantization and hand assignment land in "
-        "stage 7, and MIDI/MusicXML in stage 8."
-    )
+    print("MIDI and MusicXML output lands in stage 8.")
     return 0
 
 
@@ -382,7 +408,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=40,
         help="consecutive frames used to measure the scroll speed",
     )
+    transcribe.add_argument(
+        "--raw",
+        action="store_true",
+        help="skip tempo, key, hand and quantization analysis",
+    )
     transcribe.set_defaults(func=cmd_transcribe)
+
+    analyse = sub.add_parser(
+        "analyze",
+        help="infer tempo, key and hands for an existing note JSON",
+        description=(
+            "Runs stage 7 on notes already transcribed, so the analysis can be "
+            "re-run with different settings without re-reading the video."
+        ),
+    )
+    analyse.add_argument("notes", help="a .notes.json written by transcribe")
+    analyse.add_argument("-o", "--output", help="write the quantized result here")
+    analyse.set_defaults(func=cmd_analyze)
 
     return parser
 

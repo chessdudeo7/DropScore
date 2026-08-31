@@ -133,6 +133,36 @@ class TrackingConfig:
 
 
 @dataclass(frozen=True)
+class ScoreConfig:
+    """Tempo, key, hands and quantization (stage 7)."""
+
+    # Tempo search. Candidate grid spacings are scanned for phase coherence, so
+    # the range is on the tatum (finest subdivision), not on the beat.
+    min_onsets_for_tempo: int = 8
+    min_tatum: float = 0.06  # seconds
+    max_tatum: float = 1.00
+    tempo_resolution: int = 1200
+
+    # A grid twice as fine fits an onset set exactly as well, so the coarsest
+    # period scoring within this fraction of the best is taken as the tatum.
+    tatum_tolerance: float = 0.92
+
+    min_bpm: float = 40.0
+    max_bpm: float = 208.0
+    tempo_prior: float = 110.0  # multiples of the tatum are judged against this
+    beats_per_bar: int = 4
+
+    # Quantization. Anything within half a step snaps to *some* gridline, so a
+    # tolerance below 0.5 is what makes leaving outliers alone possible at all.
+    steps_per_beat: int = 4  # sixteenths in 4/4
+    max_shift: float = 0.35
+    min_duration: float = 0.03
+
+    # Seconds either side of a note considered when splitting hands by pitch.
+    hand_window: float = 1.0
+
+
+@dataclass(frozen=True)
 class Config:
     """Root config. Sub-configs are added by later stages."""
 
@@ -140,6 +170,7 @@ class Config:
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     tiles: TileConfig = field(default_factory=TileConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
+    score: ScoreConfig = field(default_factory=ScoreConfig)
 
     def evolve(self, **changes: Any) -> "Config":
         """Return a copy with top-level fields replaced."""

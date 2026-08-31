@@ -14,7 +14,7 @@ being eyeballed.
 | 4 | **Tile detection** | Palette clustering, masking, blob extraction, blob → key mapping | ✅ done |
 | 5 | **Tracking and timing** | Scroll-speed estimation, onset/duration from geometry → raw note events | ✅ done |
 | 6 | **Debug overlays** | Annotated frame dumps: keybed, key grid, blob boxes with assigned pitch | ✅ done |
-| 7 | **Symbolic post-processing** | Hand assignment, tempo/downbeat, quantization, key detection | ⬜ |
+| 7 | **Symbolic post-processing** | Hand assignment, tempo/downbeat, quantization, key detection | ✅ done |
 | 8 | **Export** | MIDI, then MusicXML, then PDF | ⬜ |
 | 9 | **Evaluation harness** | Note-level P/R/F1 against ground truth, over a corpus, with a regression report | ⬜ |
 | 10 | **Service + frontend wiring** | FastAPI, job queue, progress events matching the UI's existing stage list | ⬜ |
