@@ -18,8 +18,9 @@ pytest.importorskip("httpx", reason="needs the [dev] extra")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from dropscore.service import STAGES, JobStore, Status  # noqa: E402
+from dropscore.service import STAGES, JobStore, Status, safe_label  # noqa: E402
 from dropscore.service.app import create_app  # noqa: E402
+from dropscore.service.jobs import output_path  # noqa: E402
 
 SPEC = RenderSpec(width=640, height=360, fps=10.0)
 
@@ -138,6 +139,82 @@ def test_cancel_marks_the_job(client: TestClient) -> None:
     response = client.delete(f"/api/jobs/{job.id}")
     assert response.status_code == 200
     assert job.cancelled
+
+
+# ── label sanitising ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("nocturne.mp4", "nocturne"),
+        ("my clip.mp4", "my_clip"),
+        ("Chopin - Op9 No2.webm", "Chopin_-_Op9_No2"),
+        ("/home/user/videos/song.mp4", "song"),
+        ("C:\\Users\\me\\song.mp4", "song"),
+        # Traversal attempts, under either separator.
+        ("../../../etc/passwd", "passwd"),
+        ("..\\..\\..\\evil.mid", "evil"),
+        ("....//....//evil.mp4", "evil"),
+        # Names that sanitise away entirely fall back rather than becoming "".
+        ("..", "video"),
+        (".", "video"),
+        ("", "video"),
+        ("   ", "video"),
+        ("...mp4", "video"),
+        ("曲.mp4", "video"),
+    ],
+)
+def test_safe_label(raw: str, expected: str) -> None:
+    assert safe_label(raw) == expected
+
+
+def test_safe_label_never_contains_a_separator() -> None:
+    for raw in ("a/b/c.mp4", "a\\b\\c.mp4", "..\\..\\x", "/", "\\", "a:b.mp4"):
+        label = safe_label(raw)
+        assert "/" not in label and "\\" not in label and ".." not in label
+
+
+def test_safe_label_is_length_capped() -> None:
+    assert len(safe_label("x" * 500 + ".mp4")) == 48
+
+
+def test_output_path_stays_inside_the_job_directory(tmp_path: Path) -> None:
+    job = JobStore(tmp_path).create("..\\..\\evil.mid")
+    target = output_path(job, ".mid")
+    assert target.is_relative_to(job.workdir.resolve())
+
+
+def test_output_path_refuses_an_escaping_label(tmp_path: Path) -> None:
+    """The second line of defence, for a Job not built via JobStore.create."""
+    from dropscore.service.jobs import Job  # noqa: PLC0415
+
+    workdir = tmp_path / "job"
+    workdir.mkdir()
+    job = Job(id="x", label="../../escaped", workdir=workdir)
+    with pytest.raises(ValueError, match="outside"):
+        output_path(job, ".mid")
+
+
+def test_upload_with_a_traversing_filename_writes_inside_the_job(
+    client: TestClient, clip: Path
+) -> None:
+    with clip.open("rb") as handle:
+        response = client.post(
+            "/api/jobs/upload",
+            files={"file": ("..\\..\\..\\pwned.mp4", handle, "video/mp4")},
+        )
+    assert response.status_code == 200
+    job_id = response.json()["id"]
+
+    job = _wait(client, job_id)
+    assert job["status"] == "done", job.get("error")
+    assert job["label"] == "pwned"
+
+    store = client.app.state.store
+    workdir = store.get(job_id).workdir.resolve()
+    for path in store.get(job_id).files.values():
+        assert path.resolve().is_relative_to(workdir)
 
 
 # ── the store on its own ─────────────────────────────────────────────

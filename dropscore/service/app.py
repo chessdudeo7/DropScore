@@ -72,8 +72,8 @@ def create_app(
                 415, f"{suffix or 'that file'} is not a video DropScore can read"
             )
 
-        label = Path(file.filename or "video").stem[:48] or "video"
-        job = store.create(label)
+        # The filename is client-supplied; JobStore.create sanitises it.
+        job = store.create(file.filename or "video")
         target = job.workdir / f"source{suffix}"
 
         written = 0
@@ -86,7 +86,7 @@ def create_app(
                     raise HTTPException(413, "That file is larger than 2 GB")
                 out.write(chunk)
 
-        job.say(f"received {label}{suffix} ({written / 1e6:.1f} MB)")
+        job.say(f"received {job.label}{suffix} ({written / 1e6:.1f} MB)")
         store.submit(job, lambda j: transcribe_job(j, target, config))
         return {"id": job.id}
 

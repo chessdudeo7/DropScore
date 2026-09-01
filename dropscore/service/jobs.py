@@ -13,6 +13,7 @@ stage 0 needs no new vocabulary to render real progress.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import uuid
@@ -48,6 +49,27 @@ class Status(str, Enum):
 
 class Cancelled(Exception):
     """Raised inside a worker when the job has been cancelled."""
+
+
+_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_label(raw: str, fallback: str = "video", limit: int = 48) -> str:
+    """Turn an untrusted name into one that is safe to put in a path.
+
+    Upload filenames come straight from the client and are used to build output
+    paths, so they cannot be trusted. ``Path(name).stem`` alone is not enough:
+    it strips ``/`` but leaves ``\\``, which on Windows is a separator, so a file
+    called ``..\\..\\evil.mid`` would escape the job directory.
+
+    Everything before the last separator of *either* kind is dropped, the
+    extension is removed, anything outside ``[A-Za-z0-9._-]`` becomes an
+    underscore, and leading or trailing dots go — so ``..`` cannot survive.
+    """
+    candidate = re.split(r"[\\/]", str(raw).strip())[-1]
+    candidate = Path(candidate).stem
+    candidate = _UNSAFE.sub("_", candidate).strip("._")
+    return candidate[:limit] or fallback
 
 
 @dataclass
@@ -141,10 +163,11 @@ class JobStore:
         self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="dropscore")
 
     def create(self, label: str) -> Job:
+        """Register a job. The label is sanitised here, at the one chokepoint."""
         job_id = uuid.uuid4().hex
         workdir = self.root / job_id
         workdir.mkdir(parents=True, exist_ok=True)
-        job = Job(id=job_id, label=label, workdir=workdir)
+        job = Job(id=job_id, label=safe_label(label), workdir=workdir)
 
         with self._lock:
             self._jobs[job_id] = job
@@ -187,6 +210,20 @@ class JobStore:
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+def output_path(job: Job, suffix: str) -> Path:
+    """An output path inside the job's directory, verified to stay there.
+
+    ``safe_label`` should already guarantee this. Checking again at the point the
+    path is used means a future caller that builds a Job without going through
+    ``JobStore.create`` cannot quietly reintroduce an escape.
+    """
+    root = job.workdir.resolve()
+    target = (job.workdir / f"{job.label}{suffix}").resolve()
+    if not target.is_relative_to(root):
+        raise ValueError(f"refusing to write {target}, which is outside {root}")
+    return target
 
 
 def transcribe_job(job: Job, video: Path, config: Config = DEFAULT) -> None:
@@ -247,8 +284,9 @@ def transcribe_job(job: Job, video: Path, config: Config = DEFAULT) -> None:
 
     sequence.source = f"dropscore:{job.label}"
     for format in ("json", "midi", "musicxml"):
-        target = job.workdir / f"{job.label}{extension(format)}"
-        job.files[format] = export_write(sequence, target, format, analysis)
+        job.files[format] = export_write(
+            sequence, output_path(job, extension(format)), format, analysis
+        )
     job.say(f"wrote {', '.join(sorted(job.files))}")
     job.finish("score")
 
