@@ -18,14 +18,15 @@ from typing import Any
 from ..config import Config, DEFAULT
 from ..sources import SourceError, parse_youtube_id
 from .jobs import JobStore, Status, transcribe_job
+from .options import TranscribeOptions
 
 log = logging.getLogger(__name__)
 
 try:
-    from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+    from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
     from fastapi.responses import FileResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field
 except ImportError as exc:  # pragma: no cover - exercised only without the extra
     raise ImportError(
         "The web service needs its optional dependencies: "
@@ -60,6 +61,15 @@ CONTENT_TYPES = {
 
 class UrlRequest(BaseModel):
     url: str
+    options: TranscribeOptions = Field(default_factory=TranscribeOptions)
+
+
+def _options(raw: str | None) -> TranscribeOptions:
+    """Parse the options form field, turning bad input into a 400."""
+    try:
+        return TranscribeOptions.parse(raw)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, f"Invalid options: {exc}") from exc
 
 
 def create_app(
@@ -80,7 +90,13 @@ def create_app(
     # event loop for the whole upload — freezing every other request, including
     # the polling that drives other users' progress bars.
     @app.post("/api/jobs/upload")
-    def submit_upload(request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
+    def submit_upload(
+        request: Request,
+        file: UploadFile = File(...),
+        # Multipart has no nested objects, so the settings arrive as JSON text.
+        options: str | None = Form(default=None),
+    ) -> dict[str, Any]:
+        chosen = _options(options)
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in ALLOWED_SUFFIXES:
             raise HTTPException(
@@ -116,7 +132,10 @@ def create_app(
             raise HTTPException(413, _too_large())
 
         job.say(f"received {job.label}{suffix} ({written / 1e6:.1f} MB)")
-        store.submit(job, lambda j: transcribe_job(j, target, config))
+        store.submit(
+            job,
+            lambda j: transcribe_job(j, target, chosen.apply(config), chosen.formats),
+        )
         return {"id": job.id}
 
     @app.post("/api/jobs/url")
@@ -125,6 +144,7 @@ def create_app(
         if not video_id:
             raise HTTPException(400, "That does not look like a YouTube link")
 
+        chosen = request.options
         job = store.create(video_id)
         job.say(
             "note: downloading from YouTube is against their Terms of Service; "
@@ -138,7 +158,9 @@ def create_app(
                 resolved = resolve(video_id, current_job.workdir)
             except SourceError as exc:
                 raise RuntimeError(str(exc)) from exc
-            transcribe_job(current_job, resolved.path, config)
+            transcribe_job(
+                current_job, resolved.path, chosen.apply(config), chosen.formats
+            )
 
         store.submit(job, work)
         return {"id": job.id}

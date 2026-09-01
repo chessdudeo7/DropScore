@@ -512,19 +512,39 @@ async function startJob(src) {
 
 // ── the real job ─────────────────────────────────────────────────────
 
+/** Read the settings panel into the shape the API expects. */
+function currentOptions() {
+  const formats = [...document.querySelectorAll('.checks input:checked')].map((input) =>
+    input.dataset.fmt.toLowerCase(),
+  );
+  return {
+    hands: $('#opt-hands').value,
+    quantize: $('#opt-quant').value,
+    tempo: $('#opt-tempo').value,
+    key: $('#opt-key').value === 'auto' ? 'auto' : `${$('#opt-key').value} major`,
+    formats,
+  };
+}
+
 /** Submit to the API and poll until it settles. */
 async function runRemoteJob(src) {
+  const options = currentOptions();
   let submitted;
   try {
     if (src.kind === 'file') {
       const body = new FormData();
       body.append('file', src.file);
+      // Multipart carries no nested objects, so the settings go as JSON text.
+      body.append('options', JSON.stringify(options));
       submitted = await postJson('/api/jobs/upload', { method: 'POST', body });
     } else {
       submitted = await postJson('/api/jobs/url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: `https://www.youtube.com/watch?v=${src.id}` }),
+        body: JSON.stringify({
+          url: `https://www.youtube.com/watch?v=${src.id}`,
+          options,
+        }),
       });
     }
   } catch (err) {

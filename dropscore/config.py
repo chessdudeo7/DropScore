@@ -154,12 +154,24 @@ class ScoreConfig:
 
     # Quantization. Anything within half a step snaps to *some* gridline, so a
     # tolerance below 0.5 is what makes leaving outliers alone possible at all.
+    # Zero disables quantization and keeps the measured times.
     steps_per_beat: int = 4  # sixteenths in 4/4
     max_shift: float = 0.35
     min_duration: float = 0.03
 
     # Seconds either side of a note considered when splitting hands by pitch.
     hand_window: float = 1.0
+
+    # How hands are decided:
+    #   "color" — trust the tile colours, fall back to pitch when there is one
+    #   "pitch" — always split by a moving pitch boundary
+    #   "split" — fixed boundary at middle C
+    #   "none"  — one staff, everything right hand
+    hand_mode: str = "color"
+
+    # Override the inferred tempo or key. Left None, both are estimated.
+    fixed_tempo: float | None = None
+    fixed_key: str | None = None
 
 
 @dataclass(frozen=True)

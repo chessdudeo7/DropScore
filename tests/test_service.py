@@ -220,6 +220,46 @@ def test_result_carries_notes_the_roll_can_draw(client: TestClient, clip: Path) 
         assert note["hand"] in {"L", "R"}
 
 
+def test_settings_reach_the_pipeline(client: TestClient, clip: Path) -> None:
+    """The panel used to be decorative; assert it now changes the outcome."""
+    import json as _json  # noqa: PLC0415
+
+    with clip.open("rb") as handle:
+        job_id = client.post(
+            "/api/jobs/upload",
+            files={"file": (clip.name, handle, "video/mp4")},
+            data={"options": _json.dumps({"hands": "none", "formats": ["midi"]})},
+        ).json()["id"]
+
+    job = _wait(client, job_id)
+    assert job["status"] == "done", job.get("error")
+
+    # hands=none asked for a single staff.
+    assert {n["hand"] for n in job["result"]["notes"]} <= {"R"}
+    # formats=[midi] asked for one output, plus the json the UI needs.
+    assert set(job["formats"]) == {"midi", "json"}
+    assert client.get(f"/api/jobs/{job_id}/download/musicxml").status_code == 404
+
+
+def test_bad_options_are_a_400_not_a_500(client: TestClient, clip: Path) -> None:
+    with clip.open("rb") as handle:
+        response = client.post(
+            "/api/jobs/upload",
+            files={"file": (clip.name, handle, "video/mp4")},
+            data={"options": '{"formats": ["ogg"]}'},
+        )
+    assert response.status_code == 400
+    assert "Invalid options" in response.json()["detail"]
+
+
+def test_omitting_options_still_works(client: TestClient, clip: Path) -> None:
+    with clip.open("rb") as handle:
+        response = client.post(
+            "/api/jobs/upload", files={"file": (clip.name, handle, "video/mp4")}
+        )
+    assert response.status_code == 200
+
+
 def test_outputs_are_downloadable(client: TestClient, clip: Path) -> None:
     with clip.open("rb") as handle:
         job_id = client.post(

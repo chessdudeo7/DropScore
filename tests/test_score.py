@@ -212,6 +212,67 @@ def test_hand_split_follows_the_music_up_the_keyboard() -> None:
         assert hands == {"L", "R"}, "each simultaneous pair should straddle the split"
 
 
+def _hand_config(mode: str) -> Config:
+    return Config(score=ScoreConfig(hand_mode=mode))
+
+
+def test_hand_mode_none_puts_everything_on_one_staff() -> None:
+    sequence = NoteSequence.of(
+        [
+            Note(onset=0.0, pitch=40, duration=1.0, hand="L"),
+            Note(onset=0.0, pitch=80, duration=1.0, hand="R"),
+        ]
+    )
+    assert {n.hand for n in assign_hands(sequence, _hand_config("none"))} == {"R"}
+
+
+def test_hand_mode_split_uses_a_fixed_middle_c_boundary() -> None:
+    sequence = NoteSequence.of(
+        [Note(onset=0.0, pitch=p, duration=0.5) for p in (48, 59, 60, 72)]
+    )
+    by_pitch = {n.pitch: n.hand for n in assign_hands(sequence, _hand_config("split"))}
+    assert by_pitch == {48: "L", 59: "L", 60: "R", 72: "R"}
+
+
+def test_hand_mode_pitch_ignores_existing_labels() -> None:
+    """Colour said one thing; the user asked for a pitch split instead."""
+    sequence = NoteSequence.of(
+        [
+            Note(onset=0.0, pitch=40, duration=1.0, hand="R"),
+            Note(onset=0.0, pitch=44, duration=1.0, hand="R"),
+            Note(onset=0.0, pitch=80, duration=1.0, hand="R"),
+            Note(onset=0.0, pitch=84, duration=1.0, hand="R"),
+        ]
+    )
+    by_pitch = {n.pitch: n.hand for n in assign_hands(sequence, _hand_config("pitch"))}
+    assert by_pitch[40] == "L" and by_pitch[84] == "R"
+
+
+def test_fixed_tempo_overrides_the_estimate() -> None:
+    sequence = _grid(96.0)
+    config = Config(score=ScoreConfig(fixed_tempo=140.0))
+    analysis = analyze(sequence, config)
+    assert analysis.tempo == pytest.approx(140.0)
+    assert analysis.tempo_confidence == 1.0
+
+
+def test_fixed_key_overrides_the_estimate() -> None:
+    sequence = _grid(120.0)
+    analysis = analyze(sequence, Config(score=ScoreConfig(fixed_key="Eb minor")))
+    assert analysis.key == "Eb minor"
+    assert analysis.key_confidence == 1.0
+
+
+def test_quantization_can_be_switched_off() -> None:
+    sequence = generate(seed=3, bars=4, tempo=96.0)
+    off = Config(score=ScoreConfig(steps_per_beat=0))
+    result, analysis = postprocess(sequence, off)
+
+    assert [n.onset for n in result] == [n.onset for n in sequence]
+    assert result.tempo == pytest.approx(analysis.tempo)
+    assert result.key == analysis.key
+
+
 # ── quantization ─────────────────────────────────────────────────────
 
 

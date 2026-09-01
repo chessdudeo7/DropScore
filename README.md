@@ -154,10 +154,11 @@ quietly presenting invented notes as though they were transcribed.
 - Staged progress view with a live log from the server, elapsed timer, and cancel
 - Result view: stats, a rendered piano roll on a keybed, downloads
 
-The **transcription settings** panel is not yet wired to the API — the server
-currently runs with defaults and ignores those choices. They are honoured by the
-CLI equivalents (`--raw`, and the knobs in `dropscore/config.py`); plumbing them
-through the job submission is the obvious next piece of work.
+The **transcription settings** panel is sent with the job: hand assignment
+(tile colour, moving pitch split, fixed middle C, or one staff), quantization
+grid (or none, keeping the measured times), a fixed tempo or key instead of the
+inferred one, and which outputs to write. JSON is always produced regardless,
+since the results view is drawn from it.
 
 Against a live API the piano roll and stats come from the real transcription and
 the download buttons are real links. In demo mode the notes come from a seeded

@@ -216,6 +216,14 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
     if not len(sequence):
         return sequence
 
+    mode = config.score.hand_mode
+    if mode == "none":
+        return _relabel(sequence, lambda note: "R")
+    if mode == "split":
+        return _relabel(sequence, lambda note: "R" if note.pitch >= 60 else "L")
+    if mode == "pitch":
+        return _split_by_pitch(sequence, config)
+
     left = sequence.hand("L")
     right = sequence.hand("R")
 
@@ -230,6 +238,19 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
         return sequence
 
     return _split_by_pitch(sequence, config)
+
+
+def _relabel(sequence: NoteSequence, hand_of) -> NoteSequence:
+    """Rebuild a sequence with each note's hand decided by ``hand_of``."""
+    return NoteSequence.of(
+        [
+            Note(n.onset, n.pitch, n.duration, hand_of(n), n.velocity)
+            for n in sequence
+        ],
+        tempo=sequence.tempo,
+        key=sequence.key,
+        source=sequence.source,
+    )
 
 
 def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequence:
@@ -323,10 +344,23 @@ def _snap(value: float, step: float, phase: float, tolerance: float) -> float | 
 
 
 def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
-    """Infer tempo, downbeat and key without modifying the sequence."""
+    """Infer tempo, downbeat and key, honouring any overrides in the config."""
+    cfg = config.score
     beat, phase, tempo_confidence = estimate_tempo(sequence, config)
+
+    if cfg.fixed_tempo:
+        # The grid is still anchored on the measured phase; only its spacing is
+        # replaced. Confidence becomes 1.0 because it was told, not inferred.
+        beat = 60.0 / cfg.fixed_tempo
+        phase %= beat
+        tempo_confidence = 1.0
+
     downbeat = find_downbeat(sequence, beat, phase, config)
-    key, key_confidence = estimate_key(sequence)
+
+    if cfg.fixed_key:
+        key, key_confidence = cfg.fixed_key, 1.0
+    else:
+        key, key_confidence = estimate_key(sequence)
 
     return Analysis(
         tempo=60.0 / beat,
@@ -346,6 +380,13 @@ def postprocess(
     """Hands, tempo, key and quantization in one pass."""
     handed = assign_hands(sequence, config)
     analysis = analyze(handed, config)
+
+    if config.score.steps_per_beat <= 0:
+        # Quantization off: keep the measured times, still report what was
+        # inferred about the piece.
+        handed.tempo, handed.key = analysis.tempo, analysis.key
+        return handed, analysis
+
     result, skipped = quantize(handed, analysis, config)
 
     if skipped:

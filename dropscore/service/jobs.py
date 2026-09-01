@@ -22,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from ..config import Config, DEFAULT
 from ..notes import NoteSequence
@@ -337,7 +337,12 @@ def output_path(job: Job, suffix: str) -> Path:
     return target
 
 
-def transcribe_job(job: Job, video: Path, config: Config = DEFAULT) -> None:
+def transcribe_job(
+    job: Job,
+    video: Path,
+    config: Config = DEFAULT,
+    formats: Sequence[str] = ("json", "midi", "musicxml"),
+) -> None:
     """The pipeline, stage by stage, reporting as it goes.
 
     This mirrors ``evaluate.run_clip`` rather than sharing it, because the two
@@ -400,7 +405,7 @@ def transcribe_job(job: Job, video: Path, config: Config = DEFAULT) -> None:
             job.say(f"left unquantized: {exc}")
 
     sequence.source = f"dropscore:{job.label}"
-    for format in ("json", "midi", "musicxml"):
+    for format in formats:
         job.files[format] = export_write(
             sequence, output_path(job, extension(format)), format, analysis
         )
