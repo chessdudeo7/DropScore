@@ -51,6 +51,11 @@ class Status(str, Enum):
 #: States a job never leaves. Only these are safe to evict.
 TERMINAL = frozenset({Status.DONE, Status.ERROR, Status.CANCELLED})
 
+#: The log is a ring: past LOG_LIMIT lines the oldest LOG_TRIM are dropped, so a
+#: runaway job cannot grow it without bound.
+LOG_LIMIT = 500
+LOG_TRIM = 100
+
 
 class Cancelled(Exception):
     """Raised inside a worker when the job has been cancelled."""
@@ -88,6 +93,7 @@ class Job:
     status: Status = Status.QUEUED
     stage_states: dict[str, str] = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
+    log_offset: int = 0  # absolute index of log[0], once trimming has happened
     error: str | None = None
     created: float = field(default_factory=time.time)
     finished: float | None = None
@@ -114,9 +120,13 @@ class Job:
     def say(self, message: str) -> None:
         with self._lock:
             self.log.append(message)
-            # A runaway pipeline must not grow the log without bound.
-            if len(self.log) > 500:
-                del self.log[:100]
+            if len(self.log) > LOG_LIMIT:
+                del self.log[:LOG_TRIM]
+                # Clients track how many lines they have seen in absolute terms,
+                # so trimming has to be reported. Without this the two sides
+                # disagree about what index log[0] is and every line after the
+                # first trim is silently skipped.
+                self.log_offset += LOG_TRIM
         log.debug("[%s] %s", self.id[:8], message)
 
     def discard_source(self) -> None:
@@ -170,6 +180,7 @@ class Job:
                     for key, label in STAGES
                 ],
                 "log": list(self.log),
+                "log_offset": self.log_offset,
                 "error": self.error,
                 "elapsed": (self.finished or time.time()) - self.created,
                 "result": self.result,

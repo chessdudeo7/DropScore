@@ -551,9 +551,18 @@ function pollJob() {
       return failJob(err.message);
     }
 
-    // The server owns the log; append only what has not been shown yet.
-    for (const line of job.log.slice(seen)) log(line);
-    seen = job.log.length;
+    // The server owns the log and trims its oldest lines once it gets long, so
+    // `seen` counts lines in absolute terms and `log_offset` says which
+    // absolute index the first line currently held corresponds to. Treating
+    // the array index as absolute meant that after the first trim the cursor
+    // pointed past the end and every later line was dropped in silence.
+    const offset = job.log_offset || 0;
+    if (offset > seen) {
+      log(`… ${offset - seen} earlier line(s) dropped`, true);
+      seen = offset;
+    }
+    for (const line of job.log.slice(seen - offset)) log(line);
+    seen = offset + job.log.length;
 
     for (const stage of job.stages) {
       const li = document.querySelector(`.steps li[data-key="${stage.key}"]`);

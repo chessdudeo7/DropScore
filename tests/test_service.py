@@ -27,7 +27,7 @@ from dropscore.service import (  # noqa: E402
     until_cancelled,
 )
 from dropscore.service.app import create_app  # noqa: E402
-from dropscore.service.jobs import output_path  # noqa: E402
+from dropscore.service.jobs import LOG_LIMIT, LOG_TRIM, output_path  # noqa: E402
 
 SPEC = RenderSpec(width=640, height=360, fps=10.0)
 
@@ -509,7 +509,38 @@ def test_log_does_not_grow_without_bound(tmp_path: Path) -> None:
     job = JobStore(tmp_path).create("x")
     for i in range(900):
         job.say(str(i))
-    assert len(job.log) <= 500
+    assert len(job.log) <= LOG_LIMIT
+
+
+def test_log_offset_tracks_what_was_trimmed(tmp_path: Path) -> None:
+    """Clients count lines absolutely, so trimming has to be reported."""
+    job = JobStore(tmp_path).create("x")
+
+    for i in range(LOG_LIMIT):
+        job.say(str(i))
+    assert job.log_offset == 0, "nothing trimmed yet"
+
+    job.say("one too many")
+    assert job.log_offset == LOG_TRIM
+    assert job.log[0] == str(LOG_TRIM), "offset must name the surviving first line"
+
+
+def test_log_offset_plus_length_is_the_total_ever_written(tmp_path: Path) -> None:
+    """The invariant the client's cursor arithmetic depends on."""
+    job = JobStore(tmp_path).create("x")
+    for i in range(1_300):
+        job.say(str(i))
+    assert job.log_offset + len(job.log) == 1_300
+
+
+def test_snapshot_reports_the_log_offset(tmp_path: Path) -> None:
+    job = JobStore(tmp_path).create("x")
+    for i in range(LOG_LIMIT + LOG_TRIM):
+        job.say(str(i))
+
+    snapshot = job.snapshot()
+    assert snapshot["log_offset"] == LOG_TRIM
+    assert snapshot["log"][0] == str(LOG_TRIM)
 
 
 def _finish(job) -> None:
