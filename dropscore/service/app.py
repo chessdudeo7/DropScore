@@ -18,6 +18,8 @@ from typing import Any
 
 from ..config import Config, DEFAULT
 from ..sources import SourceError, parse_youtube_id
+from ..export import FORMATS
+from ..export.pdf import find_engraver
 from .jobs import JobStore, Status, transcribe_job
 from .options import TranscribeOptions
 
@@ -81,6 +83,13 @@ def create_app(
 ) -> "FastAPI":
     store = JobStore(Path(workdir), keep_sources=keep_sources)
 
+    # Probed once: PDF needs an external engraver, and nobody installs one
+    # halfway through a server's life. Reporting it lets the UI stop offering
+    # an output this machine cannot produce.
+    engraver = find_engraver()
+    if engraver is None:
+        log.info("no engraver on PATH; PDF export is unavailable")
+
     @asynccontextmanager
     async def lifespan(_app: "FastAPI"):
         yield
@@ -98,6 +107,7 @@ def create_app(
             "version": "0.1.0",
             "accepted": sorted(s.lstrip(".") for s in ALLOWED_SUFFIXES),
             "max_upload_bytes": MAX_UPLOAD_BYTES,
+            "outputs": sorted(f for f in FORMATS if f != "pdf" or engraver),
         }
 
     # Deliberately a sync def, not async. Starlette runs sync endpoints in a

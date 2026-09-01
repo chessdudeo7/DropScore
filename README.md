@@ -80,8 +80,12 @@ dropscore export video.notes.json -f midi -f musicxml
 no editorial decisions. MusicXML is mechanically correct but musically
 approximate: one voice per staff, notes tied across barlines, no beaming or
 dynamics. Turning a note stream into *readable* notation is a partly aesthetic
-problem, and this does the mechanical part only. PDF hands the MusicXML to
-MuseScore, which must be installed separately.
+problem, and this does the mechanical part only.
+
+PDF hands the MusicXML to MuseScore, which must be installed separately. If it
+is not, the service stops offering PDF rather than failing jobs that ask for it
+— and since MusicXML opens in MuseScore anyway, exporting the PDF yourself from
+there costs one step and gives you the chance to fix the notation first.
 
 ```bash
 dropscore synth --theme all -o out/synth

@@ -99,6 +99,9 @@ class Job:
     finished: float | None = None
     result: dict[str, Any] | None = None
     files: dict[str, Path] = field(default_factory=dict)
+    # Formats that were asked for but could not be written, and why. Reported
+    # rather than raised, so the outputs that did work stay available.
+    failed_formats: dict[str, str] = field(default_factory=dict)
     _cancel: threading.Event = field(default_factory=threading.Event)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -185,6 +188,7 @@ class Job:
                 "elapsed": (self.finished or time.time()) - self.created,
                 "result": self.result,
                 "formats": sorted(self.files),
+                "failed_formats": dict(self.failed_formats),
             }
 
 
@@ -422,11 +426,28 @@ def transcribe_job(
             job.say(f"left unquantized: {exc}")
 
     sequence.source = f"dropscore:{job.label}"
+
+    # Each format is written independently. PDF needs MuseScore installed on the
+    # server, and letting one optional output take a completed transcription
+    # down with it — the notes are already correct by this point — would be an
+    # absurd trade.
     for format in formats:
-        job.files[format] = export_write(
-            sequence, output_path(job, extension(format)), format, analysis
+        try:
+            job.files[format] = export_write(
+                sequence, output_path(job, extension(format)), format, analysis
+            )
+        except Exception as exc:  # noqa: BLE001 - one format must not fail the job
+            job.failed_formats[format] = str(exc)
+            job.say(f"could not write {format}: {exc}")
+            log.warning("job %s: %s export failed: %s", job.id, format, exc)
+
+    if job.files:
+        job.say(f"wrote {', '.join(sorted(job.files))}")
+    else:
+        raise RuntimeError(
+            "every requested output failed to write: "
+            + "; ".join(f"{fmt}: {why}" for fmt, why in job.failed_formats.items())
         )
-    job.say(f"wrote {', '.join(sorted(job.files))}")
     job.finish("score")
 
     job.result = _summarize(sequence, analysis, calibration, speed)

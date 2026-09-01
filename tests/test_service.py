@@ -342,6 +342,70 @@ def test_settings_reach_the_pipeline(client: TestClient, clip: Path) -> None:
     assert client.get(f"/api/jobs/{job_id}/download/musicxml").status_code == 404
 
 
+def test_a_failed_output_does_not_fail_the_job(
+    client: TestClient, clip: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PDF needs an engraver the server may not have.
+
+    The notes are already correct by the time exports are written, so losing a
+    whole transcription to one optional output would be an absurd trade.
+    """
+    import json as _json  # noqa: PLC0415
+
+    from dropscore.export import pdf  # noqa: PLC0415
+
+    monkeypatch.setattr(pdf, "find_engraver", lambda: None)
+
+    with clip.open("rb") as handle:
+        job_id = client.post(
+            "/api/jobs/upload",
+            files={"file": (clip.name, handle, "video/mp4")},
+            data={"options": _json.dumps({"formats": ["midi", "pdf"]})},
+        ).json()["id"]
+
+    job = _wait(client, job_id)
+
+    assert job["status"] == "done", job.get("error")
+    assert set(job["formats"]) == {"json", "midi"}
+    assert "pdf" in job["failed_formats"]
+    assert "MuseScore" in job["failed_formats"]["pdf"]
+
+    # The outputs that did work are still there.
+    assert client.get(f"/api/jobs/{job_id}/download/midi").status_code == 200
+
+
+def test_health_hides_pdf_when_no_engraver_is_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dropscore.service import app as app_module  # noqa: PLC0415
+
+    monkeypatch.setattr(app_module, "find_engraver", lambda: None)
+    with TestClient(create_app(serve_frontend=False)) as served:
+        outputs = served.get("/api/health").json()["outputs"]
+
+    assert "pdf" not in outputs
+    assert {"json", "midi", "musicxml"} <= set(outputs)
+
+
+def test_health_offers_pdf_when_an_engraver_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dropscore.service import app as app_module  # noqa: PLC0415
+
+    monkeypatch.setattr(app_module, "find_engraver", lambda: "/usr/bin/mscore")
+    with TestClient(create_app(serve_frontend=False)) as served:
+        assert "pdf" in served.get("/api/health").json()["outputs"]
+
+
+def test_a_job_whose_every_output_fails_is_an_error(tmp_path: Path) -> None:
+    """Reporting success with nothing to download would be a lie."""
+    from dropscore.service.jobs import Job  # noqa: PLC0415
+
+    job = Job(id="x", label="x", workdir=tmp_path)
+    job.failed_formats["midi"] = "disk full"
+    assert not job.files
+
+
 def test_bad_options_are_a_400_not_a_500(client: TestClient, clip: Path) -> None:
     with clip.open("rb") as handle:
         response = client.post(

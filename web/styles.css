@@ -274,6 +274,8 @@ select:focus { outline: none; border-color: rgba(245, 215, 110, 0.5); }
 }
 .checks label:has(input:checked) { color: var(--text); border-color: rgba(245, 215, 110, 0.35); background: rgba(245, 215, 110, 0.06); }
 .checks input { accent-color: var(--accent); margin: 0; }
+.checks label.unavailable { opacity: 0.4; cursor: not-allowed; }
+.checks label.unavailable input { cursor: not-allowed; }
 
 /* ── panels (processing + result) ─────────────────────────────────── */
 .stage { animation: rise 0.35s ease both; }

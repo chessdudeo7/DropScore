@@ -101,6 +101,9 @@ async function detectApi() {
           if (Number.isFinite(limits.max_upload_bytes)) {
             maxBytes = limits.max_upload_bytes;
           }
+          if (Array.isArray(limits.outputs) && limits.outputs.length) {
+            availableOutputs = limits.outputs;
+          }
         }
       } catch {
         api.available = false;
@@ -136,6 +139,29 @@ function applyMode() {
   // ../docs/ sits outside the served root, so the relative path that works
   // from disk 404s behind the API.
   if (api.available) $('#docs-link').href = '/guide/PIPELINE.md';
+
+  applyOutputs();
+}
+
+/**
+ * Grey out formats this server cannot produce.
+ *
+ * PDF needs an engraver installed alongside the service. Offering the tick box
+ * regardless meant choosing it and finding out afterwards, which is a poor
+ * trade when the MusicXML opens in the very program that would have made it.
+ */
+function applyOutputs() {
+  for (const input of document.querySelectorAll('.checks input')) {
+    const format = input.dataset.fmt.toLowerCase();
+    const supported = !api.available || availableOutputs.includes(format);
+
+    input.disabled = !supported;
+    if (!supported) input.checked = false;
+    input.closest('label').classList.toggle('unavailable', !supported);
+    input.closest('label').title = supported
+      ? ''
+      : 'This server has no engraver installed. Export the MusicXML and open it in MuseScore.';
+  }
 }
 
 // ── state ────────────────────────────────────────────────────────────
@@ -245,6 +271,7 @@ document.querySelectorAll('.chip').forEach((chip) => {
  * what an upload will be allowed to be. */
 let maxBytes = 2 * 1024 * 1024 * 1024;
 let ALLOWED_EXT = ['mp4', 'webm', 'mov', 'mkv', 'm4v', 'avi'];
+let availableOutputs = ['json', 'midi', 'musicxml', 'pdf'];
 
 const EXT_NAMES = { mp4: 'MP4', webm: 'WebM', mov: 'MOV', mkv: 'MKV', m4v: 'M4V', avi: 'AVI' };
 
@@ -835,6 +862,10 @@ function finishRemote(job) {
       name: `${job.label}.${format === 'midi' ? 'mid' : format}`,
       href: `/api/jobs/${job.id}/download/${format}`,
     })),
+    // An output that could not be written no longer fails the job, so say what
+    // is missing rather than letting the user hunt for a download that is not
+    // there.
+    missing: job.failed_formats || {},
   });
 }
 
@@ -864,7 +895,7 @@ function finish(slug, notes) {
   });
 }
 
-function showResult({ notes, confidence, stats: rows, downloads }) {
+function showResult({ notes, confidence, stats: rows, downloads, missing = {} }) {
   show(resStage);
 
   $('#result-conf').textContent = `confidence ${(confidence ?? 0).toFixed(2)}`;
@@ -901,6 +932,15 @@ function showResult({ notes, confidence, stats: rows, downloads }) {
     }
     node.append(el('span', 'ext', item.label), el('span', null, item.name));
     dl.append(node);
+  }
+
+  const failures = Object.entries(missing);
+  const note = $('#missing-formats');
+  note.hidden = failures.length === 0;
+  if (failures.length) {
+    note.textContent = failures
+      .map(([format, why]) => `${format.toUpperCase()} was not written — ${why}`)
+      .join(' · ');
   }
 
   $('#disclaimer').hidden = api.available;
