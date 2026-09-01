@@ -436,9 +436,73 @@ def test_log_does_not_grow_without_bound(tmp_path: Path) -> None:
     assert len(job.log) <= 500
 
 
-def test_old_jobs_are_evicted(tmp_path: Path) -> None:
+def _finish(job) -> None:
+    """Mark a job terminal without running anything through the pool."""
+    job.status = Status.DONE
+
+
+def test_finished_jobs_are_evicted(tmp_path: Path) -> None:
     store = JobStore(tmp_path, retain=3)
-    jobs = [store.create(f"job{i}") for i in range(5)]
+    jobs = []
+    for i in range(5):
+        job = store.create(f"job{i}")
+        _finish(job)
+        jobs.append(job)
+
     assert store.get(jobs[0].id) is None
+    assert store.get(jobs[1].id) is None
     assert store.get(jobs[-1].id) is not None
     assert not jobs[0].workdir.exists()
+    assert jobs[-1].workdir.exists()
+
+
+def test_running_jobs_are_never_evicted(tmp_path: Path) -> None:
+    """Evicting one would delete its workdir mid-write and 404 a live id."""
+    store = JobStore(tmp_path, retain=2)
+    live = [store.create(f"live{i}") for i in range(4)]
+    for job in live:
+        job.status = Status.RUNNING
+
+    store.create("one-more")
+
+    for job in live:
+        assert store.get(job.id) is not None, "a running job was evicted"
+        assert job.workdir.exists()
+
+
+def test_eviction_takes_the_finished_job_and_leaves_the_running_one(tmp_path: Path) -> None:
+    store = JobStore(tmp_path, retain=2)
+    finished = store.create("finished")
+    _finish(finished)
+    running = store.create("running")
+    running.status = Status.RUNNING
+
+    store.create("newest")  # pushes the store over its limit
+
+    assert store.get(finished.id) is None, "the finished job should be reclaimed"
+    assert store.get(running.id) is not None, "the running job should survive"
+
+
+def test_store_may_exceed_retention_while_everything_is_live(tmp_path: Path) -> None:
+    store = JobStore(tmp_path, retain=1)
+    jobs = [store.create(f"j{i}") for i in range(4)]
+    for job in jobs:
+        job.status = Status.RUNNING
+
+    store.create("another")
+    assert all(store.get(job.id) is not None for job in jobs)
+
+
+def test_eviction_resumes_once_jobs_finish(tmp_path: Path) -> None:
+    store = JobStore(tmp_path, retain=1)
+    first = store.create("first")
+    first.status = Status.RUNNING
+    second = store.create("second")
+    second.status = Status.RUNNING
+
+    store.create("third")
+    assert store.get(first.id) is not None  # nothing eligible yet
+
+    _finish(first)
+    store.create("fourth")
+    assert store.get(first.id) is None, "the finished job should now be reclaimed"

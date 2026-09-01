@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -45,6 +46,10 @@ class Status(str, Enum):
     DONE = "done"
     ERROR = "error"
     CANCELLED = "cancelled"
+
+
+#: States a job never leaves. Only these are safe to evict.
+TERMINAL = frozenset({Status.DONE, Status.ERROR, Status.CANCELLED})
 
 
 class Cancelled(Exception):
@@ -137,6 +142,11 @@ class Job:
     def cancelled(self) -> bool:
         return self._cancel.is_set()
 
+    @property
+    def is_finished(self) -> bool:
+        """True once the job has reached a state it will not leave."""
+        return self.status in TERMINAL
+
     def check_cancelled(self) -> None:
         if self.cancelled:
             raise Cancelled()
@@ -203,14 +213,36 @@ class JobStore:
         return job
 
     def _evict(self) -> None:
-        """Drop the oldest finished jobs once past the retention limit."""
-        while len(self._order) > self.retain:
-            oldest = self._order.pop(0)
-            job = self._jobs.pop(oldest, None)
-            if job and job.workdir.exists():
-                import shutil  # noqa: PLC0415
+        """Drop the oldest *finished* jobs once past the retention limit.
 
-                shutil.rmtree(job.workdir, ignore_errors=True)
+        Only terminal jobs are eligible. Evicting by age alone would delete a
+        running job's working directory underneath its worker — mid-write, on
+        the outputs it is producing — and make its id 404 while the thread was
+        still going. When nothing is eligible the store is simply allowed over
+        the limit until something finishes; growing a little beats corrupting
+        work in progress.
+        """
+        surplus = len(self._order) - self.retain
+        if surplus <= 0:
+            return
+
+        keep: list[str] = []
+        for job_id in self._order:
+            job = self._jobs.get(job_id)
+            if surplus > 0 and (job is None or job.is_finished):
+                if job is not None:
+                    self._jobs.pop(job_id, None)
+                    shutil.rmtree(job.workdir, ignore_errors=True)
+                surplus -= 1
+                continue
+            keep.append(job_id)
+
+        self._order = keep
+        if surplus > 0:
+            log.warning(
+                "%d job(s) over the retention limit are still running; keeping them",
+                surplus,
+            )
 
     def get(self, job_id: str) -> Job | None:
         with self._lock:
