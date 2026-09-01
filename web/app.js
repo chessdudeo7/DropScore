@@ -460,8 +460,11 @@ async function startJob(src) {
   // slow. Deciding now would silently pick the simulation.
   await api.ready;
 
+  // A previous job may still be running; submitting again replaces it in the
+  // UI, so it has to be released rather than left holding a worker.
+  abandonJob();
+
   state.cancelled = false;
-  api.jobId = null;
   $('#console').innerHTML = '';
   $('#progress-bar').style.width = '0%';
   $('#elapsed').textContent = '00:00';
@@ -572,19 +575,46 @@ function pollJob() {
     }
     $('#progress-bar').style.width = `${job.progress * 100}%`;
 
+    // A job that reached a terminal state needs no cancelling, so drop the
+    // handle before finishing — otherwise the next submission would send a
+    // pointless DELETE for a job the server has already finished with.
     if (job.status === 'done') {
       clearInterval(api.poll);
       clearInterval(state.timer);
+      api.jobId = null;
       finishRemote(job);
     } else if (job.status === 'error' || job.status === 'cancelled') {
       clearInterval(api.poll);
+      api.jobId = null;
       failJob(job.error || 'Transcription was cancelled');
     }
   }, 700);
 }
 
+/**
+ * Stop following the current job, and tell the server to stop working on it.
+ *
+ * Whenever the UI walks away from a job — cancelled, superseded by a new
+ * submission, or polling broke — the worker is still running it. Dropping the
+ * interval only stops the watching; without the DELETE the job runs to
+ * completion holding one of two pool slots, so a couple of abandoned long
+ * videos starve the service.
+ *
+ * Fire and forget: the UI has already moved on, and a cancel that fails leaves
+ * the job running exactly as it would have anyway.
+ */
+function abandonJob() {
+  clearInterval(api.poll);
+  api.poll = null;
+  if (api.jobId) {
+    fetch(`/api/jobs/${api.jobId}`, { method: 'DELETE' }).catch(() => {});
+    api.jobId = null;
+  }
+}
+
 function failJob(message) {
   clearInterval(state.timer);
+  abandonJob();
   log(`error: ${message}`);
   const hintEl = state.tab === 'link' ? setHint : setFileHint;
   hintEl(message, true);
@@ -594,10 +624,7 @@ function failJob(message) {
 $('#cancel-btn').addEventListener('click', () => {
   state.cancelled = true;
   clearInterval(state.timer);
-  clearInterval(api.poll);
-  if (api.jobId) {
-    fetch(`/api/jobs/${api.jobId}`, { method: 'DELETE' }).catch(() => {});
-  }
+  abandonJob();
   show(inputStage);
 });
 
