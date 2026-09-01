@@ -56,8 +56,9 @@ def create_app(
     workdir: str | Path = "out/jobs",
     config: Config = DEFAULT,
     serve_frontend: bool = True,
+    keep_sources: bool = False,
 ) -> "FastAPI":
-    store = JobStore(Path(workdir))
+    store = JobStore(Path(workdir), keep_sources=keep_sources)
     app = FastAPI(title="DropScore", version="0.1.0")
 
     @app.get("/api/health")

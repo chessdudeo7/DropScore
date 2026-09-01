@@ -79,6 +79,7 @@ class Job:
     id: str
     label: str
     workdir: Path
+    source_path: Path | None = None  # the input video, deleted once it is read
     status: Status = Status.QUEUED
     stage_states: dict[str, str] = field(default_factory=dict)
     log: list[str] = field(default_factory=list)
@@ -112,6 +113,22 @@ class Job:
             if len(self.log) > 500:
                 del self.log[:100]
         log.debug("[%s] %s", self.id[:8], message)
+
+    def discard_source(self) -> None:
+        """Delete the input video, keeping the much smaller outputs.
+
+        A source is up to 2 GB and is of no further use once the pipeline has
+        read it, so holding it until retention eviction — fifty jobs later —
+        risks tens of gigabytes. Outputs are kilobytes and stay.
+        """
+        if self.source_path is None:
+            return
+        try:
+            self.source_path.unlink(missing_ok=True)
+        except OSError as exc:  # pragma: no cover - platform-specific locking
+            log.warning("could not delete %s: %s", self.source_path, exc)
+        else:
+            self.source_path = None
 
     def cancel(self) -> None:
         self._cancel.set()
@@ -153,10 +170,20 @@ class Job:
 class JobStore:
     """Holds jobs and runs them. Thread-safe."""
 
-    def __init__(self, root: Path, workers: int = 2, retain: int = 50) -> None:
+    def __init__(
+        self,
+        root: Path,
+        workers: int = 2,
+        retain: int = 50,
+        keep_sources: bool = False,
+    ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.retain = retain
+        # Sources are deleted whatever the outcome, not just on success: a
+        # service must not depend on failures being rare to stay within its
+        # disk budget. Set this to keep them for debugging a bad video.
+        self.keep_sources = keep_sources
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._lock = threading.Lock()
@@ -207,6 +234,10 @@ class JobStore:
             log.exception("job %s failed", job.id)
         finally:
             job.finished = time.time()
+            # In the finally block so a failed or cancelled job releases its
+            # video too — the outcome does not change that it is dead weight.
+            if not self.keep_sources:
+                job.discard_source()
 
     def shutdown(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -239,6 +270,10 @@ def transcribe_job(job: Job, video: Path, config: Config = DEFAULT) -> None:
     from ..tiles import discover_palette  # noqa: PLC0415
     from ..tracking import estimate_speed, transcribe  # noqa: PLC0415
     from ..video import VideoReader  # noqa: PLC0415
+
+    # Recorded so the store can delete it once the job settles, whatever the
+    # outcome. The reader is closed before then, which matters on Windows.
+    job.source_path = Path(video)
 
     job.begin("fetch")
     with VideoReader(video, config) as reader:

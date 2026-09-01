@@ -141,6 +141,86 @@ def test_cancel_marks_the_job(client: TestClient) -> None:
     assert job.cancelled
 
 
+# ── the source video is not kept ─────────────────────────────────────
+
+
+def test_source_video_is_deleted_but_outputs_survive(client: TestClient, clip: Path) -> None:
+    with clip.open("rb") as handle:
+        job_id = client.post(
+            "/api/jobs/upload", files={"file": (clip.name, handle, "video/mp4")}
+        ).json()["id"]
+
+    job = _wait(client, job_id)
+    assert job["status"] == "done", job.get("error")
+
+    stored = client.app.state.store.get(job_id)
+    assert not list(stored.workdir.glob("source.*")), "the uploaded video was kept"
+    assert stored.workdir.exists()
+    for path in stored.files.values():
+        assert path.exists()
+
+    # And the outputs are still downloadable afterwards.
+    assert client.get(f"/api/jobs/{job_id}/download/midi").status_code == 200
+
+
+def test_source_is_deleted_even_when_the_job_fails(tmp_path: Path) -> None:
+    """A failure does not make a 2 GB upload any less dead weight."""
+    store = JobStore(tmp_path)
+    job = store.create("x")
+    source = job.workdir / "source.mp4"
+    source.write_bytes(b"not a video")
+
+    def work(current) -> None:
+        current.source_path = source
+        raise RuntimeError("boom")
+
+    store.submit(job, work)
+    for _ in range(100):
+        if job.status is Status.ERROR:
+            break
+        time.sleep(0.05)
+
+    assert job.status is Status.ERROR
+    assert not source.exists()
+
+
+def test_keep_sources_retains_the_upload(tmp_path: Path) -> None:
+    store = JobStore(tmp_path, keep_sources=True)
+    job = store.create("x")
+    source = job.workdir / "source.mp4"
+    source.write_bytes(b"not a video")
+
+    def work(current) -> None:
+        current.source_path = source
+
+    store.submit(job, work)
+    for _ in range(100):
+        if job.status is Status.DONE:
+            break
+        time.sleep(0.05)
+
+    assert source.exists()
+
+
+def test_discard_source_is_safe_to_repeat(tmp_path: Path) -> None:
+    job = JobStore(tmp_path).create("x")
+    source = job.workdir / "source.mp4"
+    source.write_bytes(b"x")
+    job.source_path = source
+
+    job.discard_source()
+    job.discard_source()  # already gone, and source_path is now None
+    assert not source.exists()
+    assert job.source_path is None
+
+
+def test_discard_source_tolerates_a_missing_file(tmp_path: Path) -> None:
+    job = JobStore(tmp_path).create("x")
+    job.source_path = job.workdir / "never-written.mp4"
+    job.discard_source()
+    assert job.source_path is None
+
+
 # ── label sanitising ─────────────────────────────────────────────────
 
 

@@ -127,6 +127,11 @@ Serves the API and the frontend from one origin at `http://127.0.0.1:8000`. Uplo
 a video, watch the real pipeline run stage by stage, and download the MIDI,
 MusicXML and note JSON it produces.
 
+The uploaded video is **deleted as soon as the job settles**, whatever the
+outcome — a source is up to 2 GB and useless once read, while the outputs are
+kilobytes and are kept until retention evicts the job. Pass `--keep-sources` to
+hold onto them while debugging a clip that transcribes badly.
+
 Jobs run in a thread pool in-process, and the frontend polls — no Redis, no
 separate worker, no websockets. Transcription takes seconds, so polling is
 sufficient, and shipping infrastructure before there is evidence it is needed

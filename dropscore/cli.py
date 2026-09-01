@@ -223,7 +223,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
         log.error('%s (install with: pip install -e ".[service]")', exc)
         return 1
 
-    app = create_app(workdir=args.workdir, config=_config_from_args(args))
+    app = create_app(
+        workdir=args.workdir,
+        config=_config_from_args(args),
+        keep_sources=args.keep_sources,
+    )
     print(f"DropScore on http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
@@ -542,6 +546,11 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--workdir", default="out/jobs", help="where job output is kept")
+    serve.add_argument(
+        "--keep-sources",
+        action="store_true",
+        help="keep uploaded videos after transcribing, for debugging a bad clip",
+    )
     serve.set_defaults(func=cmd_serve)
 
     evaluate = sub.add_parser(
