@@ -97,10 +97,12 @@
             <path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" />
           </svg>
           <span class="dz-title">Drop a video here, or <u>browse</u></span>
-          <span class="dz-sub">MP4, WebM, MOV or MKV · up to 2 GB · never leaves your machine</span>
+          <!-- Where the file goes depends on whether a server is connected, so
+               the claim is filled in by detectApi() rather than asserted here. -->
+          <span class="dz-sub" id="dz-sub">MP4, WebM, MOV or MKV · up to 2 GB</span>
         </label>
 
-        <p class="hint" id="file-hint">The file is read locally — nothing is uploaded in this prototype.</p>
+        <p class="hint" id="file-hint">Checking for a transcription server…</p>
 
         <div class="preview" id="file-preview" hidden>
           <div class="preview-thumb">

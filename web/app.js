@@ -96,6 +96,13 @@ async function detectApi() {
   pill.textContent = api.available ? 'connected' : 'demo mode · simulated results';
   pill.classList.toggle('pill-ok', api.available);
   pill.classList.toggle('pill-warn', !api.available);
+
+  // Only now is it known where an uploaded file would actually go, so this is
+  // the first point at which either claim can honestly be made. Any error
+  // already on screen is left alone rather than overwritten with boilerplate.
+  $('#dz-sub').textContent = fileCopy().sub;
+  if (!fileHint.classList.contains('error')) setFileHint(defaultFileHint());
+
   return api.available;
 }
 
@@ -201,7 +208,23 @@ document.querySelectorAll('.chip').forEach((chip) => {
 // ── file input ───────────────────────────────────────────────────────
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 const ALLOWED_EXT = ['mp4', 'webm', 'mov', 'mkv', 'm4v'];
-const DEFAULT_FILE_HINT = 'The file is read locally — nothing is uploaded in this prototype.';
+
+/* Where the file actually goes differs between the two modes, and telling
+ * someone their video stays local while uploading it would be a lie worth
+ * avoiding. Both strings are stated positively so neither mode is ambiguous. */
+const FILE_COPY = {
+  demo: {
+    sub: 'MP4, WebM, MOV or MKV · up to 2 GB · stays on your machine',
+    hint: 'Demo mode: the file is read in your browser and never uploaded.',
+  },
+  server: {
+    sub: 'MP4, WebM, MOV or MKV · up to 2 GB · uploaded to the server running this page',
+    hint: 'Uploaded to the server running this page, then deleted once transcribed.',
+  },
+};
+
+const fileCopy = () => (api.available ? FILE_COPY.server : FILE_COPY.demo);
+const defaultFileHint = () => fileCopy().hint;
 
 const dropzone = $('#dropzone');
 const fileInput = $('#file-input');
@@ -217,7 +240,7 @@ function clearFile() {
   state.file = null;
   fileInput.value = '';
   $('#file-preview').hidden = true;
-  setFileHint(DEFAULT_FILE_HINT);
+  setFileHint(defaultFileHint());
   syncSubmit();
 }
 
@@ -293,7 +316,7 @@ async function acceptFile(file) {
     $('#file-meta').textContent =
       `${meta.width}×${meta.height} · ${fmtClock(meta.duration)} · ${fmtBytes(file.size)}`;
     $('#file-preview').hidden = false;
-    setFileHint(DEFAULT_FILE_HINT);
+    setFileHint(defaultFileHint());
   } catch (err) {
     state.file = null;
     $('#file-preview').hidden = true;
