@@ -109,6 +109,76 @@ def test_rejects_a_non_youtube_url(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+# ── startup and shutdown ─────────────────────────────────────────────
+
+
+def test_uses_a_lifespan_not_the_deprecated_event_hooks() -> None:
+    """on_event is deprecated at the pinned FastAPI version.
+
+    Registering one populates router.on_shutdown, so an empty list is a precise
+    check that the modern mechanism is in use.
+    """
+    app = create_app(serve_frontend=False)
+    assert not app.router.on_startup
+    assert not app.router.on_shutdown
+
+
+def test_creating_the_app_emits_no_deprecation_warnings() -> None:
+    import warnings  # noqa: PLC0415
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        create_app(serve_frontend=False)
+
+    ours = [w for w in caught if "dropscore" in str(w.filename).replace("\\", "/")]
+    assert ours == [], [str(w.message) for w in ours]
+
+
+def test_shutdown_closes_the_pool(tmp_path: Path) -> None:
+    with TestClient(create_app(workdir=tmp_path / "jobs", serve_frontend=False)) as client:
+        store = client.app.state.store
+        assert not store._pool._shutdown
+
+    assert store._pool._shutdown, "the lifespan did not run on exit"
+
+
+def test_shutdown_cancels_running_jobs(tmp_path: Path) -> None:
+    """Pool threads are not daemons, so a running job would delay process exit."""
+    store = JobStore(tmp_path, workers=1)
+    job = store.create("slow")
+    started = threading.Event()
+    stopped = threading.Event()
+
+    def long_pass(current) -> None:
+        def frames():
+            started.set()
+            while True:
+                yield 1
+                time.sleep(0.001)
+
+        try:
+            for _ in until_cancelled(frames(), current, report_every=0):
+                pass
+        finally:
+            stopped.set()
+
+    store.submit(job, long_pass)
+    assert started.wait(5)
+
+    store.shutdown()
+    assert stopped.wait(5), "the running job kept going after shutdown"
+    assert job.cancelled
+
+
+def test_shutdown_leaves_finished_jobs_alone(tmp_path: Path) -> None:
+    store = JobStore(tmp_path)
+    done = store.create("done")
+    done.status = Status.DONE
+
+    store.shutdown()
+    assert not done.cancelled
+
+
 # ── the frontend and the docs it links to ────────────────────────────
 
 

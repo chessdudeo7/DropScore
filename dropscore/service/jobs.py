@@ -300,6 +300,23 @@ class JobStore:
                 job.discard_source()
 
     def shutdown(self) -> None:
+        """Stop taking work, and ask anything running to stop.
+
+        ``cancel_futures`` only drops jobs still queued; one already running
+        carries on. That matters because ThreadPoolExecutor's threads are not
+        daemons, so the interpreter waits for them at exit — without cancelling,
+        Ctrl+C on the server would appear to hang until the current
+        transcription finished, which for a long video is minutes. Workers check
+        between frames, so they stop promptly.
+        """
+        with self._lock:
+            live = [job for job in self._jobs.values() if not job.is_finished]
+
+        for job in live:
+            job.cancel()
+        if live:
+            log.info("shutdown: cancelled %d running job(s)", len(live))
+
         self._pool.shutdown(wait=False, cancel_futures=True)
 
 

@@ -12,6 +12,7 @@ this module without it raises with an instruction rather than a traceback.
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -79,7 +80,13 @@ def create_app(
     keep_sources: bool = False,
 ) -> "FastAPI":
     store = JobStore(Path(workdir), keep_sources=keep_sources)
-    app = FastAPI(title="DropScore", version="0.1.0")
+
+    @asynccontextmanager
+    async def lifespan(_app: "FastAPI"):
+        yield
+        store.shutdown()
+
+    app = FastAPI(title="DropScore", version="0.1.0", lifespan=lifespan)
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
@@ -205,10 +212,6 @@ def create_app(
             media_type=CONTENT_TYPES.get(format, "application/octet-stream"),
             filename=path.name,
         )
-
-    @app.on_event("shutdown")
-    def stop() -> None:
-        store.shutdown()
 
     if serve_frontend and DOCS_ROOT.is_dir():
         # Mounted before the catch-all below, which would otherwise swallow it.
