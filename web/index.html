@@ -93,15 +93,16 @@
       <!-- file pane -->
       <div class="pane" id="pane-file" role="tabpanel" aria-labelledby="tab-file" hidden>
         <label class="dropzone" id="dropzone" for="file-input">
-          <input id="file-input" type="file" accept="video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.webm,.mov,.mkv,.m4v" />
+          <input id="file-input" type="file" accept="video/*" />
           <svg class="dz-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 16V4" /><path d="M7 9l5-5 5 5" />
             <path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" />
           </svg>
           <span class="dz-title">Drop a video here, or <u>browse</u></span>
-          <!-- Where the file goes depends on whether a server is connected, so
-               the claim is filled in by detectApi() rather than asserted here. -->
-          <span class="dz-sub" id="dz-sub">MP4, WebM, MOV or MKV · up to 2 GB</span>
+          <!-- Formats, size limit and where the file goes all depend on which
+               server answered, so detectApi() fills this in rather than the
+               markup asserting a list that would drift. -->
+          <span class="dz-sub" id="dz-sub">Checking what this build accepts…</span>
         </label>
 
         <p class="hint" id="file-hint">Checking for a transcription server…</p>

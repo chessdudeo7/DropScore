@@ -83,7 +83,15 @@ def create_app(
 
     @app.get("/api/health")
     def health() -> dict[str, Any]:
-        return {"ok": True, "version": "0.1.0"}
+        # The limits are reported, not just enforced, so the UI can describe
+        # and police exactly what this server accepts instead of keeping its
+        # own copy that quietly drifts out of step.
+        return {
+            "ok": True,
+            "version": "0.1.0",
+            "accepted": sorted(s.lstrip(".") for s in ALLOWED_SUFFIXES),
+            "max_upload_bytes": MAX_UPLOAD_BYTES,
+        }
 
     # Deliberately a sync def, not async. Starlette runs sync endpoints in a
     # threadpool, whereas an async one doing blocking file writes stalls the

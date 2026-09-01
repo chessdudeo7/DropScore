@@ -6,6 +6,7 @@ suite still runs on a bare install.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -60,6 +61,36 @@ def _wait(client: TestClient, job_id: str, timeout: float = 120.0) -> dict:
 
 def test_health(client: TestClient) -> None:
     assert client.get("/api/health").json()["ok"] is True
+
+
+def test_health_reports_the_limits_the_ui_needs() -> None:
+    from dropscore.service.app import ALLOWED_SUFFIXES, MAX_UPLOAD_BYTES  # noqa: PLC0415
+
+    with TestClient(create_app(serve_frontend=False)) as served:
+        body = served.get("/api/health").json()
+
+    assert body["max_upload_bytes"] == MAX_UPLOAD_BYTES
+    assert set(body["accepted"]) == {s.lstrip(".") for s in ALLOWED_SUFFIXES}
+    assert all(not ext.startswith(".") for ext in body["accepted"])
+
+
+def test_frontend_fallback_formats_match_the_server() -> None:
+    """Demo mode has no server to ask, so its built-in list must not drift.
+
+    Before this, the markup offered four extensions, the script validated five
+    and the server accepted six — so a .avi was rejected by the page the server
+    would happily have taken.
+    """
+    from dropscore.service.app import ALLOWED_SUFFIXES  # noqa: PLC0415
+
+    app_js = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    listed = re.search(r"ALLOWED_EXT = \[(.*?)\]", app_js, re.S)
+    assert listed, "could not find the fallback extension list in app.js"
+
+    fallback = set(re.findall(r"'([a-z0-9]+)'", listed.group(1)))
+    assert fallback == {s.lstrip(".") for s in ALLOWED_SUFFIXES}
 
 
 def test_unknown_job_is_404(client: TestClient) -> None:

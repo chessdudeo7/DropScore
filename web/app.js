@@ -92,6 +92,16 @@ async function detectApi() {
       try {
         const response = await fetch('/api/health', { cache: 'no-store' });
         api.available = response.ok;
+        if (response.ok) {
+          // The server is the authority on what it will accept.
+          const limits = await response.json().catch(() => ({}));
+          if (Array.isArray(limits.accepted) && limits.accepted.length) {
+            ALLOWED_EXT = limits.accepted;
+          }
+          if (Number.isFinite(limits.max_upload_bytes)) {
+            maxBytes = limits.max_upload_bytes;
+          }
+        }
       } catch {
         api.available = false;
       }
@@ -118,6 +128,10 @@ function applyMode() {
   // already on screen is left alone rather than overwritten with boilerplate.
   $('#dz-sub').textContent = fileCopy().sub;
   if (!fileHint.classList.contains('error')) setFileHint(defaultFileHint());
+
+  // Keep the picker's filter in step with what will actually be accepted,
+  // rather than leaving a list in the markup to drift.
+  fileInput.accept = ALLOWED_EXT.map((ext) => `.${ext}`).join(',');
 
   // ../docs/ sits outside the served root, so the relative path that works
   // from disk 404s behind the API.
@@ -226,24 +240,43 @@ document.querySelectorAll('.chip').forEach((chip) => {
 });
 
 // ── file input ───────────────────────────────────────────────────────
-const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
-const ALLOWED_EXT = ['mp4', 'webm', 'mov', 'mkv', 'm4v'];
+/* What this build accepts. These are only the defaults for demo mode: when a
+ * server answers, its own limits replace them, so the two cannot disagree about
+ * what an upload will be allowed to be. */
+let maxBytes = 2 * 1024 * 1024 * 1024;
+let ALLOWED_EXT = ['mp4', 'webm', 'mov', 'mkv', 'm4v', 'avi'];
+
+const EXT_NAMES = { mp4: 'MP4', webm: 'WebM', mov: 'MOV', mkv: 'MKV', m4v: 'M4V', avi: 'AVI' };
+
+const formatList = () => {
+  const names = ALLOWED_EXT.map((ext) => EXT_NAMES[ext] || ext.toUpperCase());
+  return names.length > 1
+    ? `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
+    : names.join('');
+};
+
+// fmtBytes, not a hardcoded GB: a server configured with a 500 MB cap would
+// otherwise be described as accepting "0 GB".
+const sizeLimit = () => fmtBytes(maxBytes);
 
 /* Where the file actually goes differs between the two modes, and telling
  * someone their video stays local while uploading it would be a lie worth
  * avoiding. Both strings are stated positively so neither mode is ambiguous. */
 const FILE_COPY = {
   demo: {
-    sub: 'MP4, WebM, MOV or MKV · up to 2 GB · stays on your machine',
+    where: 'stays on your machine',
     hint: 'Demo mode: the file is read in your browser and never uploaded.',
   },
   server: {
-    sub: 'MP4, WebM, MOV or MKV · up to 2 GB · uploaded to the server running this page',
+    where: 'uploaded to the server running this page',
     hint: 'Uploaded to the server running this page, then deleted once transcribed.',
   },
 };
 
-const fileCopy = () => (api.available ? FILE_COPY.server : FILE_COPY.demo);
+const fileCopy = () => {
+  const copy = api.available ? FILE_COPY.server : FILE_COPY.demo;
+  return { ...copy, sub: `${formatList()} · up to ${sizeLimit()} · ${copy.where}` };
+};
 const defaultFileHint = () => fileCopy().hint;
 
 const dropzone = $('#dropzone');
@@ -316,12 +349,15 @@ async function acceptFile(file) {
   if (!file) return;
   const ext = (file.name.split('.').pop() || '').toLowerCase();
 
-  if (!ALLOWED_EXT.includes(ext) && !file.type.startsWith('video/')) {
+  // Extension only. Accepting anything with a video/* MIME type was more
+  // forgiving but let through formats the server rejects with a 415 — after
+  // the whole file had been uploaded.
+  if (!ALLOWED_EXT.includes(ext)) {
     setFileHint(`${file.name} is not a video file DropScore can read.`, true);
     return;
   }
-  if (file.size > MAX_BYTES) {
-    setFileHint(`That file is ${fmtBytes(file.size)} — the limit is ${fmtBytes(MAX_BYTES)}.`, true);
+  if (file.size > maxBytes) {
+    setFileHint(`That file is ${fmtBytes(file.size)} — the limit is ${fmtBytes(maxBytes)}.`, true);
     return;
   }
 
