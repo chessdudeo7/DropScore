@@ -4,7 +4,15 @@ FastAPI and uvicorn are optional, so importing ``create_app`` fails with an
 instruction rather than a traceback when the extra is not installed.
 """
 
-from .jobs import STAGES, Job, JobStore, Status, safe_label, transcribe_job
+from .jobs import (
+    STAGES,
+    Job,
+    JobStore,
+    Status,
+    safe_label,
+    transcribe_job,
+    until_cancelled,
+)
 
 __all__ = [
     "STAGES",
@@ -12,6 +20,7 @@ __all__ = [
     "JobStore",
     "Status",
     "safe_label",
+    "until_cancelled",
     "transcribe_job",
     "create_app",
 ]

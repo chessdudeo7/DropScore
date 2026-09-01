@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable, Iterator
 
 from ..config import Config, DEFAULT
 from ..notes import NoteSequence
@@ -243,6 +243,26 @@ class JobStore:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
 
+def until_cancelled(frames: Iterable[Any], job: Job, report_every: int = 200) -> Iterator[Any]:
+    """Pass frames through, checking for cancellation between each one.
+
+    The main tracking pass consumes every frame of the video and is by far the
+    longest thing a job does. Checking only at stage boundaries meant Cancel
+    could not interrupt it: the UI returned to the input screen while the worker
+    ran to completion, still holding one of two pool slots, so two cancelled
+    long videos starved the service.
+
+    Wrapping the frame stream rather than adding a callback to ``tracking``
+    keeps cancellation entirely inside the service layer — the pipeline consumes
+    its input lazily, so raising here unwinds the whole pass.
+    """
+    for index, frame in enumerate(frames, start=1):
+        job.check_cancelled()
+        if report_every and index % report_every == 0:
+            job.say(f"tracked {index} frames")
+        yield frame
+
+
 def output_path(job: Job, suffix: str) -> Path:
     """An output path inside the job's directory, verified to stay there.
 
@@ -262,7 +282,8 @@ def transcribe_job(job: Job, video: Path, config: Config = DEFAULT) -> None:
 
     This mirrors ``evaluate.run_clip`` rather than sharing it, because the two
     want different things: the harness wants a score and no chatter, the service
-    wants running commentary and the ability to stop between stages.
+    wants running commentary and the ability to be stopped part-way — including
+    inside the long tracking pass, which is most of the runtime.
     """
     from ..calibrate import calibrate  # noqa: PLC0415
     from ..export import extension, write as export_write  # noqa: PLC0415
@@ -303,8 +324,9 @@ def transcribe_job(job: Job, video: Path, config: Config = DEFAULT) -> None:
         job.finish("timing")
 
         job.begin("notes")
-        job.check_cancelled()
-        sequence = transcribe(reader.frames(), calibration, palette, speed, config)
+        sequence = transcribe(
+            until_cancelled(reader.frames(), job), calibration, palette, speed, config
+        )
         job.say(f"{len(sequence)} note events")
         job.finish("notes")
 

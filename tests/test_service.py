@@ -6,6 +6,7 @@ suite still runs on a bare install.
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 
@@ -18,7 +19,13 @@ pytest.importorskip("httpx", reason="needs the [dev] extra")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from dropscore.service import STAGES, JobStore, Status, safe_label  # noqa: E402
+from dropscore.service import (  # noqa: E402
+    STAGES,
+    JobStore,
+    Status,
+    safe_label,
+    until_cancelled,
+)
 from dropscore.service.app import create_app  # noqa: E402
 from dropscore.service.jobs import output_path  # noqa: E402
 
@@ -139,6 +146,88 @@ def test_cancel_marks_the_job(client: TestClient) -> None:
     response = client.delete(f"/api/jobs/{job.id}")
     assert response.status_code == 200
     assert job.cancelled
+
+
+# ── cancellation actually stops work ─────────────────────────────────
+
+
+def test_until_cancelled_passes_frames_through(tmp_path: Path) -> None:
+    job = JobStore(tmp_path).create("x")
+    assert list(until_cancelled(range(5), job, report_every=0)) == [0, 1, 2, 3, 4]
+
+
+def test_until_cancelled_stops_mid_stream(tmp_path: Path) -> None:
+    """The point of the fix: a long pass must not run to completion."""
+    from dropscore.service.jobs import Cancelled  # noqa: PLC0415
+
+    job = JobStore(tmp_path).create("x")
+    consumed = []
+
+    with pytest.raises(Cancelled):
+        for value in until_cancelled(range(10_000), job, report_every=0):
+            consumed.append(value)
+            if len(consumed) == 3:
+                job.cancel()
+
+    assert len(consumed) == 3, "iteration continued past the cancel"
+
+
+def test_until_cancelled_is_lazy(tmp_path: Path) -> None:
+    """It must not drain the source before yielding, or a 2 GB video buffers."""
+    job = JobStore(tmp_path).create("x")
+    pulled = 0
+
+    def source():
+        nonlocal pulled
+        for i in range(1000):
+            pulled += 1
+            yield i
+
+    stream = until_cancelled(source(), job, report_every=0)
+    next(stream)
+    assert pulled == 1
+
+
+def test_until_cancelled_reports_progress(tmp_path: Path) -> None:
+    job = JobStore(tmp_path).create("x")
+    list(until_cancelled(range(25), job, report_every=10))
+    assert [line for line in job.log if "tracked" in line] == [
+        "tracked 10 frames",
+        "tracked 20 frames",
+    ]
+
+
+def test_cancelling_a_long_pass_releases_the_worker(tmp_path: Path) -> None:
+    """A cancelled job must free its pool slot promptly, not at completion."""
+    store = JobStore(tmp_path, workers=1)
+    slow = store.create("slow")
+    started = threading.Event()
+
+    def long_pass(current) -> None:
+        def frames():
+            started.set()
+            while True:
+                yield 1
+                time.sleep(0.001)
+
+        for _ in until_cancelled(frames(), current, report_every=0):
+            pass
+
+    store.submit(slow, long_pass)
+    assert started.wait(5), "the slow job never started"
+
+    slow.cancel()
+    for _ in range(200):
+        if slow.status is Status.CANCELLED:
+            break
+        time.sleep(0.02)
+    assert slow.status is Status.CANCELLED
+
+    # With the single worker released, a following job can run.
+    after = store.create("after")
+    ran = threading.Event()
+    store.submit(after, lambda _job: ran.set())
+    assert ran.wait(5), "the worker was still held by the cancelled job"
 
 
 # ── the source video is not kept ─────────────────────────────────────
