@@ -248,6 +248,23 @@ class JobStore:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._jobs)
+
+    def discard(self, job: Job) -> None:
+        """Forget a job that never ran, and delete anything it wrote.
+
+        Used when submission fails after the job was registered — otherwise it
+        would sit in the store as QUEUED forever, counting against retention
+        while never doing anything.
+        """
+        with self._lock:
+            self._jobs.pop(job.id, None)
+            if job.id in self._order:
+                self._order.remove(job.id)
+        shutil.rmtree(job.workdir, ignore_errors=True)
+
     def submit(self, job: Job, work: Callable[[Job], None]) -> None:
         self._pool.submit(self._run, job, work)
 

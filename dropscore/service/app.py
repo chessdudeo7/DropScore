@@ -12,7 +12,6 @@ this module without it raises with an instruction rather than a traceback.
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +22,7 @@ from .jobs import JobStore, Status, transcribe_job
 log = logging.getLogger(__name__)
 
 try:
-    from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+    from fastapi import FastAPI, File, HTTPException, Request, UploadFile
     from fastapi.responses import FileResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
@@ -35,10 +34,15 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
 
 WEB_ROOT = Path(__file__).resolve().parents[2] / "web"
 
-# Uploads are read in chunks and refused past this, so a huge file cannot fill
-# the disk before anyone notices.
+# Checked twice: against the declared Content-Length before any work is done,
+# and again while copying, for requests that arrive chunked or misdeclare it.
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 ALLOWED_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi"}
+
+
+def _too_large() -> str:
+    return f"That file is larger than {MAX_UPLOAD_BYTES / 1024 ** 3:.0f} GB"
+
 
 CONTENT_TYPES = {
     "json": "application/json",
@@ -65,27 +69,45 @@ def create_app(
     def health() -> dict[str, Any]:
         return {"ok": True, "version": "0.1.0"}
 
+    # Deliberately a sync def, not async. Starlette runs sync endpoints in a
+    # threadpool, whereas an async one doing blocking file writes stalls the
+    # event loop for the whole upload — freezing every other request, including
+    # the polling that drives other users' progress bars.
     @app.post("/api/jobs/upload")
-    async def submit_upload(file: UploadFile = File(...)) -> dict[str, Any]:
+    def submit_upload(request: Request, file: UploadFile = File(...)) -> dict[str, Any]:
         suffix = Path(file.filename or "").suffix.lower()
         if suffix not in ALLOWED_SUFFIXES:
             raise HTTPException(
                 415, f"{suffix or 'that file'} is not a video DropScore can read"
             )
 
+        # Starlette has already buffered the body before this runs, so checking
+        # the declared length is the only cap that prevents the resources being
+        # spent in the first place. The copy is still checked below for requests
+        # that arrive chunked or lie about their size.
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, _too_large())
+
         # The filename is client-supplied; JobStore.create sanitises it.
         job = store.create(file.filename or "video")
         target = job.workdir / f"source{suffix}"
 
         written = 0
+        oversize = False
         with target.open("wb") as out:
-            while chunk := await file.read(1 << 20):
+            while chunk := file.file.read(1 << 20):
                 written += len(chunk)
                 if written > MAX_UPLOAD_BYTES:
-                    out.close()
-                    shutil.rmtree(job.workdir, ignore_errors=True)
-                    raise HTTPException(413, "That file is larger than 2 GB")
+                    oversize = True
+                    break
                 out.write(chunk)
+
+        if oversize:
+            # Outside the `with`, so the handle is closed before the directory
+            # goes — Windows will not unlink a file that is still open.
+            store.discard(job)
+            raise HTTPException(413, _too_large())
 
         job.say(f"received {job.label}{suffix} ({written / 1e6:.1f} MB)")
         store.submit(job, lambda j: transcribe_job(j, target, config))

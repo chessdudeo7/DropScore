@@ -78,6 +78,82 @@ def test_rejects_a_non_youtube_url(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+# ── the upload handler must not block the event loop ─────────────────
+
+
+def test_upload_endpoint_is_not_a_coroutine() -> None:
+    """A regression guard with teeth.
+
+    Making this async again would compile and pass every other test while
+    silently stalling the event loop — and therefore everyone's progress
+    polling — for the duration of each upload. Starlette only moves the handler
+    to a threadpool when it is a plain def.
+    """
+    import inspect  # noqa: PLC0415
+
+    app = create_app(serve_frontend=False)
+    route = next(r for r in app.routes if getattr(r, "path", "") == "/api/jobs/upload")
+    assert not inspect.iscoroutinefunction(route.endpoint)
+
+
+def test_oversize_upload_is_refused_and_leaves_no_job(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dropscore.service import app as app_module  # noqa: PLC0415
+
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 1024)
+    store = client.app.state.store
+    before = len(store)
+
+    response = client.post(
+        "/api/jobs/upload", files={"file": ("big.mp4", b"0" * 8192, "video/mp4")}
+    )
+
+    assert response.status_code == 413
+    assert "larger than" in response.json()["detail"]
+    assert len(store) == before, "the refused upload left a job behind"
+
+
+def test_oversize_upload_leaves_nothing_on_disk(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dropscore.service import app as app_module  # noqa: PLC0415
+
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", 1024)
+    store = client.app.state.store
+
+    client.post("/api/jobs/upload", files={"file": ("big.mp4", b"0" * 8192, "video/mp4")})
+
+    leftovers = [p for p in store.root.iterdir() if p.is_dir()]
+    assert leftovers == [], f"partial upload left {leftovers}"
+
+
+def test_discard_removes_a_job_and_its_directory(tmp_path: Path) -> None:
+    """The cleanup path for a submission that fails after registering a job.
+
+    The Content-Length check normally rejects an oversize upload before a job
+    exists, so this covers the copy-time check, which only fires for a chunked
+    request that TestClient cannot produce.
+    """
+    store = JobStore(tmp_path)
+    job = store.create("doomed")
+    (job.workdir / "partial.mp4").write_bytes(b"half a video")
+
+    store.discard(job)
+
+    assert store.get(job.id) is None
+    assert not job.workdir.exists()
+    assert len(store) == 0
+
+
+def test_discard_is_safe_on_an_unknown_job(tmp_path: Path) -> None:
+    store = JobStore(tmp_path)
+    job = store.create("x")
+    store.discard(job)
+    store.discard(job)  # already gone
+    assert len(store) == 0
+
+
 # ── the real path ────────────────────────────────────────────────────
 
 
