@@ -78,6 +78,32 @@ def test_rejects_a_non_youtube_url(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+# ── the frontend and the docs it links to ────────────────────────────
+
+
+def test_serves_the_frontend_and_the_docs_it_links_to() -> None:
+    """The header link resolves under the API, not just from disk."""
+    with TestClient(create_app(serve_frontend=True)) as served:
+        assert served.get("/").status_code == 200
+        assert served.get("/guide/PIPELINE.md").status_code == 200
+        assert served.get("/guide/ROADMAP.md").status_code == 200
+
+
+def test_the_docs_link_target_matches_what_the_service_mounts() -> None:
+    """A path duplicated across two files, so assert they agree."""
+    from dropscore.service.app import DOCS_MOUNT  # noqa: PLC0415
+
+    app_js = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    assert f"'{DOCS_MOUNT}/PIPELINE.md'" in app_js
+
+
+def test_the_docs_mount_does_not_shadow_the_swagger_ui() -> None:
+    with TestClient(create_app(serve_frontend=True)) as served:
+        assert served.get("/docs").status_code == 200
+
+
 # ── the upload handler must not block the event loop ─────────────────
 
 

@@ -33,6 +33,12 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
     ) from exc
 
 WEB_ROOT = Path(__file__).resolve().parents[2] / "web"
+DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
+
+# The docs are mounted at /guide rather than /docs because FastAPI already
+# serves its Swagger UI there, and having half a path belong to each would be
+# needlessly confusing.
+DOCS_MOUNT = "/guide"
 
 # Checked twice: against the declared Content-Length before any work is done,
 # and again while copying, for requests that arrive chunked or misdeclare it.
@@ -173,6 +179,10 @@ def create_app(
     @app.on_event("shutdown")
     def stop() -> None:
         store.shutdown()
+
+    if serve_frontend and DOCS_ROOT.is_dir():
+        # Mounted before the catch-all below, which would otherwise swallow it.
+        app.mount(DOCS_MOUNT, StaticFiles(directory=DOCS_ROOT), name="guide")
 
     if serve_frontend and WEB_ROOT.is_dir():
         app.mount("/", StaticFiles(directory=WEB_ROOT, html=True), name="web")

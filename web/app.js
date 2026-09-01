@@ -118,6 +118,10 @@ function applyMode() {
   // already on screen is left alone rather than overwritten with boilerplate.
   $('#dz-sub').textContent = fileCopy().sub;
   if (!fileHint.classList.contains('error')) setFileHint(defaultFileHint());
+
+  // ../docs/ sits outside the served root, so the relative path that works
+  // from disk 404s behind the API.
+  if (api.available) $('#docs-link').href = '/guide/PIPELINE.md';
 }
 
 // ── state ────────────────────────────────────────────────────────────

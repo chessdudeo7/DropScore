@@ -23,7 +23,9 @@
   </div>
   <nav class="topnav">
     <a href="#how">How it works</a>
-    <a href="../docs/PIPELINE.md">Pipeline notes</a>
+    <!-- Relative path is right when this file is opened from disk; when it is
+         served, applyMode() repoints it at the mount the API exposes. -->
+    <a href="../docs/PIPELINE.md" id="docs-link">Pipeline notes</a>
     <span class="pill pill-warn" id="mode-pill">checking backend…</span>
   </nav>
 </header>
