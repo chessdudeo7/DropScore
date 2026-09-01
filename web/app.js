@@ -78,19 +78,35 @@ const fmtClock = (secs) => {
 };
 
 // ── backend ──────────────────────────────────────────────────────────
-const api = { available: false, jobId: null, poll: null };
+
+/* `ready` is the startup probe. Anything that branches on `available` must
+ * await it first: until it settles the answer is "don't know yet", and
+ * treating that as "no backend" would run the simulation and present invented
+ * notes as a real transcription — the one outcome demo mode exists to prevent. */
+const api = { available: false, probing: true, ready: null, jobId: null, poll: null };
 
 /** Probe for a live API once, at startup. */
 async function detectApi() {
-  if (location.protocol !== 'file:') {
-    try {
-      const response = await fetch('/api/health', { cache: 'no-store' });
-      api.available = response.ok;
-    } catch {
-      api.available = false;
+  try {
+    if (location.protocol !== 'file:') {
+      try {
+        const response = await fetch('/api/health', { cache: 'no-store' });
+        api.available = response.ok;
+      } catch {
+        api.available = false;
+      }
     }
+    applyMode();
+  } finally {
+    // Whatever happened, stop blocking submission on the probe.
+    api.probing = false;
+    syncSubmit();
   }
+  return api.available;
+}
 
+/** Reflect the detected mode in the parts of the UI that make claims. */
+function applyMode() {
   document.body.classList.toggle('demo', !api.available);
   const pill = $('#mode-pill');
   pill.textContent = api.available ? 'connected' : 'demo mode · simulated results';
@@ -102,8 +118,6 @@ async function detectApi() {
   // already on screen is left alone rather than overwritten with boilerplate.
   $('#dz-sub').textContent = fileCopy().sub;
   if (!fileHint.classList.contains('error')) setFileHint(defaultFileHint());
-
-  return api.available;
 }
 
 // ── state ────────────────────────────────────────────────────────────
@@ -145,7 +159,9 @@ $('#tab-link').addEventListener('click', () => selectTab('link'));
 $('#tab-file').addEventListener('click', () => selectTab('file'));
 
 function syncSubmit() {
-  $('#submit-btn').disabled = !currentSource();
+  const probing = api.probing;
+  submitBtn.disabled = probing || !currentSource();
+  submitBtn.title = probing ? 'Checking for a transcription server…' : '';
 }
 
 // ── URL input ────────────────────────────────────────────────────────
@@ -363,7 +379,8 @@ $('#source-form').addEventListener('submit', (e) => {
   startJob(src);
 });
 
-submitBtn.disabled = true;
+// Disabled until both a source is chosen and the backend probe has settled.
+syncSubmit();
 
 // ── pipeline simulation ──────────────────────────────────────────────
 const STEPS = [
@@ -439,6 +456,10 @@ function show(stage) {
 }
 
 async function startJob(src) {
+  // The probe may still be in flight if the user was quick, or the network
+  // slow. Deciding now would silently pick the simulation.
+  await api.ready;
+
   state.cancelled = false;
   api.jobId = null;
   $('#console').innerHTML = '';
@@ -789,7 +810,7 @@ function showResult({ notes, confidence, stats: rows, downloads }) {
   $('#disclaimer').hidden = api.available;
 }
 
-detectApi();
+api.ready = detectApi();
 
 // roundRect polyfill for older engines
 if (!CanvasRenderingContext2D.prototype.roundRect) {
