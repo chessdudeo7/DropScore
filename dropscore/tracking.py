@@ -172,31 +172,57 @@ def build_tracks(
     finished: list[TileTrack] = []
 
     for frame, tiles in detections:
+        lanes: dict[tuple[int, int], list[Tile]] = {}
+        for tile in tiles:
+            lanes.setdefault((tile.pitch, tile.track), []).append(tile)
+
         seen: set[int] = set()
 
-        for tile in tiles:
-            lane = (tile.pitch, tile.track)
+        for lane, lane_tiles in lanes.items():
             candidates = open_tracks.setdefault(lane, [])
 
-            best: TileTrack | None = None
-            best_error = float("inf")
-            for candidate in candidates:
-                dt = frame.time - candidate.last_time
-                if dt <= 0:
+            # Score every plausible pairing in this lane, then take them in
+            # order of agreement, each tile and each track used once. Matching
+            # tile-by-tile instead let two tiles on one key — two strikes of a
+            # repeated note, both on screen — attach to the *same* track, whose
+            # observations then interleave two different notes and average into
+            # one wrong one. Repeated notes are where this pipeline is weakest,
+            # so it is the last place to be careless.
+            pairings: list[tuple[float, int, int]] = []
+            for tile_index, tile in enumerate(lane_tiles):
+                for track_index, candidate in enumerate(candidates):
+                    dt = frame.time - candidate.last_time
+                    if dt <= 0:
+                        continue
+                    # The bottom edge stops at the strike line while the tile passes.
+                    predicted = min(
+                        candidate.last_bottom + speed * dt, calibration.strike_y
+                    )
+                    error = abs(tile.bottom - predicted)
+                    tolerance = max(cfg.min_match_px, cfg.match_ratio * speed * dt)
+                    if error < tolerance:
+                        pairings.append((error, tile_index, track_index))
+
+            pairings.sort()
+            used_tiles: set[int] = set()
+            used_tracks: set[int] = set()
+            for _error, tile_index, track_index in pairings:
+                if tile_index in used_tiles or track_index in used_tracks:
                     continue
-                # The bottom edge stops at the strike line while the tile passes.
-                predicted = min(candidate.last_bottom + speed * dt, calibration.strike_y)
-                error = abs(tile.bottom - predicted)
-                tolerance = max(cfg.min_match_px, cfg.match_ratio * speed * dt)
-                if error < tolerance and error < best_error:
-                    best, best_error = candidate, error
+                candidate = candidates[track_index]
+                candidate.observe(lane_tiles[tile_index])
+                used_tiles.add(tile_index)
+                used_tracks.add(track_index)
+                seen.add(id(candidate))
 
-            if best is None:
-                best = TileTrack(pitch=tile.pitch, track=tile.track)
-                candidates.append(best)
-
-            best.observe(tile)
-            seen.add(id(best))
+            # Whatever is left is a tile that just appeared.
+            for tile_index, tile in enumerate(lane_tiles):
+                if tile_index in used_tiles:
+                    continue
+                track = TileTrack(pitch=tile.pitch, track=tile.track)
+                track.observe(tile)
+                candidates.append(track)
+                seen.add(id(track))
 
         # Retire tracks that went unmatched this frame.
         for lane, candidates in list(open_tracks.items()):

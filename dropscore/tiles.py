@@ -245,9 +245,20 @@ def detect_in_frame(
             if not pitches:
                 continue
 
-            for top, bottom in _split_vertically(mask, (x, y, x + w, y + h), config):
-                for pitch in pitches:
-                    left, right = calibration.layout.key_span(pitch)
+            # Split each key over its *own* columns. Measuring row fill across
+            # the whole blob and sharing the result gets adjacent keys of
+            # different lengths wrong in both directions: the long one is cut
+            # where the short one ends, and the short one inherits the long
+            # one's height. Chords whose voices differ in length are ordinary
+            # music, so this is not an edge case.
+            for pitch in pitches:
+                left, right = calibration.layout.key_span(pitch)
+                x0 = max(x, int(round(left)))
+                x1 = min(x + w, int(round(right)))
+                if x1 <= x0:
+                    continue
+
+                for top, bottom in _split_vertically(mask, (x0, y, x1, y + h), config):
                     tiles.append(
                         Tile(
                             frame=frame.index,

@@ -68,6 +68,106 @@ def _expected_pitches(renderer: SynthRenderer, t: float, min_height: int = 0) ->
     return found
 
 
+# ── merged blobs are split per key, not per blob ─────────────────────
+
+
+def _painted(
+    layout, height: int, width: int, spans: dict[int, tuple[int, int]]
+) -> np.ndarray:
+    """A frame with tiles painted directly onto given keys.
+
+    Drawn without the renderer's inter-tile gap, so adjacent keys touch and
+    form a single contour — which is how plenty of real renderers draw them,
+    and the case where per-blob splitting goes wrong.
+    """
+    import cv2  # noqa: PLC0415
+
+    image = np.full((height, width, 3), 12, dtype=np.uint8)
+    for pitch, (top, bottom) in spans.items():
+        left, right = layout.key_span(pitch)
+        cv2.rectangle(
+            image, (int(left), top), (int(right), bottom), (110, 215, 245), -1
+        )
+    return image
+
+
+def _detect_painted(spans: dict[int, tuple[int, int]]) -> dict[int, list]:
+    """Detect on a painted frame, returning tiles grouped by pitch."""
+    renderer = _renderer()
+    calibration = _truth_calibration(renderer)
+    layout = renderer.layout
+    size = (renderer.spec.height, renderer.spec.width)
+
+    frames = [
+        Frame(i, i / SPEC.fps, _painted(layout, size[0], size[1], spans), 1.0)
+        for i in range(4)
+    ]
+    # A frame with nothing painted, so the background is discoverable.
+    frames.append(Frame(4, 4 / SPEC.fps, _painted(layout, size[0], size[1], {}), 1.0))
+
+    palette = discover_palette(frames, calibration)
+    tiles = detect_in_frame(frames[0], palette, calibration)
+
+    grouped: dict[int, list] = {}
+    for tile in tiles:
+        grouped.setdefault(tile.pitch, []).append(tile)
+    return grouped
+
+
+def test_adjacent_keys_of_different_lengths_keep_their_own_heights() -> None:
+    """The bug: row fill measured across the blob and shared between keys.
+
+    C is long, D is short, and they touch. Measuring fill over the whole blob
+    gives D the long note's height — a chord whose voices differ in length is
+    ordinary music, not an edge case.
+    """
+    grouped = _detect_painted({60: (40, 200), 62: (150, 200)})
+
+    assert set(grouped) == {60, 62}
+    assert len(grouped[60]) == 1 and len(grouped[62]) == 1
+
+    long_tile = grouped[60][0]
+    short_tile = grouped[62][0]
+    assert long_tile.height == pytest.approx(160, abs=3)
+    assert short_tile.height == pytest.approx(50, abs=3)
+    assert short_tile.top == pytest.approx(150, abs=3)
+
+
+def test_a_gap_on_one_key_does_not_split_its_neighbour() -> None:
+    """Two strikes on D, one long note on C, touching.
+
+    Per-blob splitting would cut C at D's gap as well.
+    """
+    import cv2  # noqa: PLC0415
+
+    renderer = _renderer()
+    calibration = _truth_calibration(renderer)
+    layout = renderer.layout
+    height, width = renderer.spec.height, renderer.spec.width
+
+    def paint() -> np.ndarray:
+        image = np.full((height, width, 3), 12, dtype=np.uint8)
+        for pitch, (top, bottom) in ((60, (40, 200)), (62, (40, 100)), (62, (130, 200))):
+            left, right = layout.key_span(pitch)
+            cv2.rectangle(image, (int(left), top), (int(right), bottom), (110, 215, 245), -1)
+        return image
+
+    frames = [Frame(i, i / SPEC.fps, paint(), 1.0) for i in range(4)]
+    frames.append(
+        Frame(4, 4 / SPEC.fps, np.full((height, width, 3), 12, dtype=np.uint8), 1.0)
+    )
+
+    palette = discover_palette(frames, calibration)
+    tiles = detect_in_frame(frames[0], palette, calibration)
+
+    by_pitch: dict[int, list] = {}
+    for tile in tiles:
+        by_pitch.setdefault(tile.pitch, []).append(tile)
+
+    assert len(by_pitch[60]) == 1, "the unbroken note was split by its neighbour's gap"
+    assert len(by_pitch[62]) == 2, "the two strikes were not separated"
+
+
 # ── palette discovery ────────────────────────────────────────────────
 
 

@@ -224,3 +224,126 @@ def test_two_tile_colours_produce_two_hands() -> None:
 
     found = transcribe(frames, calibration, palette, renderer.speed)
     assert {n.hand for n in found} == {"L", "R"}
+
+
+# ── association is one tile to one track ─────────────────────────────
+
+
+def _tile(pitch: int, bottom: float, time: float, height: float = 20.0):
+    from dropscore.tiles import Tile  # noqa: PLC0415
+
+    return Tile(
+        frame=int(time * 100),
+        time=time,
+        pitch=pitch,
+        top=bottom - height,
+        bottom=bottom,
+        track=0,
+        left=0.0,
+        right=10.0,
+    )
+
+
+def _calibration(strike_y: int = 400):
+    from dropscore.keyboard import KeyboardLayout  # noqa: PLC0415
+
+    layout = KeyboardLayout(width=960.0)
+    return Calibration(
+        layout=layout,
+        strike_y=strike_y,
+        keybed_bottom=strike_y + 100,
+        white_width=layout.white_width,
+        confidence=1.0,
+    )
+
+
+def test_two_tiles_on_one_key_do_not_share_a_track() -> None:
+    """Two strikes of a repeated note, both on screen at once.
+
+    Matching tile by tile let the second attach to the same track as the first,
+    whose observations then interleaved two notes and averaged into one wrong
+    one. Repeated notes are the pipeline's weakest case.
+    """
+    from dropscore.tracking import build_tracks  # noqa: PLC0415
+
+    calibration = _calibration()
+    speed = 100.0
+
+    # Frame 1: two tiles on the same key, 60px apart.
+    # Frame 2: both have fallen 10px, so either could match either track.
+    detections = [
+        (Frame(0, 0.0, np.zeros((1, 1, 3), np.uint8), 1.0), [_tile(60, 100, 0.0), _tile(60, 160, 0.0)]),
+        (Frame(1, 0.1, np.zeros((1, 1, 3), np.uint8), 1.0), [_tile(60, 110, 0.1), _tile(60, 170, 0.1)]),
+    ]
+
+    tracks = build_tracks(detections, speed, calibration)
+
+    assert len(tracks) == 2, f"expected two tracks, got {len(tracks)}"
+    assert all(track.length == 2 for track in tracks), "a track absorbed both tiles"
+
+    # Each track followed one tile, so its bottoms advance by the scroll amount.
+    for track in tracks:
+        assert track.bottoms[1] - track.bottoms[0] == pytest.approx(10.0)
+
+
+def test_the_closer_pairing_wins_regardless_of_tile_order() -> None:
+    """Assignment is by agreement, not by whichever tile was listed first."""
+    from dropscore.tracking import build_tracks  # noqa: PLC0415
+
+    calibration = _calibration()
+    first = [_tile(60, 100, 0.0), _tile(60, 200, 0.0)]
+
+    # Same second frame, tiles listed in both orders.
+    later = [_tile(60, 210, 0.1), _tile(60, 110, 0.1)]
+
+    forward = build_tracks(
+        [
+            (Frame(0, 0.0, np.zeros((1, 1, 3), np.uint8), 1.0), first),
+            (Frame(1, 0.1, np.zeros((1, 1, 3), np.uint8), 1.0), later),
+        ],
+        100.0,
+        calibration,
+    )
+    reversed_order = build_tracks(
+        [
+            (Frame(0, 0.0, np.zeros((1, 1, 3), np.uint8), 1.0), list(reversed(first))),
+            (Frame(1, 0.1, np.zeros((1, 1, 3), np.uint8), 1.0), list(reversed(later))),
+        ],
+        100.0,
+        calibration,
+    )
+
+    assert len(forward) == len(reversed_order) == 2
+    assert sorted(t.bottoms for t in forward) == sorted(t.bottoms for t in reversed_order)
+
+
+def test_a_single_tile_still_follows_one_track() -> None:
+    from dropscore.tracking import build_tracks  # noqa: PLC0415
+
+    calibration = _calibration()
+    detections = [
+        (Frame(i, i * 0.1, np.zeros((1, 1, 3), np.uint8), 1.0), [_tile(60, 100 + i * 10, i * 0.1)])
+        for i in range(5)
+    ]
+
+    tracks = build_tracks(detections, 100.0, calibration)
+    assert len(tracks) == 1
+    assert tracks[0].length == 5
+
+
+def test_tiles_on_different_keys_never_compete() -> None:
+    from dropscore.tracking import build_tracks  # noqa: PLC0415
+
+    calibration = _calibration()
+    detections = [
+        (
+            Frame(i, i * 0.1, np.zeros((1, 1, 3), np.uint8), 1.0),
+            [_tile(60, 100 + i * 10, i * 0.1), _tile(62, 100 + i * 10, i * 0.1)],
+        )
+        for i in range(4)
+    ]
+
+    tracks = build_tracks(detections, 100.0, calibration)
+    assert len(tracks) == 2
+    assert {t.pitch for t in tracks} == {60, 62}
+    assert all(t.length == 4 for t in tracks)
