@@ -142,9 +142,12 @@ class TrackingConfig:
     min_speed: float = 20.0  # px/s
     max_speed: float = 2000.0
     min_speed_samples: int = 5
-    # Tile steps needed before a direct measurement is trusted over
-    # correlation. Each is one tile seen in two consecutive frames.
-    min_tile_speed_samples: int = 20
+
+    # Known displacements used to measure the correlator's own offset, and
+    # the largest offset worth believing. Anything past this is not a
+    # sub-pixel quirk but a sign the probe itself went wrong.
+    bias_probe_shifts: tuple[int, ...] = (4, 6, 8)
+    max_bias: float = 2.0
 
     # Association. A tile can only be where the known speed puts it, so the gate
     # is a fraction of the distance it should have travelled since last seen.

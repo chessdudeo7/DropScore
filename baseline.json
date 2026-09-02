@@ -1,5 +1,5 @@
 {
-  "f1": 0.8109854604200322,
+  "f1": 0.961352657004831,
   "clips": [
     {
       "name": "aurora_88key_seed0",
@@ -7,9 +7,9 @@
         "reference_count": 102,
         "estimate_count": 103,
         "matched": 102,
-        "onset_mae": 0.012720149438507513,
-        "onset_p95": 0.014041083975458868,
-        "duration_mae": 0.08220867852549757,
+        "onset_mae": 0.011915097938489659,
+        "onset_p95": 0.012324162662361915,
+        "duration_mae": 0.08281922404862678,
         "hand_accuracy": 1.0,
         "precision": 0.9902912621359223,
         "recall": 1.0,
@@ -19,7 +19,7 @@
         "first_pitch_correct": true,
         "white_width_error": 0.015711947626840583,
         "strike_y_error": 1,
-        "speed_error": -0.5452500980583466
+        "speed_error": -0.4729586150198486
       },
       "error": null
     },
@@ -29,9 +29,9 @@
         "reference_count": 102,
         "estimate_count": 102,
         "matched": 102,
-        "onset_mae": 0.004567037824244502,
-        "onset_p95": 0.0049761025481168675,
-        "duration_mae": 0.018239859527759125,
+        "onset_mae": 0.004187459957448289,
+        "onset_p95": 0.004596524681320546,
+        "duration_mae": 0.01824011728623377,
         "hand_accuracy": 0.8529411764705882,
         "precision": 1.0,
         "recall": 1.0,
@@ -41,7 +41,7 @@
         "first_pitch_correct": true,
         "white_width_error": 0.015711947626840583,
         "strike_y_error": 1,
-        "speed_error": -0.3337755300607341
+        "speed_error": -0.2982944741510778
       },
       "error": null
     },
@@ -51,9 +51,9 @@
         "reference_count": 102,
         "estimate_count": 101,
         "matched": 101,
-        "onset_mae": 0.006400216898352599,
-        "onset_p95": 0.0068062799376855665,
-        "duration_mae": 0.03531350957312761,
+        "onset_mae": 0.006297186383300353,
+        "onset_p95": 0.006703249422632895,
+        "duration_mae": 0.035309658019780955,
         "hand_accuracy": 1.0,
         "precision": 1.0,
         "recall": 0.9901960784313726,
@@ -63,7 +63,7 @@
         "first_pitch_correct": true,
         "white_width_error": 0.015711947626840583,
         "strike_y_error": 1,
-        "speed_error": -1.7369358067007852
+        "speed_error": -1.7089524392294493
       },
       "error": null
     },
@@ -73,9 +73,9 @@
         "reference_count": 102,
         "estimate_count": 101,
         "matched": 101,
-        "onset_mae": 0.019567124028704114,
-        "onset_p95": 0.021692919485314377,
-        "duration_mae": 0.020386497081900764,
+        "onset_mae": 0.020421467982029026,
+        "onset_p95": 0.02254726343863922,
+        "duration_mae": 0.020373752725987446,
         "hand_accuracy": 1.0,
         "precision": 1.0,
         "recall": 0.9901960784313726,
@@ -85,7 +85,7 @@
         "first_pitch_correct": true,
         "white_width_error": 0.015711947626840583,
         "strike_y_error": 0,
-        "speed_error": 0.9602586667005539
+        "speed_error": 1.0135407744444933
       },
       "error": null
     },
@@ -95,9 +95,9 @@
         "reference_count": 102,
         "estimate_count": 121,
         "matched": 91,
-        "onset_mae": 0.007512653536838978,
-        "onset_p95": 0.011921182062426094,
-        "duration_mae": 0.08491890647425612,
+        "onset_mae": 0.007904945200952924,
+        "onset_p95": 0.012317900046696195,
+        "duration_mae": 0.08492330854293502,
         "hand_accuracy": 1.0,
         "precision": 0.7520661157024794,
         "recall": 0.8921568627450981,
@@ -107,7 +107,7 @@
         "first_pitch_correct": true,
         "white_width_error": 0.015711947626840583,
         "strike_y_error": 2,
-        "speed_error": 1.6018366162457482
+        "speed_error": 1.6875794128235384
       },
       "error": null
     },
@@ -115,21 +115,21 @@
       "name": "synthesia_88key_seed0",
       "metrics": {
         "reference_count": 102,
-        "estimate_count": 98,
-        "matched": 5,
-        "onset_mae": 0.0066397568355311964,
-        "onset_p95": 0.008174078399972905,
-        "duration_mae": 0.07051238467734425,
+        "estimate_count": 102,
+        "matched": 100,
+        "onset_mae": 0.024756622305110748,
+        "onset_p95": 0.026084402205029278,
+        "duration_mae": 0.0177900671621714,
         "hand_accuracy": 1.0,
-        "precision": 0.05102040816326531,
-        "recall": 0.049019607843137254,
-        "f1": 0.05
+        "precision": 0.9803921568627451,
+        "recall": 0.9803921568627451,
+        "f1": 0.9803921568627451
       },
       "geometry": {
         "first_pitch_correct": true,
         "white_width_error": 0.015711947626840583,
         "strike_y_error": 2,
-        "speed_error": 13.269170367185524
+        "speed_error": -1.6624223405993632
       },
       "error": null
     }

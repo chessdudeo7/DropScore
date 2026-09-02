@@ -19,7 +19,10 @@ off the top or already past the strike line.
 
 Scroll speed is measured by phase correlation on the fall area rather than from
 the tracked tiles, so it does not depend on detection being complete — and its
-spread across frame pairs is a genuine confidence signal.
+spread across frame pairs is a genuine confidence signal. The correlator's own
+sub-pixel offset is measured against known displacements of the video's own
+frames and subtracted; half a pixel per frame is invisible to look at and worth
+a second of drift over a clip.
 """
 
 from __future__ import annotations
@@ -88,6 +91,35 @@ class SpeedEstimate:
         return float(max(0.0, 1.0 - (self.spread / self.value) * 10))
 
 
+def _correlation_bias(
+    residuals: Sequence[np.ndarray], window: np.ndarray, cfg
+) -> float:
+    """The offset phaseCorrelate adds when told a shift it should already know.
+
+    Each residual is displaced by a known number of rows and measured. Whatever
+    comes back beyond the displacement is the estimator's own error on this
+    content, and is the same error it makes on the real frame pairs.
+
+    Rolling wraps the image, which is precisely the periodicity the DFT behind
+    phase correlation assumes, so the probe is a fair one.
+    """
+    errors = [
+        cv2.phaseCorrelate(image, np.roll(image, probe, axis=0), window)[0][1] - probe
+        for image in residuals
+        for probe in cfg.bias_probe_shifts
+    ]
+    bias = float(np.median(errors)) if errors else 0.0
+
+    if abs(bias) > cfg.max_bias:
+        log.warning(
+            "correlation bias of %.2fpx is implausibly large; ignoring it", bias
+        )
+        return 0.0
+
+    log.debug("correlation bias %.3fpx over %d probes", bias, len(errors))
+    return bias
+
+
 def estimate_speed(
     frames: Sequence[Frame],
     calibration: Calibration,
@@ -131,7 +163,31 @@ def estimate_speed(
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
         return np.abs(gray - reference)
 
-    window: np.ndarray | None = None
+    window = cv2.createHanningWindow(
+        (images[0].shape[1], images[0].shape[0]), cv2.CV_32F
+    )
+
+    # Measure and remove the estimator's own systematic offset.
+    #
+    # phaseCorrelate locates a correlation peak to sub-pixel precision, and on
+    # some content that estimate carries a constant offset: shifting one theme's
+    # frame by a known 3, 5 or 7 pixels came back as 3.499, 5.498 and 7.497.
+    # Half a pixel per frame is nothing to look at and everything to a
+    # transcription — it made that clip's notes drift a second and a half over
+    # twenty seconds, scoring F1 0.06 with the tiles read perfectly.
+    #
+    # It cannot be predicted from image size or parity — measured, 400 rows was
+    # exact while 401, 402 and 403 all skewed — so it is calibrated instead:
+    # shift this video's own frame by an amount we know and see what comes back.
+    # Same content, same code path, so whatever the estimator does to this video
+    # is what gets subtracted. Where there is no bias this measures ~0.002px and
+    # changes nothing.
+    bias = _correlation_bias(
+        [residual(images[i]) for i in (0, len(images) // 2, len(images) - 1)],
+        window,
+        cfg,
+    )
+
     shifts: list[float] = []
 
     for previous, current in zip(frames, frames[1:]):
@@ -144,14 +200,11 @@ def estimate_speed(
         if a.std() < cfg.min_residual or b.std() < cfg.min_residual:
             continue  # nothing is falling in this pair
 
-        if window is None:
-            window = cv2.createHanningWindow((a.shape[1], a.shape[0]), cv2.CV_32F)
-
         (_, dy), response = cv2.phaseCorrelate(a, b, window)
         if response < cfg.min_correlation:
             continue
 
-        speed = dy / dt
+        speed = (dy - bias) / dt
         if cfg.min_speed <= speed <= cfg.max_speed:
             shifts.append(speed)
 
