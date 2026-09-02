@@ -202,12 +202,25 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
         return []
 
     cfg = config.tiles
-    if strip.mean() < cfg.outline_fill_ratio:
-        # A hollow region is an outlined tile, not two stacked ones: its middle
-        # rows are empty by design. Splitting here would return its edges.
+    fill = strip.mean(axis=1)
+
+    # An outlined tile is hollow: both side edges drawn down its full height,
+    # nothing between them. Judged by columns rather than rows because a tile
+    # clipped by the top of the frame loses its top edge but keeps its sides.
+    #
+    # Sparseness alone was not enough: a key whose neighbour bleeds into its
+    # edge column is also sparse, and calling that an outline kept it whole and
+    # handed it the neighbour's full height.
+    columns = strip.mean(axis=0)
+    hollow = (
+        columns.size > 2
+        and columns[0] >= cfg.outline_edge_ratio
+        and columns[-1] >= cfg.outline_edge_ratio
+        and float(columns[1:-1].mean()) < cfg.outline_fill_ratio
+    )
+    if hollow:
         return [(y0, y1)] if y1 - y0 >= cfg.min_tile_height else []
 
-    fill = strip.mean(axis=1)
     filled = fill >= cfg.row_fill_ratio
 
     spans: list[tuple[int, int]] = []

@@ -98,15 +98,17 @@ def _detect_painted(spans: dict[int, tuple[int, int]]) -> dict[int, list]:
     layout = renderer.layout
     size = (renderer.spec.height, renderer.spec.width)
 
+    # Mostly blank, so the temporal median is the *background*. Painting the
+    # majority would make the median the tiles themselves and inverted the
+    # palette, which is what an earlier version of this fixture did.
+    painted = Frame(0, 0.0, _painted(layout, size[0], size[1], spans), 1.0)
     frames = [
-        Frame(i, i / SPEC.fps, _painted(layout, size[0], size[1], spans), 1.0)
-        for i in range(4)
-    ]
-    # A frame with nothing painted, so the background is discoverable.
-    frames.append(Frame(4, 4 / SPEC.fps, _painted(layout, size[0], size[1], {}), 1.0))
+        Frame(i, i / SPEC.fps, _painted(layout, size[0], size[1], {}), 1.0)
+        for i in range(1, 6)
+    ] + [painted]
 
     palette = discover_palette(frames, calibration)
-    tiles = detect_in_frame(frames[0], palette, calibration)
+    tiles = detect_in_frame(painted, palette, calibration)
 
     grouped: dict[int, list] = {}
     for tile in tiles:
@@ -152,13 +154,12 @@ def test_a_gap_on_one_key_does_not_split_its_neighbour() -> None:
             cv2.rectangle(image, (int(left), top), (int(right), bottom), (110, 215, 245), -1)
         return image
 
-    frames = [Frame(i, i / SPEC.fps, paint(), 1.0) for i in range(4)]
-    frames.append(
-        Frame(4, 4 / SPEC.fps, np.full((height, width, 3), 12, dtype=np.uint8), 1.0)
-    )
+    painted = Frame(0, 0.0, paint(), 1.0)
+    blank = np.full((height, width, 3), 12, dtype=np.uint8)
+    frames = [Frame(i, i / SPEC.fps, blank, 1.0) for i in range(1, 6)] + [painted]
 
     palette = discover_palette(frames, calibration)
-    tiles = detect_in_frame(frames[0], palette, calibration)
+    tiles = detect_in_frame(painted, palette, calibration)
 
     by_pitch: dict[int, list] = {}
     for tile in tiles:

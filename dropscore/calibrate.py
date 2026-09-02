@@ -83,30 +83,46 @@ def row_activity(frames: Sequence[Frame], background: np.ndarray) -> np.ndarray:
 def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config) -> tuple[int, int]:
     """Locate the keybed as the quiet band at the bottom of the frame."""
     cfg = config.calibration
-    activity = row_activity(frames, background)
-    height = activity.shape[0]
 
-    peak = float(activity.max())
-    if peak <= 1e-6:
+    if float(row_activity(frames, background).max()) <= 1e-6:
         raise CalibrationError("nothing moves in this video; no tiles to track")
 
-    # Split the frame where activity drops most sharply, rather than at a fixed
-    # threshold: struck keys make the keybed move too, so its absolute activity
-    # is not reliably small — only reliably smaller than the fall area's.
+    # Split on how *structured* each row of the static background is, not on how
+    # much it moves. Motion was the obvious choice and is wrong: struck keys
+    # light up over the keybed's full height, so it is nearly as busy as the
+    # fall area (measured: 3.9 against 4.5), and the sharpest drop in activity
+    # falls where the black keys end rather than at the strike line.
+    #
+    # Structure separates them cleanly instead. A keybed row crosses white and
+    # black keys, so its spread is large; a fall-area row is near-uniform
+    # background. Across every theme that is a spread of ~73 against ~2-6.
+    gray = _gray(background).astype(np.float32)
+    structure = gray.std(axis=1)
+    height = structure.shape[0]
+
     lo = int(height * cfg.split_search[0])
     hi = int(height * cfg.split_search[1])
-    above = np.cumsum(activity)
+    totals = np.cumsum(structure)
     contrasts = np.array(
-        [above[y - 1] / y - (above[-1] - above[y - 1]) / (height - y) for y in range(lo, hi)]
+        [
+            (totals[-1] - totals[y - 1]) / (height - y) - totals[y - 1] / y
+            for y in range(lo, hi)
+        ]
     )
     top = lo + int(np.argmax(contrasts))
-    contrast = float(contrasts.max())
 
-    if contrast < peak * cfg.activity_ratio:
+    if float(contrasts.max()) < cfg.min_keybed_contrast:
         raise CalibrationError(
-            "no clear boundary between a moving area and a still keyboard; "
-            "this may not be a falling-tile piano video"
+            "no row of keys under a plain falling area; this may not be a "
+            "falling-tile piano video"
         )
+
+    # Several renderers shade the first few rows of the keybed, which weakens
+    # their structure enough to put the split just below the true edge. Walk
+    # back up while the rows still look like keys rather than background.
+    floor = float(structure[top:].mean()) * cfg.keybed_edge_ratio
+    while top > 0 and structure[top - 1] > floor:
+        top -= 1
 
     # Trim a uniform letterbox below the keys, if any.
     gray = _gray(background)
@@ -136,13 +152,22 @@ def _band(image: np.ndarray, top: int, bottom: int, lo: float, hi: float) -> np.
     return image[y0:y1]
 
 
-def estimate_period(profile: np.ndarray, min_px: float, max_px: float) -> tuple[float, float]:
+def estimate_period(
+    profile: np.ndarray,
+    min_px: float,
+    max_px: float,
+    harmonic_tolerance: float = 0.75,
+) -> tuple[float, float]:
     """Dominant period and first peak offset of a near-periodic 1-D profile.
 
     Uses the FFT rather than peak-finding: separators can be missed or doubled by
     compression, but the dominant frequency survives that, and the phase gives a
     sub-pixel offset for free.
+
+    ``harmonic_tolerance`` is the share of the peak magnitude a lower frequency
+    must reach to be preferred over it — see the note below on impulse trains.
     """
+    cfg_harmonic = harmonic_tolerance
     length = profile.shape[0]
     centred = profile - profile.mean()
     if not np.any(centred):
@@ -155,28 +180,75 @@ def estimate_period(profile: np.ndarray, min_px: float, max_px: float) -> tuple[
         raise CalibrationError("frame is too small to resolve individual keys")
 
     magnitudes = np.abs(spectrum[k_lo : k_hi + 1])
-    k = k_lo + int(np.argmax(magnitudes))
 
-    period = length / k
-    # cos(2*pi*k*x/L + phase) peaks where the argument is a multiple of 2*pi.
-    phase = float(np.angle(spectrum[k]))
-    offset = (-phase / (2 * np.pi)) * period
+    # Take the *lowest* frequency that explains the profile, not the strongest.
+    # A row of sharp separator lines is close to an impulse train, whose
+    # harmonics all carry similar energy, so argmax picks among them
+    # arbitrarily — and picking the third harmonic would fit a key grid three
+    # times too fine, mismapping every column to the wrong pitch.
+    strong = np.flatnonzero(magnitudes >= magnitudes.max() * cfg_harmonic)
+    k = k_lo + int(strong[0])
+
+    # The FFT only resolves periods that divide the width exactly, and real key
+    # widths do not: a true 18.00px grid in a 960px row lands between bins 53
+    # and 54, giving 18.11. That is 0.11px of error per key, which accumulates
+    # to most of a key across 52 of them — enough to mismap pitches at the far
+    # end. The bin is only a starting point; both period and offset are then
+    # refined against the thing actually wanted, which is how well the
+    # gridlines sit on the edges.
+    return _refine_grid(profile, length / k)
+
+
+def _refine_grid(
+    profile: np.ndarray, coarse: np.ndarray | float, span: float = 0.04, steps: int = 48
+) -> tuple[float, float]:
+    """Search near ``coarse`` for the (period, offset) best aligned to the peaks."""
+    length = profile.shape[0]
+    weights = np.clip(profile - float(np.median(profile)), 0, None)
+
+    best_score, best = -np.inf, (float(coarse), 0.0)
+    for period in np.linspace(coarse * (1 - span), coarse * (1 + span), steps):
+        positions = np.arange(0.0, length, period)
+        for offset in np.linspace(0.0, period, steps, endpoint=False):
+            index = np.round(positions + offset).astype(int)
+            index = index[(index >= 0) & (index < length)]
+            score = float(weights[index].sum()) / max(len(index), 1)
+            if score > best_score:
+                best_score, best = score, (float(period), float(offset))
+
+    period, offset = best
     return period, offset % period
 
 
 def _boundary_positions(offset: float, period: float, x_lo: float, x_hi: float) -> np.ndarray:
-    first = offset + np.ceil((x_lo - offset) / period) * period
-    count = int(np.floor((x_hi - first) / period)) + 1
+    """Grid lines bracketing ``[x_lo, x_hi]``, not merely those inside it.
+
+    The keyboard's two outer edges are key boundaries as much as any separator,
+    but nothing is drawn there — the board simply ends. Starting at the first
+    gridline *inside* the detected extent therefore discarded the outermost key
+    at each end, and every pitch shifted with them.
+    """
+    first = offset + np.floor((x_lo - offset) / period) * period
+    count = int(np.ceil((x_hi - first) / period)) + 1
     return first + np.arange(max(count, 0)) * period
 
 
-def _keyboard_extent(profile: np.ndarray, config: Config) -> tuple[int, int]:
-    """Columns spanned by the keyboard, ignoring quiet margins."""
-    threshold = profile.max() * config.calibration.extent_ratio
-    active = np.flatnonzero(profile > threshold)
-    if active.size < 2:
+def _keyboard_extent(
+    keybed: np.ndarray, background_level: float, config: Config
+) -> tuple[int, int]:
+    """Columns the keyboard actually occupies.
+
+    Measured as difference from the fall area's background, not as edge energy.
+    Edges were the wrong signal: the outermost key has no separator line on its
+    far side, so both ends of the board registered as empty and were cut from
+    the grid — losing two keys at each end and shifting every pitch with them.
+    """
+    difference = np.abs(keybed.mean(axis=0) - background_level)
+    threshold = float(difference.max()) * config.calibration.extent_ratio
+    inside = np.flatnonzero(difference > threshold)
+    if inside.size < 2:
         raise CalibrationError("could not find the horizontal extent of the keyboard")
-    return int(active[0]), int(active[-1])
+    return int(inside[0]), int(inside[-1])
 
 
 def _classify_black(values: np.ndarray, white_reference: float) -> np.ndarray:
@@ -255,8 +327,16 @@ def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
     gray = _gray(background).astype(np.float32)
     lower = _band(gray, top, bottom, *cfg.white_band)
     edges = np.abs(cv2.Sobel(lower, cv2.CV_32F, 1, 0, ksize=3)).mean(axis=0)
+    # A 1px separator gives an antisymmetric Sobel response, so its magnitude
+    # peaks on *both* sides with a dip on the line itself. Left as a doublet the
+    # grid latches onto one half and sits a pixel or two off true, which is
+    # enough to drop a key at the end of the board. Smoothing merges each pair
+    # back into a single peak centred on the line.
+    edges = np.convolve(edges, np.ones(3, dtype=np.float32) / 3.0, mode="same")
 
-    x_lo, x_hi = _keyboard_extent(edges, config)
+    x_lo, x_hi = _keyboard_extent(
+        gray[top:bottom], float(np.median(gray[:top])), config
+    )
     period, offset = estimate_period(edges, cfg.min_key_px, cfg.max_key_px)
     boundaries = _boundary_positions(offset, period, x_lo, x_hi)
     if boundaries.size < 2:

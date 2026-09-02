@@ -33,10 +33,17 @@ class VideoConfig:
 class CalibrationConfig:
     """Fitting the keyboard grid (stage 3)."""
 
-    # The strike line is placed where row activity drops most sharply. That drop
-    # must be at least this fraction of the busiest row, or the video is rejected
-    # as not having a still keyboard under a moving area at all.
-    activity_ratio: float = 0.15
+    # The strike line is placed where the background's horizontal structure
+    # rises most sharply: keybed rows cross white and black keys and so vary
+    # hugely, while fall-area rows are near-uniform. Measured across the themes
+    # that is a row spread of ~73 against ~2-6, so a modest floor separates
+    # them and rejects video that is not a keyboard under a falling area.
+    min_keybed_contrast: float = 20.0
+
+    # Renderers often shade the top few rows of the keybed. After the split,
+    # rows above it are reclaimed while they still carry this share of the
+    # keybed's structure — without it the strike line lands 2-3px low.
+    keybed_edge_ratio: float = 0.25
 
     # Fractional depth range searched for the strike line. Keybeds occupy roughly
     # the bottom 15-35% of the frame, so the split is never near the top.
@@ -98,12 +105,21 @@ class TileConfig:
     # A key must be this covered by a blob to be claimed from it.
     min_coverage: float = 0.60
 
-    # Rows at least this filled are part of a tile; the gaps split repeated notes.
-    row_fill_ratio: float = 0.50
+    # Rows at least this filled are part of a tile. The bar is low because what
+    # separates two repeated notes is *background* — a genuine gap is empty,
+    # not half full — whereas a rounded cap or a bloom-softened edge is only
+    # partly covered and must not be read as a break in the middle of a tile.
+    row_fill_ratio: float = 0.20
 
     # A region less filled than this is an outlined tile, whose middle is empty
     # by design, rather than two stacked tiles with a seam between them.
     outline_fill_ratio: float = 0.45
+
+    # ...but only if its side edges run nearly the full height, which is what
+    # makes an outline an outline. Judged separately from row_fill_ratio: that
+    # bar is deliberately low, and reusing it let a key with a neighbour
+    # bleeding into one edge column pass as hollow.
+    outline_edge_ratio: float = 0.80
 
 
 @dataclass(frozen=True)
