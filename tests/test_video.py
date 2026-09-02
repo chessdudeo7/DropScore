@@ -81,6 +81,25 @@ def test_sample_returns_requested_count(clip: Path) -> None:
     assert indices[-1] < CLIP_FRAMES - 1
 
 
+def test_sample_never_returns_the_same_frame_twice(clip: Path) -> None:
+    """Asking for more samples than the clip holds used to repeat frames.
+
+    Calibration takes a temporal median and per-row activity over these, so
+    duplicates quietly weight some frames double.
+    """
+    with VideoReader(clip) as reader:
+        frames = reader.sample(CLIP_FRAMES * 4)
+
+    indices = [f.index for f in frames]
+    assert len(indices) == len(set(indices))
+    assert len(indices) <= CLIP_FRAMES
+
+
+def test_sample_still_returns_what_it_can_for_a_big_request(clip: Path) -> None:
+    with VideoReader(clip) as reader:
+        assert len(reader.sample(CLIP_FRAMES * 4)) > CLIP_FRAMES // 2
+
+
 def test_sample_ignores_margin_when_clip_is_short(clip: Path) -> None:
     """Asking for more samples than the margin allows widens to the whole clip."""
     with VideoReader(clip) as reader:

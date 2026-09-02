@@ -21,7 +21,14 @@ from .overlay import annotate, dump_frames, dump_video
 from .score import Analysis, ScoreError, analyze, assign_hands, postprocess, quantize
 from .sources import ResolvedSource, SourceError, parse_youtube_id, resolve
 from .tiles import Palette, Tile, TileError, detect, detect_in_frame, discover_palette
-from .tracking import SpeedEstimate, TileTrack, TrackingError, estimate_speed, transcribe
+from .tracking import (
+    SpeedEstimate,
+    TileTrack,
+    TrackingError,
+    estimate_speed,
+    hands_by_register,
+    transcribe,
+)
 from .video import Frame, VideoError, VideoInfo, VideoReader
 
 __all__ = [
@@ -51,6 +58,7 @@ __all__ = [
     "TileTrack",
     "TrackingError",
     "estimate_speed",
+    "hands_by_register",
     "transcribe",
     # video
     "Frame",

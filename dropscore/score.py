@@ -308,6 +308,21 @@ def quantize(
     produces notation that looks confidently incorrect.
     """
     cfg = config.score
+
+    if cfg.steps_per_beat <= 0:
+        # Quantization off. Handled here rather than only in postprocess, so
+        # that calling this directly — it is public API, and "no grid" is a
+        # setting the UI offers — cannot divide by zero.
+        return (
+            NoteSequence.of(
+                list(sequence),
+                tempo=analysis.tempo,
+                key=analysis.key,
+                source=sequence.source,
+            ),
+            0,
+        )
+
     step = analysis.beat / cfg.steps_per_beat
     tolerance = step * cfg.max_shift
 
@@ -380,13 +395,6 @@ def postprocess(
     """Hands, tempo, key and quantization in one pass."""
     handed = assign_hands(sequence, config)
     analysis = analyze(handed, config)
-
-    if config.score.steps_per_beat <= 0:
-        # Quantization off: keep the measured times, still report what was
-        # inferred about the piece.
-        handed.tempo, handed.key = analysis.tempo, analysis.key
-        return handed, analysis
-
     result, skipped = quantize(handed, analysis, config)
 
     if skipped:

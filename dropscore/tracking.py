@@ -247,9 +247,14 @@ def _cross_time(times: Sequence[float], edges: Sequence[float], strike_y: int, s
 
 
 def track_to_note(
-    track: TileTrack, speed: float, calibration: Calibration, config: Config = DEFAULT
+    track: TileTrack,
+    speed: float,
+    calibration: Calibration,
+    config: Config = DEFAULT,
+    hands: dict[int, Hand] | None = None,
 ) -> Note | None:
     """Convert one tile track into a note, or None if it is not usable."""
+    hands = hands or {}
     cfg = config.tracking
     if track.length < cfg.min_observations:
         return None
@@ -285,19 +290,43 @@ def track_to_note(
     if duration < cfg.min_duration:
         return None
 
-    hand: Hand = "L" if track.track == 1 else "R"
     return Note(
         onset=max(0.0, onset),
         pitch=track.pitch,
         duration=duration,
-        hand=hand,
+        hand=hands.get(track.track, "R"),
     )
+
+
+def hands_by_register(tracks: Sequence[TileTrack]) -> dict[int, Hand]:
+    """Decide which palette belongs to which hand, by register.
+
+    Palettes are numbered by how many pixels they cover, which says nothing
+    about which hand they are — so mapping index 1 to the left hand was
+    arbitrary, and silently collapsed every colour past the second into the
+    right hand.
+
+    The lowest-sounding colour is taken as the left hand instead. With a single
+    colour there is nothing to distinguish, so everything is nominally right and
+    stage 7 splits it by pitch.
+    """
+    registers: dict[int, list[int]] = {}
+    for track in tracks:
+        if track.length:
+            registers.setdefault(track.track, []).append(track.pitch)
+
+    if len(registers) < 2:
+        return {index: "R" for index in registers}
+
+    lowest = min(registers, key=lambda index: float(np.median(registers[index])))
+    return {index: ("L" if index == lowest else "R") for index in registers}
 
 
 def tracks_to_notes(
     tracks: Sequence[TileTrack], speed: float, calibration: Calibration, config: Config = DEFAULT
 ) -> NoteSequence:
-    notes = [track_to_note(t, speed, calibration, config) for t in tracks]
+    hands = hands_by_register(tracks)
+    notes = [track_to_note(t, speed, calibration, config, hands) for t in tracks]
     return NoteSequence.of([n for n in notes if n is not None])
 
 

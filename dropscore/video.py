@@ -112,6 +112,16 @@ class Frame:
         return self.image.shape[1]
 
 
+def _spread(lo: int, hi: int, count: int) -> np.ndarray:
+    """Up to ``count`` distinct indices spread evenly over ``[lo, hi)``.
+
+    Asking for more samples than the range holds used to return the same frame
+    several times, which quietly skews the temporal median and per-row activity
+    that calibration is built on — a short clip would weight some frames double.
+    """
+    return np.unique(np.linspace(lo, max(lo, hi - 1), num=count, dtype=int))
+
+
 def _positive(value: float, fallback: float) -> float:
     """OpenCV reports 0, NaN or negatives for properties it cannot determine."""
     if value is None or not np.isfinite(value) or value <= 0:
@@ -273,7 +283,7 @@ class VideoReader:
             lo, hi = 0, total
 
         frames: list[Frame] = []
-        for i in np.linspace(lo, max(lo, hi - 1), num=count, dtype=int):
+        for i in _spread(lo, hi, count):
             frame = self.read_at(int(i))
             if frame is not None:
                 frames.append(frame)
@@ -302,6 +312,6 @@ class VideoReader:
         hi = int(total * (1.0 - cfg.calibration_margin))
         if hi - lo < count:
             lo, hi = 0, total
-        wanted = set(int(i) for i in np.linspace(lo, max(lo, hi - 1), num=count, dtype=int))
+        wanted = {int(i) for i in _spread(lo, hi, count)}
 
         return [f for f in self.frames() if f.index in wanted]

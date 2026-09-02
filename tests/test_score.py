@@ -263,6 +263,28 @@ def test_fixed_key_overrides_the_estimate() -> None:
     assert analysis.key_confidence == 1.0
 
 
+def test_quantize_handles_a_disabled_grid_itself() -> None:
+    """It is public API and "no grid" is a setting, so it must not divide by zero."""
+    sequence = _grid(120.0)
+    analysis = analyze(sequence)
+
+    result, skipped = quantize(sequence, analysis, Config(score=ScoreConfig(steps_per_beat=0)))
+
+    assert skipped == 0
+    assert [n.onset for n in result] == [n.onset for n in sequence]
+    assert result.tempo == pytest.approx(analysis.tempo)
+    assert result.key == analysis.key
+
+
+def test_quantize_with_no_grid_does_not_mutate_its_input() -> None:
+    sequence = _grid(120.0)
+    analysis = analyze(sequence)
+    before = sequence.tempo
+
+    quantize(sequence, analysis, Config(score=ScoreConfig(steps_per_beat=0)))
+    assert sequence.tempo == before
+
+
 def test_quantization_can_be_switched_off() -> None:
     sequence = generate(seed=3, bars=4, tempo=96.0)
     off = Config(score=ScoreConfig(steps_per_beat=0))

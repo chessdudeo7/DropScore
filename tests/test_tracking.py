@@ -347,3 +347,47 @@ def test_tiles_on_different_keys_never_compete() -> None:
     assert len(tracks) == 2
     assert {t.pitch for t in tracks} == {60, 62}
     assert all(t.length == 4 for t in tracks)
+
+
+# ── palette index is not a hand ──────────────────────────────────────
+
+
+def _track(track_index: int, pitch: int):
+    from dropscore.tracking import TileTrack  # noqa: PLC0415
+
+    made = TileTrack(pitch=pitch, track=track_index)
+    made.observe(_tile(pitch, 100.0, 0.0))
+    return made
+
+
+def test_the_lower_colour_becomes_the_left_hand() -> None:
+    """Palettes are numbered by pixel count, which says nothing about register."""
+    from dropscore.tracking import hands_by_register  # noqa: PLC0415
+
+    # Track 0 is the bass here; the old index rule would have called it right.
+    hands = hands_by_register([_track(0, 45), _track(0, 48), _track(1, 79), _track(1, 84)])
+    assert hands == {0: "L", 1: "R"}
+
+
+def test_a_third_colour_is_not_silently_swallowed() -> None:
+    """Anything past index 1 used to collapse into the right hand regardless."""
+    from dropscore.tracking import hands_by_register  # noqa: PLC0415
+
+    hands = hands_by_register([_track(0, 80), _track(1, 40), _track(2, 84)])
+    assert hands[1] == "L", "the lowest colour should be the left hand"
+    assert hands[0] == "R" and hands[2] == "R"
+
+
+def test_a_single_colour_is_left_for_stage_seven() -> None:
+    """With one colour there is nothing to tell the hands apart."""
+    from dropscore.tracking import hands_by_register  # noqa: PLC0415
+
+    hands = hands_by_register([_track(0, 40), _track(0, 80)])
+    assert set(hands.values()) == {"R"}
+
+
+def test_hands_ignore_tracks_with_no_observations() -> None:
+    from dropscore.tracking import TileTrack, hands_by_register  # noqa: PLC0415
+
+    hands = hands_by_register([_track(0, 45), _track(1, 80), TileTrack(pitch=60, track=2)])
+    assert set(hands) == {0, 1}
