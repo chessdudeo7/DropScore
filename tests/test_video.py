@@ -123,3 +123,38 @@ def test_close_is_idempotent(clip: Path) -> None:
     reader = VideoReader(clip)
     reader.close()
     reader.close()
+
+
+def test_a_second_live_iterator_is_warned_about(clip: Path, caplog) -> None:
+    """Both share one capture, so interleaving them would corrupt both."""
+    import logging  # noqa: PLC0415
+
+    with VideoReader(clip) as reader:
+        first = reader.frames()
+        next(first)
+
+        with caplog.at_level(logging.WARNING, logger="dropscore.video"):
+            second = reader.frames()
+            next(second)
+
+        assert any("share one capture" in r.message for r in caplog.records)
+        first.close()
+        second.close()
+
+
+def test_a_finished_iterator_leaves_no_trace(clip: Path) -> None:
+    with VideoReader(clip) as reader:
+        list(reader.frames(stop=3))
+        assert reader._open_iterators == 0
+
+        # And a second, sequential pass is silent and correct.
+        again = [f.index for f in reader.frames(stop=3)]
+        assert again == [0, 1, 2]
+
+
+def test_a_closed_iterator_releases_its_claim(clip: Path) -> None:
+    with VideoReader(clip) as reader:
+        stream = reader.frames()
+        next(stream)
+        stream.close()
+        assert reader._open_iterators == 0

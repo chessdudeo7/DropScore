@@ -31,6 +31,50 @@ def _configure_logging(verbose: bool) -> None:
     )
 
 
+def _output_stem(path: Path) -> Path:
+    """Strip a known export extension so several formats can share a base.
+
+    Only *known* extensions are removed. ``Path.with_suffix`` would replace
+    everything after the last dot, so a piece called "prelude.no.2" was written
+    as "prelude.no.mid".
+    """
+    from .export import FORMATS  # noqa: PLC0415
+
+    for suffix in (*(ext for ext, _ in FORMATS.values()), ".notes"):
+        if path.name.endswith(suffix) and len(path.name) > len(suffix):
+            return _output_stem(path.with_name(path.name[: -len(suffix)]))
+    return path
+
+
+def _with_extension(stem: Path, ext: str) -> Path:
+    """Append an extension rather than replacing whatever follows a dot."""
+    return stem if stem.name.endswith(ext) else stem.with_name(stem.name + ext)
+
+
+def _write_formats(sequence, stem: Path, formats: list[str], analysis) -> int:
+    """Write each format, reporting failures instead of stopping at the first.
+
+    PDF needs an engraver that may not be installed. Losing the MIDI because
+    of it would be the same mistake the service used to make.
+    """
+    from .export import extension, write  # noqa: PLC0415
+
+    written, failed = [], []
+    for format in formats:
+        target = _with_extension(stem, extension(format))
+        try:
+            written.append(write(sequence, target, format, analysis))
+        except Exception as exc:  # noqa: BLE001 - one format must not stop the rest
+            failed.append((format, exc))
+
+    for path in written:
+        print(f"  wrote {path}")
+    for format, exc in failed:
+        log.error("could not write %s: %s", format, exc)
+
+    return 0 if written else 1
+
+
 def _config_from_args(args: argparse.Namespace) -> Config:
     return DEFAULT.evolve(video=VideoConfig(max_width=args.max_width))
 
@@ -291,7 +335,6 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
 def cmd_export(args: argparse.Namespace) -> int:
     """Write an existing note JSON out as MIDI, MusicXML or PDF."""
-    from .export import EngraverNotFound, extension, write  # noqa: PLC0415
     from .notes import NoteSequence  # noqa: PLC0415
     from .score import ScoreError, analyze  # noqa: PLC0415
 
@@ -303,16 +346,8 @@ def cmd_export(args: argparse.Namespace) -> int:
     except ScoreError as exc:
         log.warning("could not analyse the notes (%s); using defaults", exc)
 
-    stem = Path(args.output) if args.output else Path(args.notes).with_suffix("")
-    for format in args.format:
-        target = stem if stem.suffix == extension(format) else stem.with_suffix(extension(format))
-        try:
-            print(write(sequence, target, format, analysis))
-        except EngraverNotFound as exc:
-            log.error("%s", exc)
-            return 1
-
-    return 0
+    stem = _output_stem(Path(args.output or args.notes))
+    return _write_formats(sequence, stem, args.format or ["midi"], analysis)
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
@@ -370,22 +405,10 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         except ScoreError as exc:
             log.warning("could not analyse the notes (%s); leaving them raw", exc)
 
-    from .export import EngraverNotFound, extension  # noqa: PLC0415
-    from .export import write as export_write  # noqa: PLC0415
-
-    stem = Path(args.output) if args.output else Path(f"{source.label}.notes")
-    stem = stem.with_suffix("")
+    stem = _output_stem(Path(args.output or f"{source.label}.notes"))
     print(f"{len(sequence)} notes over {sequence.duration:.1f}s")
 
-    for format in args.format or ["json"]:
-        target = stem.with_suffix(extension(format))
-        try:
-            print(f"  wrote {export_write(sequence, target, format, analysis)}")
-        except EngraverNotFound as exc:
-            log.error("%s", exc)
-            return 1
-
-    return 0
+    return _write_formats(sequence, stem, args.format or ["json"], analysis)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from dropscore.calibrate import Calibration
+from dropscore.config import DEFAULT
 from dropscore.notes import Note, NoteSequence
 from dropscore.synth import RenderSpec, SynthRenderer, generate, get_theme
 from dropscore.tiles import discover_palette
@@ -244,7 +245,7 @@ def _tile(pitch: int, bottom: float, time: float, height: float = 20.0):
     )
 
 
-def _calibration(strike_y: int = 400):
+def _plain_calibration(strike_y: int = 400):
     from dropscore.keyboard import KeyboardLayout  # noqa: PLC0415
 
     layout = KeyboardLayout(width=960.0)
@@ -266,7 +267,7 @@ def test_two_tiles_on_one_key_do_not_share_a_track() -> None:
     """
     from dropscore.tracking import build_tracks  # noqa: PLC0415
 
-    calibration = _calibration()
+    calibration = _plain_calibration()
     speed = 100.0
 
     # Frame 1: two tiles on the same key, 60px apart.
@@ -290,7 +291,7 @@ def test_the_closer_pairing_wins_regardless_of_tile_order() -> None:
     """Assignment is by agreement, not by whichever tile was listed first."""
     from dropscore.tracking import build_tracks  # noqa: PLC0415
 
-    calibration = _calibration()
+    calibration = _plain_calibration()
     first = [_tile(60, 100, 0.0), _tile(60, 200, 0.0)]
 
     # Same second frame, tiles listed in both orders.
@@ -320,7 +321,7 @@ def test_the_closer_pairing_wins_regardless_of_tile_order() -> None:
 def test_a_single_tile_still_follows_one_track() -> None:
     from dropscore.tracking import build_tracks  # noqa: PLC0415
 
-    calibration = _calibration()
+    calibration = _plain_calibration()
     detections = [
         (Frame(i, i * 0.1, np.zeros((1, 1, 3), np.uint8), 1.0), [_tile(60, 100 + i * 10, i * 0.1)])
         for i in range(5)
@@ -334,7 +335,7 @@ def test_a_single_tile_still_follows_one_track() -> None:
 def test_tiles_on_different_keys_never_compete() -> None:
     from dropscore.tracking import build_tracks  # noqa: PLC0415
 
-    calibration = _calibration()
+    calibration = _plain_calibration()
     detections = [
         (
             Frame(i, i * 0.1, np.zeros((1, 1, 3), np.uint8), 1.0),
@@ -391,3 +392,58 @@ def test_hands_ignore_tracks_with_no_observations() -> None:
 
     hands = hands_by_register([_track(0, 45), _track(1, 80), TileTrack(pitch=60, track=2)])
     assert set(hands) == {0, 1}
+
+
+# ── input validation and short notes ─────────────────────────────────
+
+
+def test_speed_rejects_unevenly_spaced_frames() -> None:
+    """sample() jumps across the video; phase correlation needs a steady step."""
+    renderer = _renderer()
+    calibration = _calibration(renderer)
+    scattered = [
+        Frame(i, i / renderer.spec.fps, renderer.frame(i), 1.0) for i in (0, 1, 2, 40, 80)
+    ]
+
+    with pytest.raises(TrackingError, match="evenly spaced"):
+        estimate_speed(scattered, calibration)
+
+
+def test_speed_accepts_a_uniform_step() -> None:
+    """Every second frame is fine: the gap is constant, so dy/dt still holds."""
+    renderer = _renderer()
+    calibration = _calibration(renderer)
+    strided = [
+        Frame(i, i / renderer.spec.fps, renderer.frame(i), 1.0) for i in range(0, 40, 2)
+    ]
+
+    estimate = estimate_speed(strided, calibration)
+    assert estimate.value == pytest.approx(renderer.speed, rel=0.1)
+
+
+def test_a_very_short_note_is_kept_not_dropped() -> None:
+    """Losing a note costs recall permanently; a long one is fixed by quantizing."""
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    track = TileTrack(pitch=60, track=0)
+    # A tile only a couple of pixels tall: a real, very short note.
+    track.observe(_tile(60, 300.0, 0.0, height=2.0))
+    track.observe(_tile(60, 310.0, 0.1, height=2.0))
+
+    note = track_to_note(track, 100.0, calibration)
+    assert note is not None, "a short note was discarded"
+    assert note.duration >= DEFAULT.tracking.min_duration
+
+
+def test_contradictory_edges_are_dropped() -> None:
+    """If the top crosses before the bottom, the two estimates disagree."""
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    track = TileTrack(pitch=60, track=0)
+    track.times = [0.0, 0.1]
+    track.bottoms = [300.0, 310.0]
+    track.tops = [340.0, 350.0]  # top below the bottom: inconsistent
+
+    assert track_to_note(track, 100.0, calibration) is None

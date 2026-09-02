@@ -108,6 +108,18 @@ def estimate_speed(
     if len(frames) < 2:
         raise TrackingError("need at least two consecutive frames to measure speed")
 
+    # Phase correlation measures how far the tiles moved between one frame and
+    # the next, so the frames must be evenly spaced in time. Handing this the
+    # output of sample(), which jumps across the whole video, would otherwise
+    # fail obscurely — every pair filtered out as implausible — rather than
+    # saying what was wrong.
+    gaps = {frames[i + 1].index - frames[i].index for i in range(len(frames) - 1)}
+    if len(gaps) > 1 or gaps == {0} or min(gaps) < 0:
+        raise TrackingError(
+            f"scroll speed needs evenly spaced frames; got gaps of "
+            f"{sorted(gaps)} frames. Use reader.frames(), not reader.sample()."
+        )
+
     region = calibration.strike_y
     images = [f.image[:region] for f in frames]
     if background is None:
@@ -287,8 +299,16 @@ def track_to_note(
         # back to the tallest observation, which is a lower bound.
         duration = max(b - t for t, b in zip(track.tops, track.bottoms)) / speed
 
-    if duration < cfg.min_duration:
+    if duration <= 0:
+        # The top edge appears to cross before the bottom did, so the two
+        # estimates contradict each other and there is nothing to salvage.
+        log.debug("dropping pitch %d: offset precedes onset", track.pitch)
         return None
+
+    # A very short measurement is far more likely to be a real short note than
+    # nothing at all, so clamp rather than discard. Losing a note costs recall
+    # permanently; a slightly long one is fixed by quantization.
+    duration = max(duration, cfg.min_duration)
 
     return Note(
         onset=max(0.0, onset),

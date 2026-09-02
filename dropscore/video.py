@@ -142,6 +142,7 @@ class VideoReader:
     def __init__(self, path: str | Path, config: Config = DEFAULT) -> None:
         self.path = Path(path)
         self.config = config
+        self._open_iterators = 0
 
         if not self.path.exists():
             raise VideoError(f"No such file: {self.path}")
@@ -228,24 +229,41 @@ class VideoReader:
         if step < 1:
             raise ValueError(f"step must be >= 1, got {step}")
 
-        cap = self._capture
-        cap.set(cv2.CAP_PROP_POS_FRAMES, start)
-        index = start
+        # There is one capture behind every iterator, and each read advances it.
+        # Two iterators alive at once would interleave their reads and hand both
+        # callers the wrong frames, silently. Warn rather than raise: a
+        # half-consumed generator stays "open" until it is garbage collected, so
+        # refusing outright would reject legitimate use.
+        if self._open_iterators:
+            log.warning(
+                "%s: a second frame iterator was opened while %d is still active; "
+                "they share one capture and will interleave",
+                self.path.name,
+                self._open_iterators,
+            )
+        self._open_iterators += 1
 
-        while stop is None or index < stop:
-            if not cap.grab():
-                return
-            ok, image = cap.retrieve()
-            if not ok or image is None:
-                return
-            yield self._prepare(image, index)
+        try:
+            cap = self._capture
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+            index = start
 
-            # Skip the next step-1 frames without decoding them.
-            for _ in range(step - 1):
+            while stop is None or index < stop:
                 if not cap.grab():
                     return
+                ok, image = cap.retrieve()
+                if not ok or image is None:
+                    return
+                yield self._prepare(image, index)
+
+                # Skip the next step-1 frames without decoding them.
+                for _ in range(step - 1):
+                    if not cap.grab():
+                        return
+                    index += 1
                 index += 1
-            index += 1
+        finally:
+            self._open_iterators -= 1
 
     def read_at(self, index: int) -> Frame | None:
         """Decode a single frame by index, or None if it cannot be read.
