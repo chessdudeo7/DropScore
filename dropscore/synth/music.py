@@ -28,10 +28,15 @@ MAJOR = (0, 2, 4, 5, 7, 9, 11)
 MINOR = (0, 2, 3, 5, 7, 8, 10)
 
 # Triads as scale-degree indices, and the progressions they appear in.
+# Every one begins on the tonic. A progression that opens elsewhere — vi IV I V
+# was here — spends more bars away from home than on it, and since the left hand
+# holds a triad on the bar's degree throughout, the piece's weighted pitch
+# content then implies a different key from the one it was generated in. That
+# makes it useless as ground truth for key detection.
 _PROGRESSIONS = (
     (0, 5, 3, 4),  # I  vi IV V
     (0, 3, 4, 0),  # I  IV V  I
-    (5, 3, 0, 4),  # vi IV I  V
+    (0, 3, 5, 4),  # I  IV vi V
     (0, 4, 5, 3),  # I  V  vi IV
 )
 
@@ -71,7 +76,14 @@ def generate(
 
     for index in range(bars):
         start = index * bar
-        degree = progression[index % len(progression)]
+        # Open and close on the tonic. Without it the progressions — written
+        # with major keys in mind — can dwell longer on the subdominant than
+        # the tonic, and the piece genuinely implies a different key from the
+        # one it was generated in. Ambiguity like that belongs in real music,
+        # not in a corpus used as ground truth for key detection.
+        degree = (
+            0 if index in (0, bars - 1) else progression[index % len(progression)]
+        )
 
         notes.extend(_left_hand(rng, tonic, scale, degree, start, beat, index))
         notes.extend(_right_hand(rng, tonic, scale, degree, start, beat, index))
@@ -90,8 +102,33 @@ def generate(
     )
 
     return NoteSequence.of(
-        notes, tempo=tempo, key=key, source=f"synthetic:seed={seed}"
+        _drop_impossible_overlaps(notes),
+        tempo=tempo,
+        key=key,
+        source=f"synthetic:seed={seed}",
     )
+
+
+def _drop_impossible_overlaps(notes: list[Note]) -> list[Note]:
+    """Remove notes that restrike a key already sounding.
+
+    The hands are written independently, so both can land on one pitch at once
+    — a held left-hand C with a short right-hand C inside it. No piano can do
+    that, and the renderer draws the second tile over the first, splitting it
+    in two. Ground truth then claims two notes where the video shows three
+    fragments, and the pipeline is marked wrong for reading the picture
+    correctly.
+    """
+    sounding: dict[int, float] = {}
+    keep: list[Note] = []
+
+    for note in sorted(notes):
+        if note.onset < sounding.get(note.pitch, -1.0):
+            continue
+        sounding[note.pitch] = note.offset
+        keep.append(note)
+
+    return keep
 
 
 def _left_hand(
@@ -105,6 +142,14 @@ def _left_hand(
 ) -> list[Note]:
     root = _degree_pitch(tonic - 12, scale, degree)
     triad = [root, _degree_pitch(tonic - 12, scale, degree + 2), root + 12]
+
+    # Raise the seventh on the dominant chord of a minor key, as harmonic minor
+    # does. Without a leading tone, natural minor shares every pitch with its
+    # relative major and sits a fifth away from its subdominant minor, so the
+    # generated music was genuinely ambiguous about its own key — and ground
+    # truth that disagrees with its own content is worse than none.
+    if scale is MINOR and degree == 4:
+        triad[1] += 1
 
     # Every fourth bar, play the chord as a block instead of broken, so tiles
     # start on the same frame across several keys at once.

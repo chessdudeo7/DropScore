@@ -571,8 +571,11 @@ def test_source_is_deleted_even_when_the_job_fails(tmp_path: Path) -> None:
         raise RuntimeError("boom")
 
     store.submit(job, work)
+    # Wait on `finished`, not on status: status is set in the except block and
+    # the cleanup runs in the finally after it, so polling status can catch the
+    # job a moment before its source is released.
     for _ in range(100):
-        if job.status is Status.ERROR:
+        if job.finished is not None:
             break
         time.sleep(0.05)
 

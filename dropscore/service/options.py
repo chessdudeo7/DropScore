@@ -12,6 +12,7 @@ and was silently ignored, which is worse than not offering it.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from typing import Any, Literal
 
@@ -52,7 +53,14 @@ class TranscribeOptions(BaseModel):
         if value == "auto":
             return value
         parts = value.split()
-        if len(parts) != 2 or parts[1] not in {"major", "minor"}:
+        # The tonic is checked too. Validating only the quality word let "H
+        # major" through, which is a note name in German but not one this
+        # pipeline has ever heard of.
+        if (
+            len(parts) != 2
+            or not re.fullmatch(r"[A-G][#b]?", parts[0])
+            or parts[1] not in {"major", "minor"}
+        ):
             raise ValueError(f"key must be 'auto' or like 'F major', got {value!r}")
         return value
 

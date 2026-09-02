@@ -43,7 +43,12 @@ class CalibrationConfig:
     # Renderers often shade the top few rows of the keybed. After the split,
     # rows above it are reclaimed while they still carry this share of the
     # keybed's structure — without it the strike line lands 2-3px low.
-    keybed_edge_ratio: float = 0.25
+    #
+    # Both bounds matter. On a short clip the temporal median keeps some tile
+    # content, so the fall area is not structureless and an unbounded walk
+    # climbed 200px into it; the reclaim is only ever worth a few rows.
+    keybed_edge_ratio: float = 0.50
+    keybed_edge_max: float = 0.02  # of frame height
 
     # Fractional depth range searched for the strike line. Keybeds occupy roughly
     # the bottom 15-35% of the frame, so the split is never near the top.
@@ -89,7 +94,10 @@ class TileConfig:
 
     # Palette discovery.
     max_palettes: int = 4
-    merge_distance: float = 12.0  # chroma distance below which colours are one
+    # Hue tolerance in degrees. Colours within this of each other are one
+    # voice, which keeps a gradient- or bloom-shaded tile from splitting into
+    # several palettes while leaving genuinely different hands apart.
+    merge_distance: float = 25.0
     min_palette_share: float = 0.05
     max_sample_pixels: int = 200_000
 
@@ -134,6 +142,9 @@ class TrackingConfig:
     min_speed: float = 20.0  # px/s
     max_speed: float = 2000.0
     min_speed_samples: int = 5
+    # Tile steps needed before a direct measurement is trusted over
+    # correlation. Each is one tile seen in two consecutive frames.
+    min_tile_speed_samples: int = 20
 
     # Association. A tile can only be where the known speed puts it, so the gate
     # is a fraction of the distance it should have travelled since last seen.

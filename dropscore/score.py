@@ -111,6 +111,13 @@ def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[fl
     acceptable = np.flatnonzero(scores >= best * cfg.tatum_tolerance)
     tatum = float(periods[acceptable[-1]])
 
+    # The coarse scan steps by about a millisecond, and being one step out
+    # accumulates: over a few seconds the grid slides far enough that notes
+    # sitting exactly on it no longer snap. Refine locally before reading the
+    # phase off it.
+    fine = np.linspace(tatum * 0.98, tatum * 1.02, 201)
+    tatum = float(fine[int(np.argmax([abs(_coherence(onsets, p)) for p in fine]))])
+
     # Phase must be read at the tatum, not at the beat. Onsets spread evenly
     # across a beat's subdivisions cancel out in the beat-period sum — four
     # sixteenths sit at 0, 90, 180 and 270 degrees and average to nothing — so
@@ -127,7 +134,19 @@ def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[fl
 
 
 def _beat_from_tatum(tatum: float, cfg) -> float:
-    """Scale the tatum up to the multiple whose tempo is most plausible."""
+    """Scale the tatum up to a beat.
+
+    The finest grid a piece uses is usually its sixteenth, so ``steps_per_beat``
+    tatums to the beat is the reading to prefer. Choosing purely by nearness to
+    a tempo prior does not work: at 72 BPM it picks three tatums and at 144 it
+    picks six, reporting ~95 BPM for both because that is what sits closest to
+    the prior. The prior is only a tie-breaker for when the expected multiple
+    gives an implausible tempo.
+    """
+    expected = tatum * cfg.steps_per_beat
+    if cfg.steps_per_beat > 0 and cfg.min_bpm <= 60.0 / expected <= cfg.max_bpm:
+        return expected
+
     candidates = []
     for multiple in BEAT_MULTIPLES:
         beat = tatum * multiple

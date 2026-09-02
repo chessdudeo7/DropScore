@@ -347,7 +347,41 @@ def tracks_to_notes(
 ) -> NoteSequence:
     hands = hands_by_register(tracks)
     notes = [track_to_note(t, speed, calibration, config, hands) for t in tracks]
-    return NoteSequence.of([n for n in notes if n is not None])
+    return NoteSequence.of(_merge_overlaps([n for n in notes if n is not None]))
+
+
+def _merge_overlaps(notes: list[Note]) -> list[Note]:
+    """Fuse notes that overlap on the same key.
+
+    A key cannot sound twice at once, so an overlap is not two notes: it is one
+    tile that broke into two tracks for a frame — a glint of bloom or a stray
+    row of antialiasing splitting the blob — and was then timed twice. Genuine
+    repeated notes have a real gap between them and are untouched.
+    """
+    by_pitch: dict[int, list[Note]] = {}
+    for note in notes:
+        by_pitch.setdefault(note.pitch, []).append(note)
+
+    merged: list[Note] = []
+    for pitch, group in by_pitch.items():
+        group.sort(key=lambda note: note.onset)
+        current = group[0]
+        for following in group[1:]:
+            if following.onset < current.offset:
+                end = max(current.offset, following.offset)
+                current = Note(
+                    onset=current.onset,
+                    pitch=pitch,
+                    duration=end - current.onset,
+                    hand=current.hand,
+                    velocity=current.velocity,
+                )
+            else:
+                merged.append(current)
+                current = following
+        merged.append(current)
+
+    return merged
 
 
 def transcribe(

@@ -13,14 +13,18 @@ touch vertically. Both arrive as one connected region and must be split — the
 horizontal case on the key grid, the vertical case at rows where the region
 thins out.
 
-**Palette drift.** Gradient-filled tiles vary in lightness down their body, so
-clustering on full colour splits one tile into two palettes. Lightness is
-downweighted, and clusters that are close in chroma are merged afterwards.
+**Palette drift.** Gradient-filled tiles vary in lightness down their body, and
+bloom adds a whole ramp of dimmer shades, so clustering on colour alone splits
+one tile into several palettes. Clusters of the same *hue* are merged instead:
+dimming pulls a colour toward the neutral axis without turning it, which is why
+merging by chroma distance did not work — measured, two shades of one teal sat
+20 apart in chroma but 4 degrees apart in hue.
 
-A consequence worth stating: a video whose two hands differ only in lightness
-(grey against white, say) collapses to a single track here, because that is
-exactly the signal being discarded to keep gradients intact. Hand assignment then
-falls back to pitch clustering in stage 7, which is the documented no-colour path.
+Two guards fall out of that. Neutral colours are never merged, since two greys
+are two voices told apart by lightness and merging them would discard one hand
+entirely. And a colour the background itself would match is dropped: a dim halo
+can cluster into something nearer the background than the mask's own tolerance,
+at which point it discriminates nothing and matches the whole frame.
 """
 
 from __future__ import annotations
@@ -123,11 +127,46 @@ def discover_palette(
 
     # Drop colours too rare to be a hand; they are usually antialiasing.
     keep = counts >= counts.sum() * cfg.min_palette_share
+
+    # And drop any that the background itself would match. A dim halo can
+    # cluster into a "colour" sitting closer to the background than the mask's
+    # own tolerance, at which point it stops discriminating anything: measured
+    # on the bloom-heavy theme, such a colour matched 95% of the fall area.
+    separation = np.linalg.norm(
+        _weighted(colors, cfg.lightness_weight)
+        - _weighted(background[None, :], cfg.lightness_weight),
+        axis=1,
+    )
+    keep &= separation >= cfg.color_tolerance
+
     if not keep.any():
         raise TileError("no tile colour is common enough to be a voice")
 
     log.debug("palette: %d colours from %d sampled pixels", int(keep.sum()), len(pixels))
     return Palette(background=background, colors=colors[keep], counts=counts[keep])
+
+
+#: Below this Lab chroma a colour has no meaningful hue — greys and near-whites.
+#: Such colours are compared by lightness rather than merged by hue.
+MIN_CHROMA = 12.0
+
+
+def _same_hue(a: np.ndarray, b: np.ndarray, tolerance_degrees: float) -> bool:
+    """Whether two Lab colours are the same hue, ignoring how bright or pale."""
+    chroma_a = float(np.hypot(a[1] - 128.0, a[2] - 128.0))
+    chroma_b = float(np.hypot(b[1] - 128.0, b[2] - 128.0))
+
+    if chroma_a < MIN_CHROMA or chroma_b < MIN_CHROMA:
+        # At least one is neutral, so it has no hue to compare. Leave them
+        # alone: two greys are two voices told apart by lightness, and merging
+        # them would keep one hand's colour and discard the other's, losing
+        # every note that hand played.
+        return False
+
+    difference = np.degrees(
+        np.arctan2(a[2] - 128.0, a[1] - 128.0) - np.arctan2(b[2] - 128.0, b[1] - 128.0)
+    )
+    return bool(abs((difference + 180.0) % 360.0 - 180.0) < tolerance_degrees)
 
 
 def _cluster(
@@ -146,15 +185,23 @@ def _cluster(
     colors = np.stack([pixels[labels == i].mean(axis=0) for i in present])
     counts = np.array([int((labels == i).sum()) for i in present])
 
-    # A gradient tile spans lightness but holds hue; merge those back together.
+    # A gradient tile spans lightness but holds hue, so merge by hue *angle*.
+    # Chroma distance was the wrong measure of that: dimming a colour pulls it
+    # toward the neutral axis, shortening the vector without turning it, so
+    # aurora's two shades of one teal sat 20 apart in chroma while being 4
+    # apart in degrees — and each hand split into two palettes.
     merged_colors: list[np.ndarray] = []
     merged_counts: list[int] = []
     for color, count in sorted(zip(colors, counts), key=lambda pair: -pair[1]):
         for i, existing in enumerate(merged_colors):
-            if np.linalg.norm(color[1:] - existing[1:]) < merge_distance:
-                total = merged_counts[i] + count
-                merged_colors[i] = (existing * merged_counts[i] + color * count) / total
-                merged_counts[i] = total
+            if _same_hue(color, existing, merge_distance):
+                # Keep the dominant member's colour rather than averaging.
+                # Clusters arrive largest-first, so `existing` is the tile's own
+                # colour and `color` is usually its bloom or a shaded end of a
+                # gradient. Averaging the two lands between them — close enough
+                # to the halo that the mask then admits it, which turned the
+                # whole glow field into detected tiles.
+                merged_counts[i] += count
                 break
         else:
             merged_colors.append(color)

@@ -4,12 +4,16 @@ Everything downstream is a function of "which pixel column is which MIDI note",
 so an error of one key transposes the entire transcription. The fit is therefore
 built from three independent signals, each checked against the next:
 
-1. **Where the keybed is** — from temporal activity. Above the strike line tiles
-   move constantly; below it only struck keys change. That discriminator works
-   regardless of palette, unlike brightness.
-2. **How wide a white key is** — from the dominant spatial frequency of the
-   key-separator edges, taken below the black keys where only white keys exist.
-   FFT gives period and phase together, so boundaries come out sub-pixel.
+1. **Where the keybed is** — from how structured each row of the static
+   background is. A keybed row crosses white and black keys and so varies
+   hugely; a fall-area row is near-uniform. Motion looks like the obvious
+   signal and is not: struck keys light up over the keybed's full height, so
+   it is nearly as busy as the falling area.
+2. **How wide a white key is** — from the spatial frequency of the separator
+   edges, taken below the black keys where only white keys exist. The FFT bin
+   is only a starting point; real key widths do not divide the frame exactly,
+   so period and offset are then refined against how well the gridlines sit on
+   the edges.
 3. **Which key is which** — from the black-key pattern. Black keys sit on white
    boundaries in a 2-3 grouping, so the boundary occupancy sequence repeats as
    [1,1,0,1,1,1,0] from C. Finding that rotation pins C, which is the only way to
@@ -121,7 +125,8 @@ def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config)
     # their structure enough to put the split just below the true edge. Walk
     # back up while the rows still look like keys rather than background.
     floor = float(structure[top:].mean()) * cfg.keybed_edge_ratio
-    while top > 0 and structure[top - 1] > floor:
+    limit = max(0, top - max(2, int(height * cfg.keybed_edge_max)))
+    while top > limit and structure[top - 1] > floor:
         top -= 1
 
     # Trim a uniform letterbox below the keys, if any.
