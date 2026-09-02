@@ -228,12 +228,17 @@ def _track_masks(
     # tile and background, so it sits far from both and drops out here.
     solid = closest < cfg.color_tolerance
 
-    kernel = np.ones((3, 3), np.uint8)
-    masks = []
-    for index in range(palette.track_count):
-        mask = ((nearest == index) & solid).astype(np.uint8)
-        masks.append(cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel))
-    return masks
+    # No morphological opening. A 3x3 open erodes a pixel in every direction,
+    # which removes speckle but also annihilates any stroke thinner than three
+    # pixels — and an outlined tile's horizontal edges are two pixels thick.
+    # Losing them broke each outline into two disconnected vertical bars, each
+    # narrower than the minimum tile width and so discarded entirely. Specks are
+    # already excluded by the height and width filters on each contour, which
+    # cost nothing and do not damage real tiles.
+    return [
+        ((nearest == index) & solid).astype(np.uint8)
+        for index in range(palette.track_count)
+    ]
 
 
 def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: Config) -> list[tuple[int, int]]:

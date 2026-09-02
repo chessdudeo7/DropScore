@@ -305,9 +305,11 @@ def track_to_note(
         log.debug("dropping pitch %d: offset precedes onset", track.pitch)
         return None
 
-    # A very short measurement is far more likely to be a real short note than
-    # nothing at all, so clamp rather than discard. Losing a note costs recall
-    # permanently; a slightly long one is fixed by quantization.
+    # Clamp rather than drop. It looks like these should be fragments — the
+    # two edges crossing at once — but measured both ways on the corpus,
+    # dropping them costs 23 real notes of recall to remove 22 spurious ones,
+    # and the corpus scores worse for it. Most are genuine notes whose top edge
+    # was read badly, not phantoms.
     duration = max(duration, cfg.min_duration)
 
     return Note(
