@@ -199,3 +199,40 @@ def test_sparse_unmusical_content_still_calibrates() -> None:
     renderer = SynthRenderer(sequence, spec)
     result = calibrate(_frames(renderer))
     assert result.layout.first_pitch == 36
+
+
+def test_black_classification_survives_lit_keys() -> None:
+    """A key lit by the player must not drag the black/white split with it.
+
+    Two-means seeded at the extremes put the line between "normal" and
+    "outlier" rather than between black and white, so every real black key
+    landed on the white side. Values here are taken from a real recording.
+    """
+    from dropscore.calibrate import _classify_black
+
+    samples = np.array(
+        [83, 43, 20, 89, 16, 87, 32, 88, 209, 127, 184, 86, 84, 85, 82, 17]
+    )
+    black = _classify_black(samples, white_reference=101.0)
+
+    assert black[samples < 50].all(), "dark boundaries are black keys"
+    assert not black[samples > 80].any(), "bright ones, lit or not, are gaps"
+
+
+def test_keybed_beats_a_burned_in_caption() -> None:
+    """A thin band of white-on-black text outscores a keybed on mean structure.
+
+    Real videos carry captions, and a two-line title is denser per row than a
+    keyboard is. What separates them is depth, so the band is chosen on total
+    structure and the caption loses by six to one.
+    """
+    from dropscore.calibrate import _runs_above
+
+    structure = np.zeros(720, dtype=np.float32)
+    structure[300:420] = 44.0  # a keybed: moderate, deep
+    structure[690:706] = 54.0  # a caption: denser, thin
+
+    runs = _runs_above(structure, threshold=20.0, minimum=12)
+    top, end = max(runs, key=lambda run: float(structure[run[0] : run[1]].sum()))
+
+    assert (top, end) == (300, 420)

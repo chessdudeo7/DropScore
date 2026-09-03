@@ -291,7 +291,7 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
     from .calibrate import calibrate  # noqa: PLC0415
     from .score import ScoreError, postprocess  # noqa: PLC0415
     from .tiles import discover_palette  # noqa: PLC0415
-    from .tracking import estimate_speed, transcribe  # noqa: PLC0415
+    from .tracking import measure_scroll_speed, transcribe  # noqa: PLC0415
     from .video import VideoReader  # noqa: PLC0415
 
     video = Path(video)
@@ -306,9 +306,7 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
             calibration = calibrate(samples, config)
             palette = discover_palette(samples, calibration, config)
 
-            start = (reader.info.frame_count or 0) // 3
-            window = list(reader.frames(start=start, stop=start + 40))
-            speed = estimate_speed(window, calibration, config=config)
+            speed = measure_scroll_speed(reader, calibration, 40, config=config)
 
             estimate = transcribe(reader.frames(), calibration, palette, speed, config)
 

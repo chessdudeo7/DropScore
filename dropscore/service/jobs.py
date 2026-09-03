@@ -375,7 +375,7 @@ def transcribe_job(
     from ..export import extension, write as export_write  # noqa: PLC0415
     from ..score import ScoreError, postprocess  # noqa: PLC0415
     from ..tiles import discover_palette  # noqa: PLC0415
-    from ..tracking import estimate_speed, transcribe  # noqa: PLC0415
+    from ..tracking import measure_scroll_speed, transcribe  # noqa: PLC0415
     from ..video import VideoReader  # noqa: PLC0415
 
     # Recorded so the store can delete it once the job settles, whatever the
@@ -403,9 +403,7 @@ def transcribe_job(
         job.finish("tiles")
 
         job.begin("timing")
-        start = (info.frame_count or 0) // 3
-        window = list(reader.frames(start=start, stop=start + 40))
-        speed = estimate_speed(window, calibration, config=config)
+        speed = measure_scroll_speed(reader, calibration, 40, config=config)
         job.say(f"scroll speed {speed.value:.1f} px/s (confidence {speed.confidence:.2f})")
         job.finish("timing")
 

@@ -184,8 +184,13 @@ class VideoReader:
             src_h, src_w = probe_frame.shape[:2]
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-        fps = _positive(cap.get(cv2.CAP_PROP_FPS), FALLBACK_FPS)
-        if fps == FALLBACK_FPS:
+        # Compare against what the container reported, not against the result:
+        # testing `fps == FALLBACK_FPS` warned about every honest 30fps video,
+        # which is most of them, and taught the reader to ignore the warning in
+        # exactly the case it exists to flag.
+        reported = cap.get(cv2.CAP_PROP_FPS)
+        fps = _positive(reported, FALLBACK_FPS)
+        if fps != reported:
             log.warning("%s reports no usable frame rate; assuming %.0f fps",
                         self.path.name, FALLBACK_FPS)
 

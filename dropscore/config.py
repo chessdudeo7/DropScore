@@ -50,9 +50,15 @@ class CalibrationConfig:
     keybed_edge_ratio: float = 0.50
     keybed_edge_max: float = 0.02  # of frame height
 
-    # Fractional depth range searched for the strike line. Keybeds occupy roughly
-    # the bottom 15-35% of the frame, so the split is never near the top.
-    split_search: tuple[float, float] = (0.50, 0.95)
+    # A row counts as part of the keybed band once its structure rises this far
+    # from the frame's quiet baseline toward its peak.
+    keybed_band_ratio: float = 0.35
+
+    # Black keys cover this share of a keyboard's depth. Only the part of the
+    # keybed they cross stands out as structure — below them it is near-uniform
+    # white — so the band that is found is scaled up by this to recover the
+    # keybed's full depth.
+    black_height_ratio: float = 0.62
 
     # Sanity bounds on the keybed band, as guards against non-piano video.
     min_keybed_px: int = 12

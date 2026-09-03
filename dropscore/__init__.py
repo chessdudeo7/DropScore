@@ -26,6 +26,7 @@ from .tracking import (
     TileTrack,
     TrackingError,
     estimate_speed,
+    measure_scroll_speed,
     hands_by_register,
     transcribe,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "TileTrack",
     "TrackingError",
     "estimate_speed",
+    "measure_scroll_speed",
     "hands_by_register",
     "transcribe",
     # video

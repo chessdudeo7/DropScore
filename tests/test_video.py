@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from pathlib import Path
 
 import pytest
@@ -158,3 +160,18 @@ def test_a_closed_iterator_releases_its_claim(clip: Path) -> None:
         next(stream)
         stream.close()
         assert reader._open_iterators == 0
+
+
+def test_does_not_warn_about_an_honest_frame_rate(
+    clip: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """30fps is both the fallback and the commonest real rate.
+
+    Comparing the resolved rate against the fallback flagged every ordinary
+    30fps video as unreadable, which trains the reader to ignore the warning.
+    """
+    with caplog.at_level(logging.WARNING, logger="dropscore.video"):
+        with VideoReader(clip) as reader:
+            assert reader.info.fps > 0
+
+    assert "frame rate" not in caplog.text

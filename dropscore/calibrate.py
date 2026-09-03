@@ -104,37 +104,47 @@ def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config)
     structure = gray.std(axis=1)
     height = structure.shape[0]
 
-    lo = int(height * cfg.split_search[0])
-    hi = int(height * cfg.split_search[1])
-    totals = np.cumsum(structure)
-    contrasts = np.array(
-        [
-            (totals[-1] - totals[y - 1]) / (height - y) - totals[y - 1] / y
-            for y in range(lo, hi)
-        ]
-    )
-    top = lo + int(np.argmax(contrasts))
-
-    if float(contrasts.max()) < cfg.min_keybed_contrast:
+    # Find the keybed as a *band*, not as a split with everything below it.
+    # Real videos put the keyboard across the middle of the frame, with the
+    # player's hands and a title card underneath — so "everything below the
+    # strike line is keyboard" is simply not the shape of the picture, and the
+    # split formulation could not describe it at all.
+    baseline = float(np.percentile(structure, 20))
+    peak = float(structure.max())
+    if peak - baseline < cfg.min_keybed_contrast:
         raise CalibrationError(
             "no row of keys under a plain falling area; this may not be a "
             "falling-tile piano video"
         )
 
+    threshold = baseline + (peak - baseline) * cfg.keybed_band_ratio
+    runs = _runs_above(structure, threshold, cfg.min_keybed_px)
+    if not runs:
+        raise CalibrationError("could not find a band of keys in this video")
+
+    # Rank by total structure — mean times depth — not by mean alone. Hands
+    # score 17 against a keybed's 43 and lose either way, but a caption burned
+    # into the corner is white text on black and denser per row than a keyboard
+    # is: measured on a real video, 53.7 against 43.9 over fourteen rows. What
+    # separates them is that a keybed is deep as well as busy, so the totals are
+    # 4527 against 752.
+    top, band_end = max(
+        runs, key=lambda run: float(structure[run[0] : run[1]].sum())
+    )
+
     # Several renderers shade the first few rows of the keybed, which weakens
-    # their structure enough to put the split just below the true edge. Walk
+    # their structure enough to start the band just below the true edge. Walk
     # back up while the rows still look like keys rather than background.
-    floor = float(structure[top:].mean()) * cfg.keybed_edge_ratio
+    floor = float(structure[top:band_end].mean()) * cfg.keybed_edge_ratio
     limit = max(0, top - max(2, int(height * cfg.keybed_edge_max)))
     while top > limit and structure[top - 1] > floor:
         top -= 1
 
-    # Trim a uniform letterbox below the keys, if any.
-    gray = _gray(background)
-    edges = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)).mean(axis=1)
-    bottom = height
-    while bottom > top and edges[bottom - 1] < cfg.min_edge_energy:
-        bottom -= 1
+    # The band that stands out is the part crossed by black keys; below them
+    # the keybed is near-uniform white and barely varies, so it does not show
+    # up as structure at all. Black keys cover a known fraction of a keyboard's
+    # depth, which is enough to recover the rest.
+    bottom = min(height, top + int(round((band_end - top) / cfg.black_height_ratio)))
 
     depth = bottom - top
     if depth < cfg.min_keybed_px:
@@ -147,6 +157,24 @@ def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config)
             f"probably not a falling-tile piano video"
         )
     return top, bottom
+
+
+def _runs_above(profile: np.ndarray, threshold: float, minimum: int) -> list[tuple[int, int]]:
+    """Contiguous stretches of ``profile`` above ``threshold``, as [start, end)."""
+    runs: list[tuple[int, int]] = []
+    start: int | None = None
+
+    for index, value in enumerate(profile):
+        if value > threshold and start is None:
+            start = index
+        elif value <= threshold and start is not None:
+            if index - start >= minimum:
+                runs.append((start, index))
+            start = None
+
+    if start is not None and len(profile) - start >= minimum:
+        runs.append((start, len(profile)))
+    return runs
 
 
 def _band(image: np.ndarray, top: int, bottom: int, lo: float, hi: float) -> np.ndarray:
@@ -258,12 +286,21 @@ def _keyboard_extent(
 
 def _classify_black(values: np.ndarray, white_reference: float) -> np.ndarray:
     """Split boundary samples into black/not-black by distance to white."""
+    # Clip at the known white brightness first. A key lit by the player, or a
+    # hand crossing the board, samples far brighter than an unplayed white key
+    # — measured at 209 against 85 on a real recording — and two-means on the
+    # raw values split those outliers off as their own cluster, leaving every
+    # real black key on the "white" side of the line. Nothing is brighter than
+    # white for this purpose, so folding them down costs no information and
+    # makes the split depend on the black keys rather than on the highlights.
+    values = np.minimum(values, white_reference)
+
     lo, hi = float(values.min()), float(values.max())
     if hi - lo < 1e-6:
         raise CalibrationError("keybed shows no black keys; cannot anchor pitch")
 
     # Two-means on a 1-D signal converges in a couple of passes.
-    centres = np.array([lo, hi])
+    centres = np.array([lo, hi], dtype=np.float64)
     for _ in range(12):
         labels = np.abs(values[:, None] - centres[None, :]).argmin(axis=1)
         for i in (0, 1):
@@ -350,8 +387,18 @@ def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
     # Sample the upper keybed at each interior boundary: dark means a black key.
     upper = _band(gray, top, bottom, *cfg.black_band)
     half = max(1, int(period * cfg.sample_ratio / 2))
+    # The boundaries bracket the keyboard, so the outermost pair can sit beyond
+    # the frame edge. Clamping to a window that is always at least one column
+    # wide keeps those from slicing to nothing and sampling as NaN, which would
+    # otherwise poison the comparison against the white reference and misread
+    # every key on the board as white.
+    width = upper.shape[1]
     samples = np.array(
-        [upper[:, max(0, int(x) - half) : int(x) + half + 1].mean() for x in boundaries]
+        [
+            upper[:, lo : max(lo + 1, min(width, int(x) + half + 1))].mean()
+            for x in boundaries
+            for lo in (min(max(0, int(x) - half), width - 1),)
+        ]
     )
     white_reference = float(np.median(lower))
     black = _classify_black(samples, white_reference)

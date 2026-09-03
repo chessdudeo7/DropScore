@@ -38,7 +38,7 @@ from .calibrate import Calibration
 from .config import Config, DEFAULT
 from .notes import Hand, Note, NoteSequence
 from .tiles import Palette, Tile, detect_in_frame
-from .video import Frame
+from .video import Frame, VideoReader
 
 log = logging.getLogger(__name__)
 
@@ -218,6 +218,90 @@ def estimate_speed(
     speed = float(np.median(values))
     spread = float(np.median(np.abs(values - speed)))
     log.debug("scroll speed %.2f px/s (mad %.2f over %d pairs)", speed, spread, len(values))
+    return SpeedEstimate(value=speed, spread=spread, samples=len(values))
+
+
+def measure_scroll_speed(
+    reader: VideoReader,
+    calibration: Calibration,
+    frames_per_window: int,
+    windows: int = 8,
+    config: Config = DEFAULT,
+) -> SpeedEstimate:
+    """Measure the scroll speed from several windows spread across the video.
+
+    One window is not enough. Phase correlation reads vertical motion from the
+    ends of things, and a piece of long sustained notes draws tiles as tall
+    uniform bars whose bodies look the same wherever they are — the aperture
+    problem. Measured on a real recording of a slow arrangement, a window a
+    third of the way in yielded one usable pair out of forty, while a window
+    over the busier opening gave a clean 6.24px per frame from the same code.
+
+    So the video is probed in several places and the samples pooled. A clip that
+    measures cleanly everywhere is unaffected; one with a quiet stretch no
+    longer depends on where the single probe happened to land.
+    """
+    total = reader.info.frame_count or 0
+    if total <= 0:
+        raise TrackingError("video reports no frame count; cannot place probes")
+
+    # Cover the whole video, ends included. An earlier version kept to the
+    # middle on the theory that the start is a title card, but on a slow piece
+    # the only measurable stretch was the opening: once the arrangement settles
+    # into sustained chords the tiles are bars taller than the fall area, so
+    # neither end of one is ever on screen and there is nothing to correlate.
+    # A probe that lands on a title card simply finds no motion and drops out,
+    # which costs one window and is much cheaper than missing the only good one.
+    windows = max(1, windows)
+    span = max(1, total - frames_per_window)
+    starts = (
+        [int(span * i / (windows - 1)) for i in range(windows)]
+        if windows > 1
+        else [span // 2]
+    )
+
+    pooled: list[float] = []
+    spreads: list[float] = []
+    failures: list[str] = []
+    for start in starts:
+        window = list(reader.frames(start=start, stop=start + frames_per_window))
+        if len(window) < 2:
+            continue
+        try:
+            estimate = estimate_speed(window, calibration, config=config)
+        except TrackingError as exc:
+            failures.append(f"frame {start}: {exc}")
+            continue
+        pooled.append(estimate.value)
+        spreads.append(estimate.spread)
+        log.debug(
+            "speed probe at frame %d: %.2f px/s over %d pairs",
+            start,
+            estimate.value,
+            estimate.samples,
+        )
+
+    if not pooled:
+        raise TrackingError(
+            "could not measure a consistent scroll speed from any of "
+            f"{len(starts)} probes across the video; "
+            + "; ".join(failures)
+        )
+
+    values = np.array(pooled)
+    speed = float(np.median(values))
+
+    # Windows that disagree wildly mean one of them locked onto something that
+    # was not the tiles, so report the disagreement between probes rather than
+    # the within-probe spread — it is the honest measure of confidence here.
+    spread = (
+        float(np.median(np.abs(values - speed)))
+        if len(values) > 1
+        else float(spreads[0])
+    )
+    log.debug(
+        "scroll speed %.2f px/s from %d of %d probes", speed, len(values), len(starts)
+    )
     return SpeedEstimate(value=speed, spread=spread, samples=len(values))
 
 

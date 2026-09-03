@@ -179,7 +179,7 @@ def cmd_debug(args: argparse.Namespace) -> int:
     from .calibrate import calibrate  # noqa: PLC0415
     from .overlay import dump_frames, dump_video  # noqa: PLC0415
     from .tiles import discover_palette  # noqa: PLC0415
-    from .tracking import estimate_speed  # noqa: PLC0415
+    from .tracking import measure_scroll_speed  # noqa: PLC0415
 
     source = resolve(args.source)
     config = _config_from_args(args)
@@ -194,10 +194,8 @@ def cmd_debug(args: argparse.Namespace) -> int:
 
         speed = None
         if not args.grid_only:
-            start = (reader.info.frame_count or 0) // 3
-            window = list(reader.frames(start=start, stop=start + 40))
             try:
-                speed = estimate_speed(window, calibration, config=config)
+                speed = measure_scroll_speed(reader, calibration, 40, config=config)
             except Exception as exc:  # noqa: BLE001 - speed is optional here
                 log.warning("could not measure scroll speed: %s", exc)
 
@@ -373,7 +371,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     """Calibrate, detect, track and time — the pipeline as far as it goes."""
     from .calibrate import calibrate  # noqa: PLC0415
     from .tiles import discover_palette  # noqa: PLC0415
-    from .tracking import estimate_speed, transcribe  # noqa: PLC0415
+    from .tracking import measure_scroll_speed, transcribe  # noqa: PLC0415
 
     source = resolve(args.source)
     config = _config_from_args(args)
@@ -384,11 +382,12 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         palette = discover_palette(samples, calibration, config)
         log.info("%s", calibration)
 
-        # Speed needs consecutive frames, so take a run from a third of the way
-        # in — past any title card, and into the busy part of the piece.
-        start = (reader.info.frame_count or 0) // 3
-        window = list(reader.frames(start=start, stop=start + args.speed_frames))
-        speed = estimate_speed(window, calibration, config=config)
+        # Speed needs consecutive frames, and several probes rather than one:
+        # a stretch of long sustained notes carries no vertical motion to
+        # correlate, so a single window can land somewhere unmeasurable.
+        speed = measure_scroll_speed(
+            reader, calibration, args.speed_frames, config=config
+        )
         log.info("scroll speed %.2f px/s (confidence %.2f)", speed.value, speed.confidence)
 
         sequence = transcribe(reader.frames(), calibration, palette, speed, config)
