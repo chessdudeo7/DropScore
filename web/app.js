@@ -316,7 +316,7 @@ function setFileHint(msg, isError = false) {
 }
 
 function clearFile() {
-  if (state.file) URL.revokeObjectURL(state.file.url);
+  if (state.file && state.file.url) URL.revokeObjectURL(state.file.url);
   state.file = null;
   fileInput.value = '';
   $('#file-preview').hidden = true;
@@ -325,8 +325,13 @@ function clearFile() {
 }
 
 /**
- * Pull metadata and a representative frame straight from the file. Doubles as a
- * decodability check: if the browser cannot open it, neither will the backend.
+ * Pull metadata and a representative frame straight from the file.
+ *
+ * Best effort only. This used to double as a decodability check on the reasoning
+ * that a file the browser cannot open the backend cannot either — which is
+ * simply untrue: Chrome refuses MPEG-4 Part 2 while OpenCV reads it happily, and
+ * that is the very codec `dropscore synth` writes. The check rejected the
+ * project's own output. The server has the real decoder and the final say.
  */
 function probeVideo(file) {
   return new Promise((resolve, reject) => {
@@ -391,7 +396,7 @@ async function acceptFile(file) {
   setFileHint('Reading video…');
   try {
     const meta = await probeVideo(file);
-    if (state.file) URL.revokeObjectURL(state.file.url);
+    if (state.file && state.file.url) URL.revokeObjectURL(state.file.url);
     state.file = { file, ...meta };
 
     $('#file-name').textContent = file.name;
@@ -401,9 +406,20 @@ async function acceptFile(file) {
     $('#file-preview').hidden = false;
     setFileHint(defaultFileHint());
   } catch (err) {
-    state.file = null;
-    $('#file-preview').hidden = true;
-    setFileHint(err.message, true);
+    // Keep the file. A failed preview says something about this browser's
+    // codec support, not about whether the video can be transcribed.
+    if (state.file && state.file.url) URL.revokeObjectURL(state.file.url);
+    state.file = { file, url: null, duration: NaN, width: 0, height: 0 };
+
+    $('#file-name').textContent = file.name;
+    $('#file-badge').textContent = ext.toUpperCase();
+    $('#file-meta').textContent = fmtBytes(file.size);
+    $('#file-preview').hidden = false;
+    setFileHint(
+      api.available
+        ? `No preview — your browser cannot decode ${ext.toUpperCase()}. The server will still try.`
+        : `No preview — your browser cannot decode ${ext.toUpperCase()}.`,
+    );
   }
   syncSubmit();
 }

@@ -133,6 +133,21 @@ THEMES: dict[str, Theme] = {
         keybed_ratio=0.24,
         lead_time=3.0,
     ),
+    # No gap at all, so adjacent keys played together touch and arrive as one
+    # blob. Plenty of real renderers draw this way, and every other theme here
+    # leaves a gap — which meant the corpus could not exercise horizontal
+    # splitting at all, and scored a clean F1 while a merge bug sat in the code.
+    "flush": Theme(
+        name="flush",
+        background=(12, 14, 20),
+        right_color=(255, 176, 59),
+        left_color=(58, 190, 255),
+        tile_style="flat",
+        tile_gap=0.0,
+        glow=0.0,
+        keybed_ratio=0.23,
+        lead_time=2.9,
+    ),
     # Minimal: no glow, no separators, tight gaps, fast scroll.
     "minimal": Theme(
         name="minimal",
