@@ -1,5 +1,5 @@
 {
-  "f1": 0.9913757700205338,
+  "f1": 0.9921907110563091,
   "clips": [
     {
       "name": "aurora_88key_seed0",
@@ -275,15 +275,15 @@
       "name": "paper_88key_seed0",
       "metrics": {
         "reference_count": 193,
-        "estimate_count": 184,
+        "estimate_count": 180,
         "matched": 177,
-        "onset_mae": 0.0031184368894987533,
-        "onset_p95": 0.003923820645267817,
-        "duration_mae": 0.04018206681938675,
+        "onset_mae": 0.003130600972695837,
+        "onset_p95": 0.00393598472846497,
+        "duration_mae": 0.039468831552709714,
         "hand_accuracy": 1.0,
-        "precision": 0.9619565217391305,
+        "precision": 0.9833333333333333,
         "recall": 0.917098445595855,
-        "f1": 0.9389920424403183
+        "f1": 0.9490616621983914
       },
       "geometry": {
         "first_pitch_correct": true,
@@ -294,7 +294,7 @@
       "error": null,
       "key_expected": "G major",
       "key_found": "G major",
-      "key_confidence": 0.07539476029635767,
+      "key_confidence": 0.07524697595414309,
       "tempo_expected": 96.0,
       "tempo_found": 96.00452084407881
     },

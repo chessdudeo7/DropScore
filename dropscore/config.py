@@ -192,6 +192,12 @@ class TrackingConfig:
     min_observations: int = 2
     min_duration: float = 0.02  # seconds; below this it is a detection artefact
 
+    # Two notes on one key closer together than this are one note found twice,
+    # not a repeat. Chosen from the gap between the two populations: across the
+    # corpus no genuine repeat has its onset within 104ms of the previous one,
+    # while fragments of a single tile land within 60ms.
+    min_repeat: float = 0.07
+
 
 @dataclass(frozen=True)
 class ScoreConfig:

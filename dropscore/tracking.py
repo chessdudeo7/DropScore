@@ -552,17 +552,48 @@ def tracks_to_notes(
 ) -> NoteSequence:
     hands = hands_by_register(tracks)
     notes = [track_to_note(t, speed, calibration, config, hands) for t in tracks]
-    return NoteSequence.of(_merge_overlaps([n for n in notes if n is not None]))
+    return NoteSequence.of(
+        _merge_overlaps([n for n in notes if n is not None], config)
+    )
 
 
-def _merge_overlaps(notes: list[Note]) -> list[Note]:
-    """Fuse notes that overlap on the same key.
+def _merge_overlaps(notes: list[Note], config: Config = DEFAULT) -> list[Note]:
+    """Fuse notes that are really one note on the same key.
 
     A key cannot sound twice at once, so an overlap is not two notes: it is one
     tile that broke into two tracks for a frame — a glint of bloom or a stray
-    row of antialiasing splitting the blob — and was then timed twice. Genuine
-    repeated notes have a real gap between them and are untouched.
+    row of antialiasing splitting the blob — and was then timed twice.
+
+    Overlap alone does not catch them all. A fragment whose duration collapses
+    to the floor ends almost as soon as it starts, so the next fragment does
+    not overlap it and the two mechanisms defeat each other: measured on a real
+    recording, one tile produced five notes on one pitch inside 150ms, none of
+    them overlapping the next.
+
+    So proximity of *onsets* decides it, not overlap. Onsets are what separates
+    the two cases: a genuine repeat is a key released and struck again, so its
+    onset sits a whole note-length after the previous one — measured across the
+    corpus, never closer than 104ms — while fragments of one tile land within a
+    few frames of each other. Note that the *gaps* between genuine repeats go
+    down to zero, so the same reasoning applied to gaps would destroy them.
+
+    Nearness alone is still too broad. Applied to every pair it cost one theme
+    five real notes, where noisy detection had put two true onsets inside the
+    window. So one of the pair must also be too short to be a note in its own
+    right: shorter than the repeat interval itself, which is the same bar the
+    onsets are held to, and self-consistent — a note that could not be
+    distinguished from its neighbour by position cannot be one by length
+    either. Testing instead for the duration *floor* was too strict: only four
+    of fifteen fragments on a real recording had collapsed that far, the rest
+    measuring 33 to 46ms.
+
+    The cost is that a repeat faster than ``min_repeat`` where one of the two
+    is also mistimed reads as one note. At 144 BPM that is quicker than a
+    thirty-second, and a renderer has to draw two tiles a pixel or two apart
+    for it, so it is close to the limit of what tiles can express anyway.
     """
+    min_repeat = config.tracking.min_repeat
+
     by_pitch: dict[int, list[Note]] = {}
     for note in notes:
         by_pitch.setdefault(note.pitch, []).append(note)
@@ -571,8 +602,16 @@ def _merge_overlaps(notes: list[Note]) -> list[Note]:
     for pitch, group in by_pitch.items():
         group.sort(key=lambda note: note.onset)
         current = group[0]
+        previous_onset = current.onset
         for following in group[1:]:
-            if following.onset < current.offset:
+            fragment = (
+                current.duration < min_repeat or following.duration < min_repeat
+            )
+            close = (
+                fragment and following.onset - previous_onset < min_repeat
+            )
+            previous_onset = following.onset
+            if close or following.onset < current.offset:
                 end = max(current.offset, following.offset)
                 current = Note(
                     onset=current.onset,
