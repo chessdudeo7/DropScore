@@ -80,8 +80,24 @@ class _Event:
     pitches: list[int]
 
 
-def _lay_out(notes: list[Note], beat: float) -> list[_Event]:
-    """Group notes into a single monophonic-with-chords timeline."""
+VOICES_PER_STAFF = 2
+
+
+def _lay_out(notes: list[Note], beat: float, voices: int = 1) -> list[list[_Event]]:
+    """Group one staff's notes into up to ``voices`` timelines.
+
+    A single voice cannot hold a note and start another at the same time, so
+    everything had to be truncated at the next onset whatever it was. That is
+    wrong wherever a hand holds one note under a moving line — which is most
+    piano writing — and on a real transcription it turned held notes into a
+    page of dotted eighths followed by rests.
+
+    Notes are grouped into chords by onset first, so simultaneous pitches stay
+    one event rather than being split across voices. Each chord then goes to
+    the first voice that is free, and truncation applies within a voice only:
+    a held note in the second voice is no longer cut short by the first voice
+    moving above it.
+    """
     def to_divisions(seconds: float) -> int:
         return int(round(seconds / beat * DIVISIONS))
 
@@ -89,19 +105,35 @@ def _lay_out(notes: list[Note], beat: float) -> list[_Event]:
     for note in notes:
         grouped.setdefault(to_divisions(note.onset), []).append(note)
 
-    events: list[_Event] = []
-    starts = sorted(grouped)
-    for index, start in enumerate(starts):
-        chord = grouped[start]
-        longest = max(to_divisions(n.offset) for n in chord) - start
-        # Truncate at the next onset: one voice cannot hold and restart at once.
-        if index + 1 < len(starts):
-            longest = min(longest, starts[index + 1] - start)
-        if longest < 1:
-            continue
-        events.append(_Event(start, longest, sorted(n.pitch for n in chord)))
+    # (start, natural end, pitches) per chord, in time order.
+    chords = [
+        (start, max(to_divisions(n.offset) for n in grouped[start]),
+         sorted(n.pitch for n in grouped[start]))
+        for start in sorted(grouped)
+    ]
 
-    return events
+    lanes: list[list[tuple[int, int, list[int]]]] = [[] for _ in range(max(1, voices))]
+    for chord in chords:
+        start = chord[0]
+        free = next((lane for lane in lanes if not lane or lane[-1][1] <= start), None)
+        if free is None:
+            # Every voice is still sounding. Put it in the one that frees up
+            # soonest and let truncation below shorten what it lands on.
+            free = min(lanes, key=lambda lane: lane[-1][1])
+        free.append(chord)
+
+    out: list[list[_Event]] = []
+    for lane in lanes:
+        events: list[_Event] = []
+        for index, (start, end, pitches) in enumerate(lane):
+            length = end - start
+            if index + 1 < len(lane):
+                length = min(length, lane[index + 1][0] - start)
+            if length < 1:
+                continue
+            events.append(_Event(start, length, pitches))
+        out.append(events)
+    return out
 
 
 def _split_at_barlines(events: list[_Event], per_measure: int) -> dict[int, list[tuple[_Event, bool, bool]]]:
@@ -135,6 +167,7 @@ def _add_note(
     chord: bool = False,
     tied_from: bool = False,
     tied_to: bool = False,
+    voice: int | None = None,
 ) -> None:
     element = ET.SubElement(parent, "note")
     if chord:
@@ -156,7 +189,7 @@ def _add_note(
         if start:
             ET.SubElement(element, "tie", type=kind)
 
-    ET.SubElement(element, "voice").text = str(staff)
+    ET.SubElement(element, "voice").text = str(staff if voice is None else voice)
     name, dotted = note_type(duration)
     ET.SubElement(element, "type").text = name
     if dotted:
@@ -188,12 +221,22 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
 
         sequence = notate_durations(sequence, analysis)
 
+    # Two voices per staff. MusicXML voice numbers are unique across the part,
+    # so the staves take 1-2 and 5-6, which is the convention notation editors
+    # expect and keeps a voice's identity obvious when reading the file.
     staves = {
-        1: _split_at_barlines(_lay_out(sequence.hand("R"), beat), per_measure),
-        2: _split_at_barlines(_lay_out(sequence.hand("L"), beat), per_measure),
+        1: [
+            _split_at_barlines(lane, per_measure)
+            for lane in _lay_out(sequence.hand("R"), beat, VOICES_PER_STAFF)
+        ],
+        2: [
+            _split_at_barlines(lane, per_measure)
+            for lane in _lay_out(sequence.hand("L"), beat, VOICES_PER_STAFF)
+        ],
     }
     last_measure = max(
-        (m for staff in staves.values() for m in staff), default=0
+        (m for lanes in staves.values() for lane in lanes for m in lane),
+        default=0,
     )
 
     root = ET.Element("score-partwise", version="4.0")
@@ -220,25 +263,48 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
                 ET.SubElement(clef, "sign").text = sign
                 ET.SubElement(clef, "line").text = str(line)
 
+        written = False
         for staff in (1, 2):
-            if staff == 2:
-                ET.SubElement(measure, "backup").append(_text("duration", per_measure))
+            for lane, bars in enumerate(staves[staff]):
+                events = sorted(bars.get(index, []), key=lambda item: item[0].start)
 
-            position = 0
-            for event, tied_from, tied_to in sorted(
-                staves[staff].get(index, []), key=lambda item: item[0].start
-            ):
-                if event.start > position:
-                    _add_note(measure, None, event.start - position, staff, flats)
-                for order, pitch in enumerate(event.pitches):
-                    _add_note(
-                        measure, pitch, event.duration, staff, flats,
-                        chord=order > 0, tied_from=tied_from, tied_to=tied_to,
+                # An empty second voice is left out rather than filled with a
+                # bar of rests, which would double every rest on the page.
+                if lane and not events:
+                    continue
+
+                # Rewind to the start of the bar for every voice after the
+                # first: each writes the same span of time over again.
+                if written:
+                    ET.SubElement(measure, "backup").append(
+                        _text("duration", per_measure)
                     )
-                position = event.start + event.duration
+                written = True
 
-            if position < per_measure:
-                _add_note(measure, None, per_measure - position, staff, flats)
+                voice = VOICES_PER_STAFF * (staff - 1) + lane + 1
+                if staff == 2:
+                    voice += 3  # 5 and 6, leaving the usual gap after 1 and 2
+
+                position = 0
+                for event, tied_from, tied_to in events:
+                    if event.start > position:
+                        _add_note(
+                            measure, None, event.start - position, staff, flats,
+                            voice=voice,
+                        )
+                    for order, pitch in enumerate(event.pitches):
+                        _add_note(
+                            measure, pitch, event.duration, staff, flats,
+                            chord=order > 0, tied_from=tied_from, tied_to=tied_to,
+                            voice=voice,
+                        )
+                    position = event.start + event.duration
+
+                if position < per_measure:
+                    _add_note(
+                        measure, None, per_measure - position, staff, flats,
+                        voice=voice,
+                    )
 
     return ET.ElementTree(root)
 

@@ -218,21 +218,64 @@ def test_musicxml_keeps_every_pitch(tmp_path: Path) -> None:
 
 
 def test_musicxml_measures_are_full(tmp_path: Path) -> None:
-    """Every measure must add up, per staff, or the file is invalid."""
+    """Every measure must add up, per voice, or the file is invalid.
+
+    Per *staff* was the right unit while a staff held one voice. With two, a
+    staff writes the same span of time twice over, so its notes sum to double
+    the bar and only the voices themselves have to balance.
+    """
     sequence = generate(seed=8, bars=4, tempo=120.0)
     analysis = analyze(sequence)
     root = ET.parse(musicxml.write(sequence, tmp_path / "a.musicxml", analysis)).getroot()
 
     per_measure = analysis.beats_per_bar * DIVISIONS
-    for measure in root.findall(".//measure"):
-        totals = {1: 0, 2: 0}
+    for number, measure in enumerate(root.findall(".//measure"), start=1):
+        totals: dict[str, int] = {}
         for note in measure.findall("note"):
             if note.find("chord") is not None:
                 continue
-            staff = int(note.findtext("staff"))
-            totals[staff] += int(note.findtext("duration"))
-        for staff, total in totals.items():
-            assert total == per_measure, f"staff {staff} sums to {total}"
+            voice = note.findtext("voice")
+            totals[voice] = totals.get(voice, 0) + int(note.findtext("duration"))
+        assert totals, f"measure {number} has no notes"
+        for voice, total in totals.items():
+            assert total == per_measure, (
+                f"measure {number} voice {voice} sums to {total}, not {per_measure}"
+            )
+
+
+def test_musicxml_holds_a_note_under_a_moving_line(tmp_path: Path) -> None:
+    """One hand sustaining while the other fingers move is not truncation.
+
+    With a single voice per staff every note had to be cut at the next onset,
+    so a held bass note became a short note and a rest -- on a real
+    transcription, a page of dotted eighths.
+    """
+    notes = []
+    for bar in range(4):
+        start = bar * 2.0
+        notes.append(Note(onset=start, pitch=48, duration=2.0, hand="L"))  # held
+        for step in range(4):  # a line moving over it
+            notes.append(
+                Note(onset=start + step * 0.5, pitch=55 + step, duration=0.5, hand="L")
+            )
+    sequence = NoteSequence.of(notes, tempo=120.0)
+    analysis = analyze(sequence)
+    root = ET.parse(musicxml.write(sequence, tmp_path / "a.musicxml", analysis)).getroot()
+
+    # The held C should still be two beats' worth wherever it appears, rather
+    # than cut to the half-beat before the line's next note.
+    per_beat = DIVISIONS
+    longest = 0
+    for note in root.findall(".//note"):
+        pitch = note.find("pitch")
+        if pitch is None or pitch.findtext("step") != "C":
+            continue
+        longest = max(longest, int(note.findtext("duration")))
+
+    assert longest >= 2 * per_beat, (
+        f"the held C is only {longest} divisions; it was truncated by the line "
+        f"above it (a beat is {per_beat})"
+    )
 
 
 def test_musicxml_ties_notes_across_barlines(tmp_path: Path) -> None:
