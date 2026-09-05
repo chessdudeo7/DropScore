@@ -239,6 +239,14 @@ class ScoreConfig:
     # every value from 0 to 1.2, even with 30% of notes displaced chromatically.
     out_of_scale_penalty: float = 0.3
 
+    # How much of the way to the next onset a note must cover before it is
+    # *written* as reaching it. Held-key time is articulation, not note value:
+    # a quarter released at three quarters of its length is a detached quarter,
+    # and engraving it literally gives a dotted eighth and a rest. Applies to
+    # notation only -- MIDI and JSON keep what was actually played. Zero writes
+    # the measured durations unchanged.
+    legato_ratio: float = 0.6
+
     # Seconds either side of a note considered when splitting hands by pitch.
     hand_window: float = 1.0
 

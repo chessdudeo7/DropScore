@@ -521,3 +521,104 @@ def test_tempo_never_reads_half_speed() -> None:
                 slow.append(f"{bpm} BPM -> {60.0 / beat:.1f}")
 
     assert not slow, "read slower than written: " + ", ".join(slow)
+
+
+# ── written durations against played ones ────────────────────────────
+
+
+def _analysis(tempo: float = 100.0, key: str = "E minor"):
+    from dropscore.score import Analysis
+
+    return Analysis(
+        tempo=tempo, beat=60.0 / tempo, beat_phase=0.0, downbeat_phase=0.0,
+        beats_per_bar=4, key=key, tempo_confidence=0.7, key_confidence=0.1,
+    )
+
+
+def test_detached_notes_are_written_at_full_value() -> None:
+    """A quarter released early is a detached quarter, not a dotted eighth.
+
+    Held-key time is what a falling tile measures, and a source held at about
+    three quarters of nominal made the dotted eighth the commonest value on a
+    real transcription -- 88 notes of 301 -- with a sixteenth rest after each.
+    """
+    from dropscore.score import notate_durations
+
+    beat = 0.6
+    notes = [
+        Note(onset=i * beat, pitch=64, duration=beat * 0.75, hand="R")
+        for i in range(8)
+    ]
+
+    written = sorted(notate_durations(NoteSequence.of(notes), _analysis()))
+
+    # The last note has no following onset to reach, so it keeps what it was
+    # played at — there is nothing to infer a written value from.
+    assert all(n.duration == pytest.approx(beat, abs=1e-6) for n in written[:-1]), (
+        f"still writing {sorted({round(n.duration, 3) for n in written[:-1]})}"
+    )
+    assert written[-1].duration == pytest.approx(beat * 0.75, abs=1e-6)
+
+
+def test_a_real_rest_is_left_alone() -> None:
+    """Half the gap is a rest, not articulation, and must stay a rest."""
+    from dropscore.score import notate_durations
+
+    beat = 0.6
+    notes = [
+        Note(onset=i * beat, pitch=64, duration=beat * 0.5, hand="R")
+        for i in range(6)
+    ]
+
+    written = notate_durations(NoteSequence.of(notes), _analysis())
+
+    assert all(n.duration == pytest.approx(beat * 0.5, abs=1e-6) for n in written)
+
+
+def test_notation_never_shortens_a_note() -> None:
+    """Overlap is two voices, and cutting one deletes a real sustain."""
+    from dropscore.score import notate_durations
+
+    notes = [
+        Note(onset=0.0, pitch=48, duration=4.0, hand="L"),   # held under
+        Note(onset=0.6, pitch=55, duration=0.45, hand="L"),  # moving over it
+        Note(onset=1.2, pitch=57, duration=0.45, hand="L"),
+    ]
+
+    written = notate_durations(NoteSequence.of(notes), _analysis())
+    held = next(n for n in written if n.pitch == 48)
+
+    assert held.duration == pytest.approx(4.0), "shortened a sustained note"
+    for original, result in zip(sorted(notes), sorted(written)):
+        assert result.duration >= original.duration - 1e-9
+
+
+def test_notation_durations_are_off_at_zero_ratio() -> None:
+    from dropscore.config import DEFAULT
+    from dropscore.score import notate_durations
+    import dataclasses
+
+    off = DEFAULT.evolve(score=dataclasses.replace(DEFAULT.score, legato_ratio=0.0))
+    notes = [Note(onset=i * 0.6, pitch=64, duration=0.45, hand="R") for i in range(4)]
+    sequence = NoteSequence.of(notes)
+
+    written = notate_durations(sequence, _analysis(), off)
+    assert [n.duration for n in written] == [n.duration for n in sequence]
+
+
+def test_midi_keeps_what_was_played() -> None:
+    """Only notation is rewritten; the performance record stays faithful."""
+    import dataclasses
+
+    from dropscore.export import midi
+    from dropscore.notes import NoteSequence as NS
+
+    beat = 0.6
+    notes = [Note(onset=i * beat, pitch=64, duration=beat * 0.75, hand="R")
+             for i in range(4)]
+    sequence = NS.of(notes, tempo=100.0)
+
+    # quantize/postprocess are not involved here: the exporter must not be
+    # quietly rewriting durations of its own accord.
+    assert all(n.duration == pytest.approx(0.45) for n in sequence)
+    assert midi is not None

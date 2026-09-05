@@ -458,6 +458,58 @@ def quantize(
     )
 
 
+def notate_durations(
+    sequence: NoteSequence, analysis: Analysis, config: Config = DEFAULT
+) -> NoteSequence:
+    """Rewrite performed durations as written ones.
+
+    A tile's length is how long the key was held, and a player releasing a
+    quarter note a little early is playing it detached, not playing a shorter
+    note. Engraved literally that becomes a dotted eighth followed by a
+    sixteenth rest -- on a real transcription the dotted eighth was the
+    commonest value on the page, 88 notes of 301, purely because the source
+    was held at about three quarters of nominal.
+
+    Notation carries the written value and leaves articulation to a slur or a
+    staccato dot, so a note covering enough of the way to the next onset in
+    its own hand is written as reaching it.
+
+    Only ever lengthens. A note already outstripping the next onset is two
+    voices overlapping, and shortening it would delete a real sustain.
+    """
+    cfg = config.score
+    if cfg.legato_ratio <= 0:
+        return sequence
+
+    step = analysis.beat / cfg.steps_per_beat if cfg.steps_per_beat > 0 else 0.0
+    written: list[Note] = []
+
+    for hand in ("L", "R"):
+        voice = sorted(sequence.hand(hand), key=lambda n: n.onset)
+        for note, following in zip(voice, voice[1:] + [None]):
+            duration = note.duration
+            if following is not None:
+                gap = following.onset - note.onset
+                if gap > 0 and cfg.legato_ratio <= duration / gap < 1.0:
+                    filled = gap
+                    if step > 0:
+                        filled = round(filled / step) * step
+                    # Enforce the invariant after rounding, not before it: a
+                    # gap under half a step rounds to nothing, which is not a
+                    # note at all.
+                    duration = max(duration, filled)
+            written.append(
+                Note(note.onset, note.pitch, duration, note.hand, note.velocity)
+            )
+
+    return NoteSequence.of(
+        sorted(written),
+        tempo=sequence.tempo,
+        key=sequence.key,
+        source=sequence.source,
+    )
+
+
 def _snap(value: float, step: float, phase: float, tolerance: float) -> float | None:
     """Nearest gridline, or None when that is further than the tolerance."""
     snapped = round((value - phase) / step) * step + phase

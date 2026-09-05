@@ -181,6 +181,13 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
 
     per_measure = beats_per_bar * DIVISIONS
 
+    # Written values, not held-key times — see notate_durations. Only done
+    # here: the MIDI and the JSON stay faithful to what the video showed.
+    if analysis is not None:
+        from ..score import notate_durations  # noqa: PLC0415
+
+        sequence = notate_durations(sequence, analysis)
+
     staves = {
         1: _split_at_barlines(_lay_out(sequence.hand("R"), beat), per_measure),
         2: _split_at_barlines(_lay_out(sequence.hand("L"), beat), per_measure),
