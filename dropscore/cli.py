@@ -238,7 +238,10 @@ def cmd_synth(args: argparse.Namespace) -> int:
         theme = get_theme(theme_name)
         for index in range(args.count):
             seed = args.seed + index
-            sequence = generate(seed=seed, bars=args.bars, tempo=args.tempo)
+            sequence = generate(
+                seed=seed, bars=args.bars, tempo=args.tempo,
+                sustained=args.sustained,
+            )
             spec = RenderSpec(
                 width=args.width,
                 height=args.height,
@@ -246,7 +249,8 @@ def cmd_synth(args: argparse.Namespace) -> int:
                 theme=theme,
                 key_range=args.key_range,
             )
-            name = f"{theme_name}_{args.key_range}key_seed{seed}"
+            suffix = "_sustained" if args.sustained else ""
+            name = f"{theme_name}_{args.key_range}key_seed{seed}{suffix}"
             video, truth = render(sequence, out_dir / f"{name}.mp4", spec)
             print(f"{video}  ({len(sequence)} notes, {sequence.key})")
             if truth:
@@ -520,6 +524,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="88",
         choices=sorted(COMMON_RANGES),
         help="how many keys the keyboard shows",
+    )
+    synth.add_argument(
+        "--sustained",
+        action="store_true",
+        help="slow held chords in a narrow register, so tiles outgrow the fall area",
     )
     synth.add_argument("--width", type=int, default=1280)
     synth.add_argument("--height", type=int, default=720)

@@ -62,9 +62,21 @@ def generate(
     bars: int = 16,
     tempo: float = 96.0,
     key: str | None = None,
+    sustained: bool = False,
 ) -> NoteSequence:
-    """Build a deterministic sequence with the awkward cases baked in."""
+    """Build a deterministic sequence with the awkward cases baked in.
+
+    ``sustained`` writes the other kind of piece: slow chords held for bars at
+    a time, inside a register barely wider than an octave. It is not a stylistic
+    nicety. Held that long, a tile is taller than the fall area, so neither of
+    its ends is ever on screen and phase correlation has no vertical motion to
+    lock onto — the scroll speed becomes unmeasurable in exactly the stretch a
+    single probe was most likely to land on.
+    """
     rng = random.Random(seed)
+
+    if sustained:
+        return _sustained(rng, seed, bars, tempo, key)
 
     key = key or rng.choice(sorted(KEYS))
     tonic, scale = KEYS[key]
@@ -106,6 +118,82 @@ def generate(
         tempo=tempo,
         key=key,
         source=f"synthetic:seed={seed}",
+    )
+
+
+def _sustained(
+    rng: random.Random, seed: int, bars: int, tempo: float, key: str | None
+) -> NoteSequence:
+    """Slow held chords in a narrow register, over a repeating inner figure."""
+    key = key or rng.choice(sorted(KEYS))
+    tonic, scale = KEYS[key]
+    beat = 60.0 / tempo
+    bar = beat * 4
+    progression = rng.choice(_PROGRESSIONS)
+
+    # Keep everything inside about an octave and a half, as a piece written
+    # around a single hand position is. A narrow register also means adjacent
+    # tiles share lanes far more often than the wide-open corpus ever forced.
+    base = 48 + (tonic % 12)
+    notes: list[Note] = []
+
+    # A held passage across the middle third: one chord, struck once and left
+    # to ring, with no inner voice over it. Every tile on screen through it is
+    # taller than the fall area, so neither end of one is ever visible and
+    # there is no vertical motion at all to correlate. That is the state a
+    # single scroll-speed probe landed in on a real recording, where it
+    # measured nothing and the transcription stopped there.
+    # Placed to cover the point a third of the way in, which is where a
+    # single probe used to look.
+    hold_from, hold_to = bars // 4, 2 * bars // 3
+
+    for index in range(bars):
+        start = index * bar
+        degree = 0 if index in (0, bars - 1) else progression[index % len(progression)]
+
+        if index == hold_from:
+            for offset in (0, 2, 4):
+                notes.append(
+                    Note(
+                        onset=start,
+                        pitch=_degree_pitch(base, scale, degree + offset),
+                        duration=bar * (hold_to - hold_from),
+                        hand="L",
+                        velocity=70,
+                    )
+                )
+        if hold_from <= index < hold_to:
+            continue
+
+        # A chord held for two bars: taller than any sensible lead time.
+        for offset in (0, 2, 4):
+            notes.append(
+                Note(
+                    onset=start,
+                    pitch=_degree_pitch(base, scale, degree + offset),
+                    duration=bar * 2,
+                    hand="L",
+                    velocity=70,
+                )
+            )
+
+        # An inner figure that does move.
+        for step in range(4):
+            notes.append(
+                Note(
+                    onset=start + step * beat,
+                    pitch=_degree_pitch(base + 12, scale, degree + (step % 3) * 2),
+                    duration=beat * 0.9,
+                    hand="R",
+                    velocity=84,
+                )
+            )
+
+    return NoteSequence.of(
+        _drop_impossible_overlaps(notes),
+        tempo=tempo,
+        key=key,
+        source=f"synthetic:seed={seed}:sustained",
     )
 
 

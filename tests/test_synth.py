@@ -272,3 +272,85 @@ def test_black_and_white_keys_are_distinguishable_in_the_keybed() -> None:
     black_mean = np.mean([bed[row, int(layout.key_center(p))].mean() for p in blacks])
     white_mean = np.mean([bed[row, int(layout.key_center(p))].mean() for p in whites])
     assert abs(white_mean - black_mean) > 50
+
+
+# ── the corpus's coverage of real captures ───────────────────────────
+#
+# Four stage-3 and stage-5 bugs reached a real video while this corpus scored
+# F1 0.97 throughout, because a clean render has none of the things that broke
+# them. These assert the traits that make the `capture` theme and the sustained
+# generator able to fail — without them the clips are decoration.
+
+
+def test_capture_theme_draws_a_caption_below_the_keyboard() -> None:
+    """A burned-in credit, in dark space under the keybed.
+
+    White-on-black text has a higher mean row structure than a keyboard, so a
+    keybed search ranking bands by mean picks the caption instead.
+    """
+    theme = get_theme("capture")
+    renderer = SynthRenderer(generate(seed=0), RenderSpec(theme=theme))
+    frame = renderer.frame(renderer.frame_count // 2)
+
+    assert renderer.keybed_bottom < renderer.spec.height, "no space below the keys"
+
+    below = frame[renderer.keybed_bottom :].std(axis=(1, 2))
+    keybed = frame[renderer.strike_y : renderer.keybed_bottom].std(axis=(1, 2))
+    assert below.max() > keybed.mean(), (
+        "the caption must out-structure the keybed per row, or the band search "
+        "is never actually tested"
+    )
+
+
+def test_capture_theme_blooms_struck_keys_past_white() -> None:
+    """A lit key samples brighter than any unplayed white key."""
+    theme = get_theme("capture")
+    renderer = SynthRenderer(generate(seed=0), RenderSpec(theme=theme))
+
+    brightest = 0.0
+    unlit = float(np.median(renderer._keybed))
+    for index in range(0, renderer.frame_count, 10):
+        band = renderer.frame(index)[renderer.strike_y : renderer.keybed_bottom]
+        brightest = max(brightest, float(band.max()))
+
+    assert brightest > unlit * 1.5, "struck keys never blow out past the key colour"
+
+
+def test_sustained_tiles_outgrow_the_fall_area() -> None:
+    """Held notes taller than the screen leave no ends to correlate."""
+    theme = get_theme("synthesia")
+    sequence = generate(seed=0, sustained=True)
+    renderer = SynthRenderer(sequence, RenderSpec(theme=theme))
+
+    tallest = max(n.duration for n in sequence) * renderer.speed
+    assert tallest > renderer.strike_y, (
+        f"tallest tile {tallest:.0f}px fits inside a {renderer.strike_y}px fall "
+        "area, so both of its ends stay visible"
+    )
+
+
+def test_sustained_has_a_passage_with_nothing_moving() -> None:
+    """One stretch where every tile is a full-height bar and nothing changes."""
+    theme = get_theme("synthesia")
+    sequence = generate(seed=0, sustained=True)
+    renderer = SynthRenderer(sequence, RenderSpec(theme=theme))
+
+    still = 0
+    previous = None
+    for index in range(renderer.frame_count):
+        fall = renderer.frame(index)[: renderer.strike_y]
+        if previous is not None and np.array_equal(fall, previous):
+            still += 1
+        else:
+            still = 0
+        if still >= 30:
+            return
+        previous = fall
+
+    pytest.fail("no second-long stretch where the fall area is completely static")
+
+
+def test_sustained_stays_in_a_narrow_register() -> None:
+    sequence = generate(seed=0, sustained=True)
+    spread = max(n.pitch for n in sequence) - min(n.pitch for n in sequence)
+    assert spread <= 30, f"register spans {spread} semitones; real pieces sit tighter"

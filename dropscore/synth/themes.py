@@ -48,6 +48,29 @@ class Theme:
     # Struck keys light up in the hand's colour, dimmed by this factor.
     highlight_strength: float = 0.85
 
+    # Everything below models what a real capture has and a clean render does
+    # not. Each of these hid a bug that only a real video could reach.
+
+    # Dark space below the keyboard, as a fraction of frame height. Real
+    # captures are rarely cropped to the keybed, and what sits in that space
+    # is where a caption goes.
+    bottom_margin: float = 0.0
+
+    # Text burned into the bottom margin, the way an arranger credits a video.
+    # White-on-black text has a higher mean row structure than a keyboard does,
+    # so a keybed search that ranks bands by mean picks the caption instead.
+    caption: str = ""
+
+    # Struck keys bloom past white. A renderer that only tints a key keeps it
+    # within the palette; a real one blows it out, and a boundary sample there
+    # comes back brighter than any unplayed white key, which drags a two-means
+    # black/white split onto the wrong axis.
+    highlight_bloom: float = 0.0
+
+    # Hands over the lower keybed, occluding keys and adding their own
+    # structure to rows the keybed search has to reject.
+    hands: bool = False
+
     # A bright line at the top of the keybed. Some renderers draw one, some do
     # not — stage 5 must not depend on finding it.
     strike_line: bool = False
@@ -147,6 +170,32 @@ THEMES: dict[str, Theme] = {
         glow=0.0,
         keybed_ratio=0.23,
         lead_time=2.9,
+    ),
+    # Models a screen capture rather than a clean render: a credit caption
+    # burned into dark space below the keyboard, hands over the keys, and
+    # struck keys blooming past white. Every one of those broke stage 3 on a
+    # real video while the rest of this corpus stayed at F1 0.97.
+    "capture": Theme(
+        name="capture",
+        background=(6, 6, 10),
+        right_color=(168, 88, 245),
+        left_color=(168, 88, 245),  # one colour for both hands, as many are
+        tile_style="flat",
+        tile_gap=0.05,
+        glow=0.45,
+        keybed_ratio=0.23,
+        # Dim tan rather than white. A real capture's keybed measured 101 in
+        # grey against this corpus's 190, and that gap is the whole bug: a
+        # bright, crisp keyboard out-structures a caption on mean row variance,
+        # so the caption never wins and the band search is never tested.
+        white_key_color=(120, 105, 90),
+        black_key_color=(18, 16, 20),
+        key_edge_color=(70, 60, 50),  # must stay darker than the dimmed keys
+        bottom_margin=0.30,
+        caption="ARRANGED BY A. N. OTHER",
+        highlight_bloom=0.9,
+        hands=True,
+        lead_time=2.4,
     ),
     # Minimal: no glow, no separators, tight gaps, fast scroll.
     "minimal": Theme(

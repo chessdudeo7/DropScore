@@ -79,7 +79,9 @@ class SynthRenderer:
         self.theme = self.spec.resolved_theme
 
         self.keybed_height = int(self.spec.height * self.theme.keybed_ratio)
-        self.strike_y = self.spec.height - self.keybed_height
+        self.bottom_margin = int(self.spec.height * self.theme.bottom_margin)
+        self.strike_y = self.spec.height - self.keybed_height - self.bottom_margin
+        self.keybed_bottom = self.strike_y + self.keybed_height
         self.speed = self.strike_y / self.theme.lead_time  # px/s
 
         first, last = COMMON_RANGES[self.spec.key_range]
@@ -110,6 +112,43 @@ class SynthRenderer:
             )
 
         self._keybed = self._draw_keybed_base()
+        self._hand_x = self._hand_tracks() if self.theme.hands else {}
+
+    def _hand_tracks(self) -> dict[str, np.ndarray]:
+        """A damped x-position per hand, per frame.
+
+        Hands are drawn where the hand actually is, which is not where the next
+        note is: a player's hand travels, it does not teleport. Snapping it to
+        each note's key made the temporal median smear both hands across the
+        whole board, wiping out the key edges that stage 3 fits its grid to --
+        an artefact of the renderer, not something a real capture does.
+        """
+        frames = self.frame_count
+        tracks: dict[str, np.ndarray] = {}
+        for hand in ("L", "R"):
+            target = np.full(frames, np.nan, dtype=np.float32)
+            for note in self.notes:
+                if note.hand != hand:
+                    continue
+                lo = max(0, int(note.onset * self.spec.fps))
+                hi = min(frames, int(note.offset * self.spec.fps) + 1)
+                target[lo:hi] = self.layout.key_center(note.pitch)
+
+            # Hold the last known position through the rests, then smooth over
+            # about a second so the hand glides between positions.
+            last = np.nan
+            for i in range(frames):
+                if np.isnan(target[i]):
+                    target[i] = last
+                else:
+                    last = target[i]
+            fallback = self.spec.width / 2.0
+            target[np.isnan(target)] = fallback
+            window = max(3, int(self.spec.fps))
+            kernel = np.ones(window, dtype=np.float32) / window
+            padded = np.pad(target, window, mode="edge")
+            tracks[hand] = np.convolve(padded, kernel, mode="same")[window:-window]
+        return tracks
 
     # ── timing ───────────────────────────────────────────────────────
 
@@ -171,7 +210,7 @@ class SynthRenderer:
                 -1,
             )
 
-        canvas[self.strike_y :, :] = bed
+        canvas[self.strike_y : self.keybed_bottom, :] = bed
 
         if theme.keybed_shadow:
             band = max(2, self.keybed_height // 12)
@@ -271,7 +310,68 @@ class SynthRenderer:
             self._draw_tile(canvas, rect, color)
 
         self._draw_keybed(canvas, active)
+        if theme.highlight_bloom > 0 and active:
+            self._draw_key_bloom(canvas, active)
+        if theme.hands:
+            self._draw_hands(canvas, index)
+        if theme.caption and self.bottom_margin > 8:
+            self._draw_caption(canvas)
         return canvas
+
+    def _draw_key_bloom(self, canvas: np.ndarray, active: list[Note]) -> None:
+        """Blow struck keys out past white, the way a real renderer does."""
+        halo = np.zeros(canvas.shape[:2], dtype=np.float32)
+        for note in active:
+            left, right = self.layout.key_span(note.pitch)
+            cv2.rectangle(
+                halo,
+                (int(round(left)), self.strike_y - 8),
+                (int(round(right)), self.keybed_bottom),
+                1.0,
+                -1,
+            )
+        halo = cv2.GaussianBlur(halo, (0, 0), self.layout.white_width * 0.6)
+        strength = self.theme.highlight_bloom * halo[:, :, None]
+        lit = canvas.astype(np.float32) + 255.0 * strength
+        np.clip(lit, 0, 255, out=lit)
+        canvas[:] = lit.astype(np.uint8)
+
+    def _draw_hands(self, canvas: np.ndarray, index: int) -> None:
+        """Two blobs over the lower keybed, following what is being played.
+
+        Not anatomy — the point is that something opaque and skin-coloured
+        covers the bottom of the keys and adds structure to those rows.
+        """
+        skin = (105, 125, 150)  # BGR; close to the keys, as a real hand is
+        top = self.strike_y + int(self.keybed_height * 0.55)
+        for hand in ("L", "R"):
+            track = self._hand_x.get(hand)
+            if track is None or not len(track):
+                continue
+            centre = float(track[min(index, len(track) - 1)])
+            span = max(self.layout.white_width * 2.5, 40.0)
+            cv2.ellipse(
+                canvas,
+                (int(centre), self.keybed_bottom),
+                (int(span), int((self.keybed_bottom - top) * 1.1)),
+                0,
+                180,
+                360,
+                skin,
+                -1,
+            )
+
+    def _draw_caption(self, canvas: np.ndarray) -> None:
+        """Credit text burned into the dark space under the keyboard."""
+        text = self.theme.caption
+        scale = 0.6
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, scale, 1)
+        x = (self.spec.width - tw) // 2
+        y = self.keybed_bottom + (self.bottom_margin + th) // 2
+        cv2.putText(
+            canvas, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, scale, (238, 238, 238), 1,
+            cv2.LINE_AA,
+        )
 
     # ── output ───────────────────────────────────────────────────────
 
