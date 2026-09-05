@@ -84,6 +84,23 @@ def row_activity(frames: Sequence[Frame], background: np.ndarray) -> np.ndarray:
     return total / len(frames)
 
 
+def _row_coverage(gray: np.ndarray) -> np.ndarray:
+    """Share of the frame's width over which each row carries structure."""
+    edges = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+    strong = edges > max(1.0, float(np.percentile(edges, 90)) * 0.25)
+
+    # Judge in coarse blocks so a key boundary counts once rather than as the
+    # two or three columns its edge happens to span. Coarse enough, too, that
+    # the measure does not depend on how many keys are on screen: a 49-key
+    # board has 29 white keys, which over 64 blocks leaves coverage at 0.45
+    # and gates out the very keybed it is meant to find.
+    width = gray.shape[1]
+    block = max(1, width // 16)
+    usable = (width // block) * block
+    blocks = strong[:, :usable].reshape(len(gray), -1, block).any(axis=2)
+    return blocks.mean(axis=1)
+
+
 def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config) -> tuple[int, int]:
     """Locate the keybed as the quiet band at the bottom of the frame."""
     cfg = config.calibration
@@ -103,6 +120,20 @@ def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config)
     gray = _gray(background).astype(np.float32)
     structure = gray.std(axis=1)
     height = structure.shape[0]
+
+    # Structure alone is not enough once the music slows down. A piece of long
+    # held chords in a narrow register keeps the same few columns lit for most
+    # of the video, so the temporal median keeps those tiles: they *become*
+    # background, and their rows read as structured. Measured on such a clip
+    # the keybed band ran from row 0 to row 492 — 68% of the frame — and
+    # calibration gave up.
+    #
+    # What still separates them is how far that structure reaches. A keybed row
+    # crosses every key on the board, so it is busy across essentially the whole
+    # width; a few static bars are busy in a narrow strip. Measured on the same
+    # clip: 0.98 of the width against 0.21.
+    coverage = _row_coverage(gray)
+    structure = structure * (coverage >= cfg.min_keybed_coverage)
 
     # Find the keybed as a *band*, not as a split with everything below it.
     # Real videos put the keyboard across the middle of the frame, with the
@@ -145,6 +176,22 @@ def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config)
     # up as structure at all. Black keys cover a known fraction of a keyboard's
     # depth, which is enough to recover the rest.
     bottom = min(height, top + int(round((band_end - top) / cfg.black_height_ratio)))
+
+    # That ratio only holds while the band really is just the black keys. Where
+    # the white key region is busy enough to join the band — a sustained piece
+    # keeps far more keys lit — scaling it up again overshoots, and on one clip
+    # ran the keybed 91px past the bottom of the keyboard into the dark strip
+    # below, where the white reference sampled 4 instead of 106.
+    #
+    # Below the keyboard there are no keys, so the structure stops reaching
+    # across the frame. Walk down to where that happens and take the closer of
+    # the two, which also recovers the bottom edge exactly when the ratio is
+    # right rather than merely approximately.
+    edge = band_end
+    while edge < height and coverage[edge] >= cfg.min_keybed_coverage:
+        edge += 1
+    if edge > band_end:
+        bottom = min(bottom, edge)
 
     depth = bottom - top
     if depth < cfg.min_keybed_px:

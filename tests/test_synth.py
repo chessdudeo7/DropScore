@@ -354,3 +354,26 @@ def test_sustained_stays_in_a_narrow_register() -> None:
     sequence = generate(seed=0, sustained=True)
     spread = max(n.pitch for n in sequence) - min(n.pitch for n in sequence)
     assert spread <= 30, f"register spans {spread} semitones; real pieces sit tighter"
+
+
+def test_generator_honours_a_requested_key() -> None:
+    """Corpus diversity depends on this: every clip was in G major."""
+    from dropscore.synth.music import KEYS
+
+    for key in sorted(KEYS):
+        for sustained in (False, True):
+            sequence = generate(seed=0, key=key, sustained=sustained)
+            assert sequence.key == key
+
+
+def test_generator_honours_a_requested_tempo() -> None:
+    """And on this: every clip was at 96 BPM."""
+    for bpm in (60.0, 80.0, 126.0, 144.0):
+        sequence = generate(seed=0, tempo=bpm)
+        assert sequence.tempo == pytest.approx(bpm)
+
+        onsets = sorted({round(n.onset, 4) for n in sequence})
+        spacing = min(b - a for a, b in zip(onsets, onsets[1:]))
+        # The finest spacing must scale with the beat, or the tempo argument
+        # is being recorded but not used.
+        assert spacing < 60.0 / bpm

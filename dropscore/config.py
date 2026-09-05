@@ -60,6 +60,12 @@ class CalibrationConfig:
     # keybed's full depth.
     black_height_ratio: float = 0.62
 
+    # How much of the frame's width a row must carry structure across before
+    # it can be part of the keybed. A row of keys spans nearly all of it;
+    # tiles held still long enough to survive into the background span only
+    # the register they are written in.
+    min_keybed_coverage: float = 0.5
+
     # Sanity bounds on the keybed band, as guards against non-piano video.
     min_keybed_px: int = 12
     max_keybed_ratio: float = 0.60

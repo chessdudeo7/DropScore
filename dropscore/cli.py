@@ -22,6 +22,8 @@ from .video import VideoError, VideoReader
 
 log = logging.getLogger("dropscore")
 
+SYNTH_DEFAULT_TEMPO = 96.0
+
 
 def _configure_logging(verbose: bool) -> None:
     logging.basicConfig(
@@ -249,9 +251,14 @@ def cmd_synth(args: argparse.Namespace) -> int:
                 theme=theme,
                 key_range=args.key_range,
             )
+            # Tempo and key go in the name only when asked for, so that
+            # adding variety to the corpus does not rename every clip already
+            # in it and invalidate the stored baseline.
             suffix = "_sustained" if args.sustained else ""
             if args.key:
                 suffix += "_" + args.key.replace(" ", "")
+            if args.tempo != SYNTH_DEFAULT_TEMPO:
+                suffix += f"_{args.tempo:.0f}bpm"
             name = f"{theme_name}_{args.key_range}key_seed{seed}{suffix}"
             video, truth = render(sequence, out_dir / f"{name}.mp4", spec)
             print(f"{video}  ({len(sequence)} notes, {sequence.key})")
@@ -547,7 +554,9 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--count", type=int, default=1, help="clips per theme")
     synth.add_argument("--seed", type=int, default=0, help="first seed; increments per clip")
     synth.add_argument("--bars", type=int, default=16, help="length in bars")
-    synth.add_argument("--tempo", type=float, default=96.0, help="BPM")
+    synth.add_argument(
+        "--tempo", type=float, default=SYNTH_DEFAULT_TEMPO, help="BPM"
+    )
     synth.add_argument(
         "--key",
         default=None,
