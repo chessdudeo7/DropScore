@@ -18,6 +18,8 @@ dependencies = [
 # convenience — see docs/PIPELINE.md on why the file path is the primary one.
 youtube = ["yt-dlp>=2024.1.1"]
 service = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "python-multipart>=0.0.9"]
+# In-process engraving, so PDF does not need MuseScore on PATH.
+pdf = ["verovio>=4.0", "svglib>=1.5", "reportlab>=4.0"]
 dev = ["pytest>=7.4", "httpx>=0.27"]
 
 [project.scripts]

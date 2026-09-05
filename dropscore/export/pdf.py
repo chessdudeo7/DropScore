@@ -1,12 +1,14 @@
-"""PDF engraving, by handing MusicXML to whichever engraver is installed.
+"""PDF engraving.
 
-Engraving is not something to reimplement: MuseScore and LilyPond exist, do it
-far better than a few hundred lines could, and are the tools anyone editing the
-result will already have. This writes MusicXML and shells out.
+Engraving is not something to reimplement, and two routes exist that do it
+properly. Verovio engraves MusicXML in-process and is a pip install, so it is
+tried first: PDF stops being the one export that needs a GUI application on
+PATH before it will work, which mattered most for the service, where the
+person running it and the person wanting the PDF are not the same.
 
-Neither is a Python dependency, so this is the one export that can be
-unavailable. When it is, the error says exactly what to install rather than
-failing somewhere inside a subprocess.
+MuseScore remains the fallback. It is the better engraver of the two and is
+what anyone editing the result will already have, so where it is installed
+there is no reason not to use it.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ MUSESCORE_COMMANDS = ("mscore", "musescore", "MuseScore4", "MuseScore3", "mscore
 
 
 class EngraverNotFound(RuntimeError):
-    """Raised when no external engraver is installed."""
+    """Raised when no engraver is available at all."""
 
 
 def find_engraver() -> str | None:
@@ -39,6 +41,69 @@ def find_engraver() -> str | None:
     return None
 
 
+def _verovio_available() -> bool:
+    """Whether the in-process route has everything it needs.
+
+    Verovio renders to SVG rather than PDF, so the conversion needs svglib and
+    reportlab too. All three are pure pip installs; any one missing falls back.
+    """
+    try:
+        import reportlab  # noqa: F401,PLC0415
+        import svglib  # noqa: F401,PLC0415
+        import verovio  # noqa: F401,PLC0415
+    except ImportError:
+        return False
+    return True
+
+
+def available() -> bool:
+    """Whether a PDF can be produced by any route."""
+    return _verovio_available() or find_engraver() is not None
+
+
+def _engrave_with_verovio(xml_path: Path, path: Path) -> Path:
+    """Engrave in-process: MusicXML to SVG to PDF."""
+    from io import BytesIO  # noqa: PLC0415
+
+    import verovio  # noqa: PLC0415
+    from reportlab.graphics import renderPDF  # noqa: PLC0415
+    from reportlab.pdfgen import canvas as pdf_canvas  # noqa: PLC0415
+    from svglib.svglib import svg2rlg  # noqa: PLC0415
+
+    toolkit = verovio.toolkit()
+    toolkit.setOptions(
+        {
+            "pageWidth": 2100,
+            "pageHeight": 2970,
+            "scale": 38,
+            "adjustPageHeight": False,
+            "breaks": "auto",
+            "footer": "none",
+            "header": "none",
+        }
+    )
+    if not toolkit.loadData(xml_path.read_text(encoding="utf-8")):
+        raise EngraverNotFound("verovio could not read the MusicXML")
+
+    pages = toolkit.getPageCount()
+    if pages < 1:
+        raise EngraverNotFound("verovio produced no pages")
+
+    canvas = pdf_canvas.Canvas(str(path))
+    for number in range(1, pages + 1):
+        svg = toolkit.renderToSVG(number)
+        drawing = svg2rlg(BytesIO(svg.encode("utf-8")))
+        if drawing is None:
+            raise EngraverNotFound(f"could not convert page {number} to PDF")
+        canvas.setPageSize((drawing.width, drawing.height))
+        renderPDF.draw(drawing, canvas, 0, 0)
+        canvas.showPage()
+    canvas.save()
+
+    log.info("engraved %s with verovio (%d page(s))", path, pages)
+    return path
+
+
 def write(
     sequence: NoteSequence,
     path: str | Path,
@@ -46,19 +111,27 @@ def write(
     keep_musicxml: bool = False,
     timeout: float = 120.0,
 ) -> Path:
-    """Engrave to PDF via an external engraver."""
+    """Engrave to PDF, in-process where possible."""
     engraver = find_engraver()
-    if engraver is None:
+    if engraver is None and not _verovio_available():
         raise EngraverNotFound(
-            "PDF output needs MuseScore on PATH (tried: "
-            f"{', '.join(MUSESCORE_COMMANDS)}). Install it, or export MusicXML "
-            "and open that in any notation editor."
+            "PDF output needs either verovio (pip install "
+            'dropscore"[pdf]") or MuseScore on PATH (tried: '
+            f"{', '.join(MUSESCORE_COMMANDS)}). Or export MusicXML and open "
+            "that in any notation editor."
         )
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     xml_path = path.with_suffix(".musicxml")
     musicxml.write(sequence, xml_path, analysis)
+
+    if engraver is None:
+        try:
+            return _engrave_with_verovio(xml_path, path)
+        finally:
+            if not keep_musicxml and xml_path.exists() and path.exists():
+                xml_path.unlink()
 
     try:
         result = subprocess.run(

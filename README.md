@@ -82,21 +82,33 @@ approximate: one voice per staff, notes tied across barlines, no beaming or
 dynamics. Turning a note stream into *readable* notation is a partly aesthetic
 problem, and this does the mechanical part only.
 
-PDF hands the MusicXML to MuseScore, which must be installed separately. If it
-is not, the service stops offering PDF rather than failing jobs that ask for it
-— and since MusicXML opens in MuseScore anyway, exporting the PDF yourself from
-there costs one step and gives you the chance to fix the notation first.
+PDF engraves in-process with verovio (`pip install "dropscore[pdf]"`), falling
+back to MuseScore where it is on PATH — MuseScore is the better engraver, and
+whoever edits the result will have it anyway. With neither, the service stops
+offering PDF rather than failing jobs that ask for it, and MusicXML opens in any
+notation editor, which gives you the chance to fix the notation first.
 
 ```bash
-dropscore synth --theme all -o out/synth
-dropscore eval --save-baseline baseline.json
+dropscore synth --corpus -o out/synth
 dropscore eval --baseline baseline.json
 ```
 
 `eval` transcribes every clip that has a `.truth.json` sidecar and reports
-note-level precision, recall and F1, plus how far the fitted geometry landed from
-the geometry that drew each clip. With a baseline it exits non-zero when any clip
-gets worse, so it works as a CI gate.
+note-level precision, recall and F1, key and tempo accuracy, plus how far the
+fitted geometry landed from the geometry that drew each clip. With a baseline it
+exits non-zero when any clip gets worse, so it works as a CI gate.
+
+`--corpus` renders exactly the clips `baseline.json` was scored against: one per
+theme, so a change that only works on one look shows up as a regression on the
+rest, plus variants covering five tempos, six keys and held chords in a narrow
+register. The clips are not in the repository, so this is the recipe that makes
+the baseline reproducible — and it lives in code rather than in this file
+because as prose it drifted immediately, leaving a baseline over fourteen clips
+next to instructions that built eight. Rendering takes a few minutes.
+
+Tempo and key each spent a long time silently wrong while the harness called
+them perfect, because every clip was 96 BPM in G major. If you add a clip, add
+it to `CORPUS` in `dropscore/cli.py` and re-save the baseline.
 
 Corpus F1 pools notes rather than averaging per-clip scores — averaging would let
 a two-note clip outvote a thousand-note one. A clip that disappears from the

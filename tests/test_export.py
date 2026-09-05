@@ -301,10 +301,47 @@ def test_write_dispatches_by_name(format: str, tmp_path: Path) -> None:
     assert path.exists() and path.stat().st_size > 0
 
 
-def test_pdf_says_what_to_install_when_absent(tmp_path: Path) -> None:
-    if find_engraver():
-        pytest.skip("an engraver is installed; the missing-engraver path cannot run")
+def test_pdf_says_what_to_install_when_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both routes gone, so the message must name both."""
     from dropscore.export import pdf  # noqa: PLC0415
 
-    with pytest.raises(EngraverNotFound, match="MuseScore"):
+    monkeypatch.setattr(pdf, "find_engraver", lambda: None)
+    monkeypatch.setattr(pdf, "_verovio_available", lambda: False)
+
+    with pytest.raises(EngraverNotFound, match="verovio"):
         pdf.write(_two_hands(), tmp_path / "a.pdf")
+    with pytest.raises(EngraverNotFound, match="MuseScore"):
+        pdf.write(_two_hands(), tmp_path / "b.pdf")
+
+
+def test_pdf_engraves_in_process_without_musescore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of the verovio route: no GUI application on PATH."""
+    from dropscore.export import pdf  # noqa: PLC0415
+
+    if not pdf._verovio_available():
+        pytest.skip('verovio route not installed (pip install "dropscore[pdf]")')
+
+    monkeypatch.setattr(pdf, "find_engraver", lambda: None)
+    out = pdf.write(_two_hands(), tmp_path / "a.pdf")
+
+    assert out.exists() and out.stat().st_size > 0
+    assert out.read_bytes()[:5] == b"%PDF-"
+    assert not out.with_suffix(".musicxml").exists(), "left its intermediate behind"
+
+
+def test_pdf_keeps_the_musicxml_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dropscore.export import pdf  # noqa: PLC0415
+
+    if not pdf._verovio_available():
+        pytest.skip("verovio route not installed")
+
+    monkeypatch.setattr(pdf, "find_engraver", lambda: None)
+    out = pdf.write(_two_hands(), tmp_path / "a.pdf", keep_musicxml=True)
+
+    assert out.with_suffix(".musicxml").exists()

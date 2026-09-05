@@ -19,7 +19,7 @@ from typing import Any
 from ..config import Config, DEFAULT
 from ..sources import SourceError, parse_youtube_id
 from ..export import FORMATS
-from ..export.pdf import find_engraver
+from ..export.pdf import available as pdf_available
 from .jobs import JobStore, Status, transcribe_job
 from .options import TranscribeOptions
 
@@ -83,12 +83,14 @@ def create_app(
 ) -> "FastAPI":
     store = JobStore(Path(workdir), keep_sources=keep_sources)
 
-    # Probed once: PDF needs an external engraver, and nobody installs one
-    # halfway through a server's life. Reporting it lets the UI stop offering
-    # an output this machine cannot produce.
-    engraver = find_engraver()
-    if engraver is None:
-        log.info("no engraver on PATH; PDF export is unavailable")
+    # Probed once: nobody installs an engraver halfway through a server's
+    # life. Reporting it lets the UI stop offering an output this machine
+    # cannot produce. Verovio counts, so a plain pip install is now enough —
+    # previously this asked only whether MuseScore was on PATH, and a server
+    # with the Python dependencies installed still refused to offer PDF.
+    engraver = pdf_available()
+    if not engraver:
+        log.info("no engraver available; PDF export is unavailable")
 
     @asynccontextmanager
     async def lifespan(_app: "FastAPI"):

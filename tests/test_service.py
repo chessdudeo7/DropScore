@@ -355,6 +355,7 @@ def test_a_failed_output_does_not_fail_the_job(
     from dropscore.export import pdf  # noqa: PLC0415
 
     monkeypatch.setattr(pdf, "find_engraver", lambda: None)
+    monkeypatch.setattr(pdf, "_verovio_available", lambda: False)
 
     with clip.open("rb") as handle:
         job_id = client.post(
@@ -379,7 +380,7 @@ def test_health_hides_pdf_when_no_engraver_is_installed(
 ) -> None:
     from dropscore.service import app as app_module  # noqa: PLC0415
 
-    monkeypatch.setattr(app_module, "find_engraver", lambda: None)
+    monkeypatch.setattr(app_module, "pdf_available", lambda: False)
     with TestClient(create_app(serve_frontend=False)) as served:
         outputs = served.get("/api/health").json()["outputs"]
 
@@ -392,7 +393,7 @@ def test_health_offers_pdf_when_an_engraver_exists(
 ) -> None:
     from dropscore.service import app as app_module  # noqa: PLC0415
 
-    monkeypatch.setattr(app_module, "find_engraver", lambda: "/usr/bin/mscore")
+    monkeypatch.setattr(app_module, "pdf_available", lambda: True)
     with TestClient(create_app(serve_frontend=False)) as served:
         assert "pdf" in served.get("/api/health").json()["outputs"]
 
