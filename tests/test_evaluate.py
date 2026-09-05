@@ -251,3 +251,55 @@ def test_load_truth_rejects_a_foreign_json(tmp_path: Path) -> None:
     path.write_text('{"hello": 1}', encoding="utf-8")
     with pytest.raises(EvaluationError, match="not a DropScore truth file"):
         load_truth(path)
+
+
+# ── the corpus the baseline is scored against ────────────────────────
+
+
+def test_corpus_matches_the_stored_baseline() -> None:
+    """`synth --corpus` must build exactly what `baseline.json` scores.
+
+    The clips are rendered into a working directory and are not in the
+    repository, so the baseline is only meaningful if the recipe behind it can
+    be re-run. Written as a list of commands in the README it drifted at once:
+    the documented `synth --theme all` built eight clips while the baseline
+    scored fourteen, and a fresh clone could not run the check at all.
+    """
+    import json
+    from pathlib import Path
+
+    from dropscore.cli import CORPUS, _clip_name
+
+    baseline = Path(__file__).resolve().parents[1] / "baseline.json"
+    if not baseline.exists():
+        pytest.skip("no baseline.json in this checkout")
+
+    stored = json.loads(baseline.read_text(encoding="utf-8"))
+    recorded = {clip["name"] for clip in stored["clips"]}
+    buildable = {
+        _clip_name(entry.theme, "88", 0, entry.sustained, entry.key, entry.tempo)
+        for entry in CORPUS
+    }
+
+    assert buildable == recorded, (
+        f"only in the corpus: {sorted(buildable - recorded)}; "
+        f"only in the baseline: {sorted(recorded - buildable)}"
+    )
+
+
+def test_corpus_covers_every_theme() -> None:
+    """A change that only works on one look must show up somewhere."""
+    from dropscore.cli import CORPUS
+    from dropscore.synth.themes import THEMES
+
+    assert {entry.theme for entry in CORPUS} == set(THEMES)
+
+
+def test_corpus_varies_tempo_and_key() -> None:
+    """Both were once fixed, and both hid a broken estimator behind a
+    harness reporting them perfect."""
+    from dropscore.cli import CORPUS
+
+    assert len({entry.tempo for entry in CORPUS}) >= 5
+    assert len({entry.key for entry in CORPUS}) >= 5
+    assert any(entry.sustained for entry in CORPUS)

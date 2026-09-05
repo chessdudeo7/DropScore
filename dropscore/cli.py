@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from typing import NamedTuple
 from pathlib import Path
 
 from . import __version__
@@ -23,6 +24,49 @@ from .video import VideoError, VideoReader
 log = logging.getLogger("dropscore")
 
 SYNTH_DEFAULT_TEMPO = 96.0
+
+
+class CorpusClip(NamedTuple):
+    """One clip of the evaluation corpus."""
+
+    theme: str
+    key: str | None = None
+    tempo: float = SYNTH_DEFAULT_TEMPO
+    sustained: bool = False
+
+
+# The exact corpus `baseline.json` is scored against.
+#
+# It lives here rather than in the README because the clips themselves are not
+# in the repository — they are rendered into a working directory — so the
+# baseline is only meaningful if the recipe that produced it is reproducible.
+# Written as a list of commands it drifted immediately: the documented
+# `synth --theme all` built eight clips while the baseline scored fourteen,
+# and a fresh clone could not run the regression check at all.
+#
+# One clip per theme establishes that a change is not specific to one look.
+# The rest vary what a single look cannot: tempo, key, and whether the music
+# holds its notes. Both of those blind spots hid real bugs — key finding and
+# beat selection were each broken while the harness reported them perfect,
+# because every clip was 96 BPM in G major.
+CORPUS: tuple[CorpusClip, ...] = (
+    CorpusClip("aurora"),
+    CorpusClip("capture"),
+    CorpusClip("classic"),
+    CorpusClip("flush"),
+    CorpusClip("minimal"),
+    CorpusClip("neon"),
+    CorpusClip("paper"),
+    CorpusClip("synthesia"),
+    # Slow, and slower still: the tempo the beat finder is least sure of.
+    CorpusClip("classic", "D minor", 60.0),
+    CorpusClip("minimal", "A minor", 80.0),
+    CorpusClip("aurora", "C major", 126.0),
+    CorpusClip("synthesia", "F major", 144.0),
+    # Held chords in a narrow register, where tiles outgrow the fall area.
+    CorpusClip("synthesia", sustained=True),
+    CorpusClip("capture", "E minor", 72.0, sustained=True),
+)
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -229,20 +273,46 @@ def cmd_debug(args: argparse.Namespace) -> int:
     return 0
 
 
+def _clip_name(
+    theme: str, key_range: str, seed: int, sustained: bool,
+    key: str | None, tempo: float,
+) -> str:
+    """Name for one synthetic clip.
+
+    Tempo and key appear only when they were asked for, so that adding variety
+    to the corpus does not rename every clip already in it and invalidate the
+    stored baseline.
+    """
+    suffix = "_sustained" if sustained else ""
+    if key:
+        suffix += "_" + key.replace(" ", "")
+    if tempo != SYNTH_DEFAULT_TEMPO:
+        suffix += f"_{tempo:.0f}bpm"
+    return f"{theme}_{key_range}key_seed{seed}{suffix}"
+
+
 def cmd_synth(args: argparse.Namespace) -> int:
     """Render synthetic clips with exact ground truth, for evaluation."""
     from .synth import RenderSpec, generate, get_theme, render  # noqa: PLC0415
 
     out_dir = Path(args.out_dir)
-    themes = sorted(THEMES) if args.theme == "all" else [args.theme]
 
-    for theme_name in themes:
+    if args.corpus:
+        jobs = [
+            (entry.theme, entry.key, entry.tempo, entry.sustained)
+            for entry in CORPUS
+        ]
+    else:
+        themes = sorted(THEMES) if args.theme == "all" else [args.theme]
+        jobs = [(t, args.key, args.tempo, args.sustained) for t in themes]
+
+    for theme_name, key, tempo, sustained in jobs:
         theme = get_theme(theme_name)
-        for index in range(args.count):
+        for index in range(1 if args.corpus else args.count):
             seed = args.seed + index
             sequence = generate(
-                seed=seed, bars=args.bars, tempo=args.tempo,
-                key=args.key, sustained=args.sustained,
+                seed=seed, bars=args.bars, tempo=tempo,
+                key=key, sustained=sustained,
             )
             spec = RenderSpec(
                 width=args.width,
@@ -251,15 +321,9 @@ def cmd_synth(args: argparse.Namespace) -> int:
                 theme=theme,
                 key_range=args.key_range,
             )
-            # Tempo and key go in the name only when asked for, so that
-            # adding variety to the corpus does not rename every clip already
-            # in it and invalidate the stored baseline.
-            suffix = "_sustained" if args.sustained else ""
-            if args.key:
-                suffix += "_" + args.key.replace(" ", "")
-            if args.tempo != SYNTH_DEFAULT_TEMPO:
-                suffix += f"_{args.tempo:.0f}bpm"
-            name = f"{theme_name}_{args.key_range}key_seed{seed}{suffix}"
+            name = _clip_name(
+                theme_name, args.key_range, seed, sustained, key, tempo
+            )
             video, truth = render(sequence, out_dir / f"{name}.mp4", spec)
             print(f"{video}  ({len(sequence)} notes, {sequence.key})")
             if truth:
@@ -567,6 +631,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="88",
         choices=sorted(COMMON_RANGES),
         help="how many keys the keyboard shows",
+    )
+    synth.add_argument(
+        "--corpus",
+        action="store_true",
+        help="render the exact evaluation corpus that baseline.json scores "
+             "against, ignoring --theme/--key/--tempo/--sustained",
     )
     synth.add_argument(
         "--sustained",
