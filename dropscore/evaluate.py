@@ -183,12 +183,28 @@ class ClipResult:
     geometry: GeometryError | None = None
     error: str | None = None
 
+    # What the key finder said against what the clip was written in. Scored
+    # separately from the notes: a transcription can name every pitch correctly
+    # and still be engraved in the wrong key, which is what a reader sees first.
+    key_expected: str | None = None
+    key_found: str | None = None
+    key_confidence: float = 0.0
+
+    @property
+    def key_correct(self) -> bool | None:
+        if not self.key_expected or not self.key_found:
+            return None
+        return self.key_expected == self.key_found
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "metrics": self.metrics.to_dict(),
             "geometry": asdict(self.geometry) if self.geometry else None,
             "error": self.error,
+            "key_expected": self.key_expected,
+            "key_found": self.key_found,
+            "key_confidence": self.key_confidence,
         }
 
 
@@ -310,8 +326,9 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
 
             estimate = transcribe(reader.frames(), calibration, palette, speed, config)
 
+        analysis = None
         try:
-            estimate, _ = postprocess(estimate, config)
+            estimate, analysis = postprocess(estimate, config)
         except ScoreError as exc:
             log.warning("%s: leaving notes raw (%s)", name, exc)
 
@@ -328,7 +345,14 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
             speed_error=speed.value - geometry.get("speed_px_per_s", 0.0),
         )
 
-    return ClipResult(name=name, metrics=compare(reference, estimate, config), geometry=error)
+    return ClipResult(
+        name=name,
+        metrics=compare(reference, estimate, config),
+        geometry=error,
+        key_expected=reference.key,
+        key_found=analysis.key if analysis else None,
+        key_confidence=analysis.key_confidence if analysis else 0.0,
+    )
 
 
 def run_corpus(

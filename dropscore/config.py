@@ -195,6 +195,23 @@ class ScoreConfig:
     max_shift: float = 0.35
     min_duration: float = 0.03
 
+    # How hard a candidate key is penalised for the sounding weight that falls
+    # outside its scale, as a fraction of total weight.
+    #
+    # Krumhansl-Schmuckler correlates the pitch-class profile against a key
+    # template, and a template match does not care whether the notes a key
+    # *requires* are actually present. On a real recording containing no G#
+    # and no D# at all, E major still beat E minor (0.7305 to 0.7128) because
+    # both share a heavy tonic and dominant, and the notes that rule E major
+    # out — C, D and G, a fifth of the sounding weight — cost it nothing.
+    #
+    # Plausible candidates sit within about 0.02 correlation of each other, so
+    # at 0.3 a key excluding a fifth of the music pays 0.06: enough to break a
+    # near-tie, not enough to overturn a genuinely clear winner. Chromatic
+    # music is unaffected — accuracy over the generated corpus is identical at
+    # every value from 0 to 1.2, even with 30% of notes displaced chromatically.
+    out_of_scale_penalty: float = 0.3
+
     # Seconds either side of a note considered when splitting hands by pitch.
     hand_window: float = 1.0
 

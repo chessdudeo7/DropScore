@@ -363,3 +363,65 @@ def test_postprocess_keeps_both_hands() -> None:
     sequence = generate(seed=7, bars=8)
     result, _ = postprocess(sequence)
     assert {n.hand for n in result} == {"L", "R"}
+
+
+# ── key finding ──────────────────────────────────────────────────────
+
+
+def test_key_found_for_every_key_the_generator_writes() -> None:
+    """Both styles, several seeds, every key."""
+    from dropscore.synth.music import KEYS, generate
+
+    wrong = []
+    for key in sorted(KEYS):
+        for sustained in (False, True):
+            for seed in range(4):
+                sequence = generate(seed=seed, key=key, sustained=sustained)
+                found, _ = estimate_key(sequence)
+                if found != key:
+                    wrong.append(f"{key}/{'sustained' if sustained else 'normal'}"
+                                 f"/seed{seed} -> {found}")
+
+    assert not wrong, "mis-identified: " + ", ".join(wrong)
+
+
+def test_key_rejects_a_key_whose_defining_notes_never_sound() -> None:
+    """The real-recording case, as pitch-class weights.
+
+    Measured off a transcription of an actual video: heavy B and E, no F, and
+    — decisively — no G# and no D# anywhere. E major needs both. Plain
+    Krumhansl-Schmuckler still ranked E major first (0.7305 to E minor's
+    0.7128), because the shared tonic and dominant carry the correlation and
+    nothing charges a key for the notes that contradict it.
+    """
+    weights = {"B": 60.3, "E": 52.9, "A": 28.8, "C": 25.1, "D": 5.1, "G": 4.4}
+    pitch_of = {"C": 60, "D": 62, "E": 64, "G": 67, "A": 69, "B": 71}
+
+    notes, onset = [], 0.0
+    for name, weight in weights.items():
+        # Split each class into a few notes so the sequence is note-like.
+        for _ in range(4):
+            notes.append(
+                Note(onset=onset, pitch=pitch_of[name], duration=weight / 4, hand="R")
+            )
+            onset += 0.25
+
+    found, _ = estimate_key(NoteSequence.of(notes))
+
+    assert found != "E major", "picked a key needing G# and D#, neither of which sound"
+    assert found in {"E minor", "A minor"}, f"expected a natural-minor reading, got {found}"
+
+
+def test_out_of_scale_penalty_is_off_when_zero() -> None:
+    """The penalty is a knob, and zero must restore plain correlation."""
+    import dataclasses
+
+    from dropscore.config import DEFAULT
+    from dropscore.synth.music import generate
+
+    plain = DEFAULT.evolve(
+        score=dataclasses.replace(DEFAULT.score, out_of_scale_penalty=0.0)
+    )
+    sequence = generate(seed=0, key="G major")
+
+    assert estimate_key(sequence, plain)[0] == "G major"

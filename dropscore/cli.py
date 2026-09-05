@@ -240,7 +240,7 @@ def cmd_synth(args: argparse.Namespace) -> int:
             seed = args.seed + index
             sequence = generate(
                 seed=seed, bars=args.bars, tempo=args.tempo,
-                sustained=args.sustained,
+                key=args.key, sustained=args.sustained,
             )
             spec = RenderSpec(
                 width=args.width,
@@ -250,6 +250,8 @@ def cmd_synth(args: argparse.Namespace) -> int:
                 key_range=args.key_range,
             )
             suffix = "_sustained" if args.sustained else ""
+            if args.key:
+                suffix += "_" + args.key.replace(" ", "")
             name = f"{theme_name}_{args.key_range}key_seed{seed}{suffix}"
             video, truth = render(sequence, out_dir / f"{name}.mp4", spec)
             print(f"{video}  ({len(sequence)} notes, {sequence.key})")
@@ -308,6 +310,18 @@ def cmd_eval(args: argparse.Namespace) -> int:
             print(f"  {'':<{width}}  {clip.geometry}")
 
     print(f"\ncorpus F1 {report.f1:.4f} over {len(report.clips)} clips")
+
+    scored = [c for c in report.clips if c.key_correct is not None]
+    if scored:
+        right = [c for c in scored if c.key_correct]
+        print(f"key {len(right)}/{len(scored)} correct")
+        for clip in scored:
+            if not clip.key_correct:
+                print(
+                    f"  {clip.name:<{width}}  key {clip.key_found} "
+                    f"({clip.key_confidence:.2f}), wanted {clip.key_expected}"
+                )
+
     if report.failures:
         print(f"{len(report.failures)} clip(s) failed outright")
 
@@ -519,6 +533,11 @@ def build_parser() -> argparse.ArgumentParser:
     synth.add_argument("--seed", type=int, default=0, help="first seed; increments per clip")
     synth.add_argument("--bars", type=int, default=16, help="length in bars")
     synth.add_argument("--tempo", type=float, default=96.0, help="BPM")
+    synth.add_argument(
+        "--key",
+        default=None,
+        help="write in this key instead of one chosen from the seed",
+    )
     synth.add_argument(
         "--key-range",
         default="88",

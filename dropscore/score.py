@@ -48,6 +48,12 @@ MINOR_PROFILE = np.array(
 
 PITCH_CLASS_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
+# Semitones above the tonic that belong to each scale. The profiles above say
+# how *typical* each degree is; these say which are in the key at all, which is
+# a different question and the one a correlation cannot answer on its own.
+MAJOR_SCALE = (0, 2, 4, 5, 7, 9, 11)
+MINOR_SCALE = (0, 2, 3, 5, 7, 8, 10)
+
 # Beat periods worth trying as multiples of the tatum. Covers simple and
 # compound metres without admitting arbitrary ratios.
 BEAT_MULTIPLES = (1, 2, 3, 4, 6, 8)
@@ -187,12 +193,23 @@ def find_downbeat(
 # ── key ──────────────────────────────────────────────────────────────
 
 
-def estimate_key(sequence: NoteSequence) -> tuple[str, float]:
+def estimate_key(
+    sequence: NoteSequence, config: Config = DEFAULT
+) -> tuple[str, float]:
     """Krumhansl-Schmuckler key finding, weighted by sounding time.
 
     Weighting by duration rather than note count matters: a passing sixteenth
     should not argue as loudly for a key as a held whole note.
+
+    Correlation alone is not enough. A template match asks how closely the
+    music's shape resembles a key's, and answers happily for a key whose
+    defining notes never sound: on a real recording with no G# and no D#
+    anywhere, E major still beat E minor, because the two share a heavy tonic
+    and dominant and nothing charged E major for the C, D and G that rule it
+    out. So weight sitting outside a candidate's scale is subtracted from its
+    score — see ``out_of_scale_penalty``.
     """
+    cfg = config.score
     if not len(sequence):
         raise ScoreError("cannot find the key of an empty sequence")
 
@@ -203,14 +220,21 @@ def estimate_key(sequence: NoteSequence) -> tuple[str, float]:
     if not weights.any():
         raise ScoreError("no sounding notes to analyse")
 
+    total = float(weights.sum())
+
     results: list[tuple[float, str]] = []
     for tonic in range(12):
         rotated = np.roll(weights, -tonic)
-        for profile, quality in ((MAJOR_PROFILE, "major"), (MINOR_PROFILE, "minor")):
+        for profile, quality, scale in (
+            (MAJOR_PROFILE, "major", MAJOR_SCALE),
+            (MINOR_PROFILE, "minor", MINOR_SCALE),
+        ):
             correlation = float(np.corrcoef(rotated, profile)[0, 1])
             if math.isnan(correlation):
                 correlation = -1.0
-            results.append((correlation, f"{PITCH_CLASS_NAMES[tonic]} {quality}"))
+            outside = 1.0 - float(rotated[list(scale)].sum()) / total
+            score = correlation - cfg.out_of_scale_penalty * outside
+            results.append((score, f"{PITCH_CLASS_NAMES[tonic]} {quality}"))
 
     results.sort(reverse=True)
     best, key = results[0]
@@ -394,7 +418,7 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
     if cfg.fixed_key:
         key, key_confidence = cfg.fixed_key, 1.0
     else:
-        key, key_confidence = estimate_key(sequence)
+        key, key_confidence = estimate_key(sequence, config)
 
     return Analysis(
         tempo=60.0 / beat,
