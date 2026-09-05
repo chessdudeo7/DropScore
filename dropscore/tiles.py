@@ -55,6 +55,13 @@ class Palette:
     colors: np.ndarray  # Lab, shape (n, 3)
     counts: np.ndarray  # pixels assigned to each colour
 
+    # How far the typical pixel of each colour sits from it. A flat tile is one
+    # colour and its pixels land on top of it; a gradient-filled one is a ramp,
+    # and even its typical pixel sits well out. Measured across the corpus, the
+    # median member distance is 0-8 for every flat theme and 13-16 for the
+    # gradient one, which is what makes it usable as a signal.
+    spreads: np.ndarray | None = None
+
     @property
     def track_count(self) -> int:
         return len(self.colors)
@@ -142,8 +149,45 @@ def discover_palette(
     if not keep.any():
         raise TileError("no tile colour is common enough to be a voice")
 
+    # How tightly each colour's own pixels sit around it, for the acceptance
+    # radius in _track_masks.
+    kept_colors = colors[keep]
+    weighted_pixels = _weighted(pixels[:, None, :], cfg.lightness_weight)[:, 0, :]
+    weighted_colors = _weighted(kept_colors[:, None, None, :], cfg.lightness_weight)
+    weighted_colors = weighted_colors[:, 0, 0, :]
+    member_distance = np.linalg.norm(
+        weighted_pixels[:, None, :] - weighted_colors[None, :, :], axis=2
+    )
+    nearest = member_distance.argmin(axis=1)
+    closest = member_distance.min(axis=1)
+
+    # Measured over plausible members only. Every pixel differing from the
+    # background is a candidate here, and each is assigned to whichever colour
+    # is *nearest* — which for a lane separator or a strike line is not its
+    # colour in any meaningful sense, merely the least wrong one. Counting
+    # those, a single-tile clip measured a spread of 93 and widened its radius
+    # to 233, which matched most of the frame and detected nothing at all.
+    #
+    # The bound has to be loose enough to keep the far end of a gradient ramp,
+    # which is the population this exists to measure: on the gradient theme the
+    # ramp reaches 32 against a tolerance of 22.
+    window = cfg.color_tolerance * cfg.spread_window
+    spreads = np.array(
+        [
+            float(np.median(closest[(nearest == index) & (closest < window)]))
+            if np.any((nearest == index) & (closest < window))
+            else 0.0
+            for index in range(len(kept_colors))
+        ]
+    )
+
     log.debug("palette: %d colours from %d sampled pixels", int(keep.sum()), len(pixels))
-    return Palette(background=background, colors=colors[keep], counts=counts[keep])
+    return Palette(
+        background=background,
+        colors=kept_colors,
+        counts=counts[keep],
+        spreads=spreads,
+    )
 
 
 #: Below this Lab chroma a colour has no meaningful hue — greys and near-whites.
@@ -226,7 +270,26 @@ def _track_masks(
 
     # Only pixels genuinely close to a tile colour count. Bloom is a blend of
     # tile and background, so it sits far from both and drops out here.
-    solid = closest < cfg.color_tolerance
+    #
+    # How close is "close" depends on the colour. A gradient-filled tile is not
+    # one colour but a ramp, so the discovered colour sits mid-ramp and a fixed
+    # radius clips both ends whatever it is set to: measured on such a theme,
+    # a tile's lower half read 23 to 32 against a tolerance of 22, and the mask
+    # stopped 150px short of the tile's bottom edge. Lightness weighting cannot
+    # rescue it — the ramp moves through the hue plane too, and even ignoring
+    # lightness entirely the far end still measures 24.
+    #
+    # So the radius is generous relative to how tightly the colour's own pixels
+    # cluster around it. On a flat theme the typical pixel sits 0-8 away and
+    # this changes nothing; on the gradient one it sits 13-16, and the radius
+    # widens to take in the rest of the ramp. Deliberately keyed to the median
+    # rather than an upper percentile: the tail is bloom, which is larger on
+    # the flat themes than on the gradient one and must stay excluded.
+    radius = np.full(len(distances), cfg.color_tolerance, dtype=np.float32)
+    if palette.spreads is not None and len(palette.spreads) == len(distances):
+        radius = np.maximum(radius, palette.spreads * cfg.spread_multiple)
+
+    solid = closest < radius[nearest]
 
     # No morphological opening. A 3x3 open erodes a pixel in every direction,
     # which removes speckle but also annihilates any stroke thinner than three

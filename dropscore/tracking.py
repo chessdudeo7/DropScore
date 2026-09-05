@@ -75,6 +75,38 @@ class TileTrack:
         return self.bottoms[-1]
 
 
+def _robust_mean(values: np.ndarray) -> float:
+    """Mean of the measurements that are not obvious outliers.
+
+    The mean, not the median, because the underlying displacements are
+    quantised. A renderer places a tile at whole pixels, so between frames it
+    moves 5px or 4px where the true rate is 4.708, and the mixture averages to
+    the truth. Where several tiles are on screen their sub-pixel phases cancel
+    and the correlation peak lands on a continuous value, so either statistic
+    works; where one tile dominates, the two clusters show through and the
+    median snaps to whichever is more populous — measured 4.95 against a true
+    4.708, a 5% error that put every onset 51ms early.
+
+    The median was there to survive outliers, so that job is done first and
+    explicitly. The bound is a multiple of the middle, not of the spread: when
+    one cluster holds most of the measurements the spread is tiny, and a bound
+    scaled to it discards the other cluster — which is the median's bias, put
+    back by the guard meant to make the mean safe. Measured, that alone left
+    a sustained clip at +1.43% instead of +0.23%.
+
+    A frame pair reporting less than half or more than twice the typical rate
+    is not measuring the scroll, and that holds however tightly the rest agree.
+    """
+    if not len(values):
+        return 0.0
+    middle = float(np.median(values))
+    if middle <= 0:
+        return middle
+    ratio = DEFAULT.tracking.outlier_ratio
+    keep = values[(values >= middle / ratio) & (values <= middle * ratio)]
+    return float(keep.mean()) if len(keep) else middle
+
+
 @dataclass(frozen=True)
 class SpeedEstimate:
     """Scroll speed in pixels per second, and how consistent it was."""
@@ -82,6 +114,11 @@ class SpeedEstimate:
     value: float
     spread: float  # median absolute deviation across frame pairs
     samples: int
+
+    # The per-pair measurements behind the value, so that several probes can
+    # be pooled on equal terms. Combining probe *summaries* let a probe resting
+    # on 22 frame pairs count for as much as one resting on 38.
+    shifts: tuple[float, ...] = ()
 
     @property
     def confidence(self) -> float:
@@ -215,10 +252,12 @@ def estimate_speed(
         )
 
     values = np.array(shifts)
-    speed = float(np.median(values))
+    speed = _robust_mean(values)
     spread = float(np.median(np.abs(values - speed)))
     log.debug("scroll speed %.2f px/s (mad %.2f over %d pairs)", speed, spread, len(values))
-    return SpeedEstimate(value=speed, spread=spread, samples=len(values))
+    return SpeedEstimate(
+        value=speed, spread=spread, samples=len(values), shifts=tuple(shifts)
+    )
 
 
 def measure_scroll_speed(
@@ -261,6 +300,7 @@ def measure_scroll_speed(
     )
 
     pooled: list[float] = []
+    probe_values: list[float] = []
     spreads: list[float] = []
     failures: list[str] = []
     for start in starts:
@@ -272,7 +312,8 @@ def measure_scroll_speed(
         except TrackingError as exc:
             failures.append(f"frame {start}: {exc}")
             continue
-        pooled.append(estimate.value)
+        pooled.extend(estimate.shifts or (estimate.value,))
+        probe_values.append(estimate.value)
         spreads.append(estimate.spread)
         log.debug(
             "speed probe at frame %d: %.2f px/s over %d pairs",
@@ -289,18 +330,20 @@ def measure_scroll_speed(
         )
 
     values = np.array(pooled)
-    speed = float(np.median(values))
+    speed = _robust_mean(values)
 
     # Windows that disagree wildly mean one of them locked onto something that
     # was not the tiles, so report the disagreement between probes rather than
     # the within-probe spread — it is the honest measure of confidence here.
+    agreement = np.array(probe_values)
     spread = (
-        float(np.median(np.abs(values - speed)))
-        if len(values) > 1
+        float(np.median(np.abs(agreement - np.median(agreement))))
+        if len(agreement) > 1
         else float(spreads[0])
     )
     log.debug(
-        "scroll speed %.2f px/s from %d of %d probes", speed, len(values), len(starts)
+        "scroll speed %.2f px/s from %d pairs across %d of %d probes",
+        speed, len(values), len(probe_values), len(starts),
     )
     return SpeedEstimate(value=speed, spread=spread, samples=len(values))
 

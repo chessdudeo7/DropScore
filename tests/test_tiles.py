@@ -349,3 +349,86 @@ def test_detection_uses_the_fitted_layout_not_the_true_one() -> None:
     found = {t.pitch for t in detect_in_frame(frame, palette, calibration)}
     assert _expected_pitches(renderer, frame.time, min_height=8) <= found
     assert found <= _expected_pitches(renderer, frame.time)
+
+
+# ── gradient-filled tiles ────────────────────────────────────────────
+
+
+def _plain_calibration(strike_y: int, width: int) -> Calibration:
+    """A keyboard spanning the frame, for tests about colour rather than keys."""
+    layout = KeyboardLayout(width=float(width))
+    return Calibration(
+        layout=layout,
+        strike_y=strike_y,
+        keybed_bottom=strike_y + 20,
+        white_width=layout.white_width,
+        confidence=1.0,
+    )
+
+
+def test_gradient_tile_is_not_clipped_where_its_colour_shifts() -> None:
+    """A ramp is not one colour, and a fixed radius cuts it in half.
+
+    Measured on the gradient theme: the discovered colour sits mid-ramp, the
+    tile's lower half reads 23 to 32 against a tolerance of 22, and the mask
+    stops 150px short of the bottom edge — so the tile's arrival is read from
+    the wrong row and the note fragments.
+    """
+    from dropscore.tiles import Palette, _to_lab, _track_masks
+
+    height, width = 200, 60
+    image = np.zeros((height + 40, width, 3), dtype=np.uint8)
+    # A vertical ramp between two shades of one hue, as a gradient tile draws.
+    for row in range(height):
+        t = row / (height - 1)
+        image[row, :] = (
+            int(108 + t * 126),
+            int(53 + t * 62),
+            int(67 + t * 77),
+        )
+
+    calibration = _plain_calibration(strike_y=height, width=width)
+    lab = _to_lab(image[:height])
+    middle = np.median(lab.reshape(-1, 3), axis=0)
+    pixels = lab.reshape(-1, 3)
+    spread = float(
+        np.median(np.linalg.norm((pixels - middle) * [0.35, 1.0, 1.0], axis=1))
+    )
+    palette = Palette(
+        background=np.array([0.0, 128.0, 128.0], dtype=np.float32),
+        colors=np.array([middle], dtype=np.float32),
+        counts=np.array([pixels.shape[0]]),
+        spreads=np.array([spread]),
+    )
+
+    mask = _track_masks(image, palette, calibration, DEFAULT)[0]
+    covered = mask.sum(axis=1) > width * 0.5
+
+    assert covered[:height].mean() > 0.9, (
+        f"only {covered[:height].mean():.0%} of the ramp was matched; "
+        "the radius is still clipping the gradient"
+    )
+
+
+def test_flat_tiles_keep_the_fixed_tolerance() -> None:
+    """A tight cluster must not widen the radius and let bloom in."""
+    from dropscore.tiles import Palette, _track_masks
+
+    calibration = _plain_calibration(strike_y=80, width=40)
+    image = np.zeros((120, 40, 3), dtype=np.uint8)
+    image[:80, :] = (200, 90, 120)
+
+    tight = Palette(
+        background=np.array([0.0, 128.0, 128.0], dtype=np.float32),
+        colors=np.array([[100.0, 150.0, 100.0]], dtype=np.float32),
+        counts=np.array([1000]),
+        spreads=np.array([1.0]),  # flat: pixels sit on top of the colour
+    )
+    none = Palette(
+        background=tight.background, colors=tight.colors, counts=tight.counts
+    )
+
+    a = _track_masks(image, tight, calibration, DEFAULT)[0]
+    b = _track_masks(image, none, calibration, DEFAULT)[0]
+
+    assert np.array_equal(a, b), "a tight cluster changed the acceptance radius"

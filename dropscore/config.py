@@ -113,6 +113,18 @@ class TileConfig:
     min_palette_share: float = 0.05
     max_sample_pixels: int = 200_000
 
+    # A colour's acceptance radius is at least this multiple of how far its own
+    # pixels typically sit from it, so a gradient-filled tile is not clipped at
+    # a radius chosen for flat ones. Below the point where color_tolerance
+    # takes over it has no effect at all.
+    spread_multiple: float = 2.5
+
+    # When measuring that spread, how far out a pixel may sit and still count
+    # as one of the colour's own, as a multiple of color_tolerance. Loose
+    # enough to keep a gradient's far end, tight enough to exclude pixels that
+    # are only nearest to this colour for want of a better match.
+    spread_window: float = 2.0
+
     # How close a pixel must sit to a palette colour to count as solid tile.
     # Bloom is a blend of tile and background, so it lands outside this and is
     # excluded without any erosion.
@@ -154,6 +166,13 @@ class TrackingConfig:
     min_speed: float = 20.0  # px/s
     max_speed: float = 2000.0
     min_speed_samples: int = 5
+
+    # How far from the typical rate, as a factor, a frame pair may sit before
+    # it is treated as an outlier rather than a measurement. Scaled to the rate
+    # rather than to the spread of the measurements: displacements are
+    # quantised to whole pixels, so they cluster, and a bound scaled to a tight
+    # cluster throws away the second one.
+    outlier_ratio: float = 2.0
 
     # Known displacements used to measure the correlator's own offset, and
     # the largest offset worth believing. Anything past this is not a

@@ -518,3 +518,57 @@ def test_a_tile_taller_than_the_screen_keeps_its_onset() -> None:
 
     assert note is not None
     assert note.onset == pytest.approx(0.8, abs=0.05)
+
+
+# ── which statistic summarises the frame pairs ───────────────────────
+
+
+def test_robust_mean_reads_quantised_displacements_correctly() -> None:
+    """Whole-pixel rendering makes the pairs bimodal; the mean is the truth.
+
+    A tile drawn at integer positions moves 5px or 4px between frames where
+    the true rate is 4.708, and the mixture averages to it. Taking the median
+    snaps to whichever cluster is more populous — measured 4.95 against 4.708,
+    a 5% error that put every onset 51ms early.
+    """
+    from dropscore.tracking import _robust_mean
+
+    values = np.array([5.0] * 70 + [4.0] * 30)  # mean 4.7, median 5.0
+
+    assert _robust_mean(values) == pytest.approx(4.7, abs=0.01)
+    assert np.median(values) == 5.0, "fixture must actually be bimodal"
+
+
+def test_robust_mean_keeps_the_smaller_cluster() -> None:
+    """Regression: an outlier bound scaled to the spread deletes it.
+
+    With one cluster dominating, the median absolute deviation is near zero,
+    so a bound of a few deviations excludes the other cluster entirely — the
+    median's bias reintroduced by the guard meant to make the mean safe.
+    """
+    from dropscore.tracking import _robust_mean
+
+    values = np.array([5.0] * 90 + [4.0] * 10)
+
+    assert float(np.median(np.abs(values - np.median(values)))) == 0.0
+    assert _robust_mean(values) == pytest.approx(4.9, abs=0.01)
+
+
+def test_robust_mean_still_rejects_outliers() -> None:
+    """The job the median was doing has to keep being done."""
+    from dropscore.tracking import _robust_mean
+
+    clean = np.array([100.0, 101.0, 99.0, 100.5, 99.5])
+    with_junk = np.append(clean, [2000.0, 3.0])
+
+    assert _robust_mean(with_junk) == pytest.approx(_robust_mean(clean), abs=0.5)
+
+
+def test_speed_pools_frame_pairs_not_probe_summaries() -> None:
+    """A probe resting on 22 pairs must not weigh as much as one on 38."""
+    from dropscore.tracking import SpeedEstimate
+
+    estimate = SpeedEstimate(value=150.0, spread=1.0, samples=3, shifts=(149.0, 150.0, 151.0))
+
+    assert estimate.shifts, "the per-pair measurements must survive for pooling"
+    assert len(estimate.shifts) == 3
