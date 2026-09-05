@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -190,6 +191,39 @@ class ClipResult:
     key_found: str | None = None
     key_confidence: float = 0.0
 
+    # Tempo, scored the same way. A beat read at half or double the true one
+    # still fits every onset, and still renders the piece in the wrong note
+    # values -- a stream of quarters becomes a stream of sixteenths.
+    tempo_expected: float | None = None
+    tempo_found: float | None = None
+
+    @property
+    def tempo_ratio(self) -> float | None:
+        """Found tempo over true tempo: 1.0 right, 0.5 half-time, 2.0 double."""
+        if not self.tempo_expected or not self.tempo_found:
+            return None
+        return self.tempo_found / self.tempo_expected
+
+    @property
+    def tempo_correct(self) -> bool | None:
+        ratio = self.tempo_ratio
+        return None if ratio is None else abs(ratio - 1.0) <= 0.02
+
+    @property
+    def tempo_octave_correct(self) -> bool | None:
+        """Right up to a power-of-two reading of the beat.
+
+        Which metrical level is "the" beat is not decidable from onsets — a
+        stream of quarters at 100 BPM and one of eighths at 50 are the same
+        sound — so a clip read an octave out is not the same kind of failure
+        as one read at two thirds, which is simply wrong. Both are reported.
+        """
+        ratio = self.tempo_ratio
+        if ratio is None:
+            return None
+        octaves = math.log2(ratio)
+        return abs(octaves - round(octaves)) <= 0.03
+
     @property
     def key_correct(self) -> bool | None:
         if not self.key_expected or not self.key_found:
@@ -205,6 +239,8 @@ class ClipResult:
             "key_expected": self.key_expected,
             "key_found": self.key_found,
             "key_confidence": self.key_confidence,
+            "tempo_expected": self.tempo_expected,
+            "tempo_found": self.tempo_found,
         }
 
 
@@ -352,6 +388,8 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
         key_expected=reference.key,
         key_found=analysis.key if analysis else None,
         key_confidence=analysis.key_confidence if analysis else 0.0,
+        tempo_expected=reference.tempo,
+        tempo_found=analysis.tempo if analysis else None,
     )
 
 

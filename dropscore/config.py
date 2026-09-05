@@ -185,8 +185,35 @@ class ScoreConfig:
 
     min_bpm: float = 40.0
     max_bpm: float = 208.0
-    tempo_prior: float = 110.0  # multiples of the tatum are judged against this
+    tempo_prior: float = 110.0  # where a listener prefers to hear the beat
     beats_per_bar: int = 4
+
+    # Which multiple of the tatum is the beat cannot be read off the onsets
+    # alone: a stream of quarters at 100 BPM and one of eighths at 50 produce
+    # identical onset times. The choice is made from three things.
+    #
+    # First, how strongly the onset train repeats at the candidate period —
+    # that rules out levels which are not metrical at all, such as reading a
+    # piece grouped in twos as though it were in threes.
+    #
+    # Second, this prior, as a Gaussian on log BPM. Wide on purpose: at 1.0 it
+    # spans better than a factor of two either side of `tempo_prior`, so it
+    # only ever breaks a tie between readings the evidence likes equally.
+    tempo_prior_width: float = 1.0
+
+    # Third, how idiomatic the commonest note value looks against the beat.
+    # A piece written almost entirely in sixteenths is far rarer than one in
+    # eighths or quarters, so a beat making the modal note a sixteenth is
+    # evidence it is twice too slow. Adding this costs one exact match over an
+    # eight-tempo sweep and buys something worth more: every remaining error
+    # becomes a doubling rather than a halving. Doubling renotates the same
+    # music in coarser values, which is harmless; halving turns a stream of
+    # eighths into a thicket of sixteenths, which is what a reader notices.
+    duration_evidence: float = 0.5
+
+    # Weight given to a beat that is not the conventional `steps_per_beat`
+    # tatums long. Only decides matters when nothing else does.
+    other_multiple: float = 0.85
 
     # Quantization. Anything within half a step snaps to *some* gridline, so a
     # tolerance below 0.5 is what makes leaving outliers alone possible at all.

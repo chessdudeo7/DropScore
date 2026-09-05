@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import Counter
 from dataclasses import dataclass
+from typing import Sequence
 
 import numpy as np
 
@@ -131,7 +133,7 @@ def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[fl
     # tatum grid contains every gridline the beat grid has, which is what
     # quantization actually needs.
     z = _coherence(onsets, tatum)
-    beat = _beat_from_tatum(tatum, cfg)
+    beat = _beat_from_tatum(tatum, onsets, [n.duration for n in sequence], cfg)
     phase = ((math.atan2(z.imag, z.real) * tatum / (2 * math.pi)) % tatum) % beat
 
     confidence = float(min(1.0, best))
@@ -139,34 +141,98 @@ def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[fl
     return beat, phase, confidence
 
 
-def _beat_from_tatum(tatum: float, cfg) -> float:
+def _repeats_at(onsets: np.ndarray, lag: float, tolerance: float) -> float:
+    """Share of onsets followed by another one ``lag`` seconds later.
+
+    Autocorrelation of the onset train, which peaks at periods the music
+    actually groups by. Unlike coherence this does not cancel when a beat is
+    subdivided — four sixteenths spread evenly round a beat sum to nothing in
+    the coherence angle, but each still has a partner one beat away.
+    """
+    if lag <= 0 or not len(onsets):
+        return 0.0
+
+    # Only onsets with room for a partner may vote. Counting the rest as
+    # misses biases the measure toward short lags, which trivially have more
+    # room: on a uniform stream it made every finer beat look better supported
+    # than the true one, purely because the clip ends.
+    eligible = onsets[onsets + lag <= onsets[-1] + tolerance]
+    if not len(eligible):
+        return 0.0
+
+    index = np.searchsorted(onsets, eligible + lag - tolerance)
+    index = np.clip(index, 0, len(onsets) - 1)
+    return float(np.mean(np.abs(onsets[index] - (eligible + lag)) <= tolerance))
+
+
+def _duration_fit(modal: float, beat: float) -> float:
+    """How idiomatic the commonest note value is against this beat.
+
+    Full marks once the modal note is an eighth or longer, falling away below
+    that: a piece written almost entirely in sixteenths is rare enough that
+    reading one is better evidence of a beat twice too slow than of the piece.
+    """
+    if modal <= 0 or beat <= 0:
+        return 1.0
+    return min(1.0, (modal / beat) / 0.5)
+
+
+def _beat_from_tatum(
+    tatum: float, onsets: np.ndarray, durations: Sequence[float], cfg
+) -> float:
     """Scale the tatum up to a beat.
 
-    The finest grid a piece uses is usually its sixteenth, so ``steps_per_beat``
-    tatums to the beat is the reading to prefer. Choosing purely by nearness to
-    a tempo prior does not work: at 72 BPM it picks three tatums and at 144 it
-    picks six, reporting ~95 BPM for both because that is what sits closest to
-    the prior. The prior is only a tie-breaker for when the expected multiple
-    gives an implausible tempo.
-    """
-    expected = tatum * cfg.steps_per_beat
-    if cfg.steps_per_beat > 0 and cfg.min_bpm <= 60.0 / expected <= cfg.max_bpm:
-        return expected
+    Which multiple is the beat cannot be read off the onsets alone — a stream
+    of quarters at 100 BPM and one of eighths at 50 give identical onset times
+    — so three things decide it, none sufficient alone.
 
-    candidates = []
+    Preferring a fixed ``steps_per_beat`` makes the tatum a sixteenth by
+    construction, which is how a slow arrangement came back at 50 BPM with
+    every note a sixteenth. Choosing by nearness to the prior alone is no
+    better: it reported ~95 BPM for pieces at 72 and at 144.
+    """
+    # How idiomatic the note values look is only evidence when there are
+    # values to compare. A study written as an unbroken stream of sixteenths
+    # is uniform by design, and reading its single duration as "too fine"
+    # argued for a beat a third too fast. Where one value accounts for
+    # everything the term is switched off rather than trusted.
+    modal, variety = 0.0, 0.0
+    if len(durations):
+        counts = Counter(round(float(d), 2) for d in durations)
+        modal, modal_count = counts.most_common(1)[0]
+        variety = 1.0 - modal_count / len(durations)
+
+    best: tuple[float, float] | None = None
     for multiple in BEAT_MULTIPLES:
         beat = tatum * multiple
         bpm = 60.0 / beat
-        if cfg.min_bpm <= bpm <= cfg.max_bpm:
-            candidates.append((abs(math.log(bpm / cfg.tempo_prior)), beat))
+        if not cfg.min_bpm <= bpm <= cfg.max_bpm:
+            continue
 
-    if not candidates:
+        support = _repeats_at(onsets, beat, tatum * 0.5)
+        prior = math.exp(
+            -0.5 * (math.log(bpm / cfg.tempo_prior) / cfg.tempo_prior_width) ** 2
+        )
+        fit = _duration_fit(modal, beat) ** (cfg.duration_evidence * variety)
+
+        # A mild preference for the conventional four tatums to the beat. On
+        # music that says nothing about its own metre — an unbroken stream of
+        # equal notes, where every candidate is supported identically — this
+        # is the only thing left to go on. Weak enough that any real evidence
+        # overrules it.
+        conventional = 1.0 if multiple == cfg.steps_per_beat else cfg.other_multiple
+
+        score = support * prior * fit * conventional
+        if best is None or score > best[0]:
+            best = (score, beat)
+
+    if best is None:
         # Nothing plausible: fall back to whichever multiple lands closest.
         return min(
             (tatum * m for m in BEAT_MULTIPLES),
             key=lambda b: abs(math.log((60.0 / b) / cfg.tempo_prior)),
         )
-    return min(candidates)[1]
+    return best[1]
 
 
 def find_downbeat(

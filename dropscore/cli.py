@@ -322,6 +322,21 @@ def cmd_eval(args: argparse.Namespace) -> int:
                     f"({clip.key_confidence:.2f}), wanted {clip.key_expected}"
                 )
 
+    timed = [c for c in report.clips if c.tempo_correct is not None]
+    if timed:
+        right = [c for c in timed if c.tempo_correct]
+        octave = [c for c in timed if c.tempo_octave_correct]
+        print(
+            f"tempo {len(right)}/{len(timed)} correct, "
+            f"{len(octave)}/{len(timed)} correct up to an octave"
+        )
+        for clip in timed:
+            if not clip.tempo_correct:
+                print(
+                    f"  {clip.name:<{width}}  tempo {clip.tempo_found:.1f} BPM "
+                    f"({clip.tempo_ratio:.2f}x), wanted {clip.tempo_expected:.1f}"
+                )
+
     if report.failures:
         print(f"{len(report.failures)} clip(s) failed outright")
 

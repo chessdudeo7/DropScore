@@ -425,3 +425,99 @@ def test_out_of_scale_penalty_is_off_when_zero() -> None:
     sequence = generate(seed=0, key="G major")
 
     assert estimate_key(sequence, plain)[0] == "G major"
+
+
+# ── which multiple of the tatum is the beat ──────────────────────────
+
+
+def test_beat_is_not_forced_to_a_fixed_multiple() -> None:
+    """A slow piece of eighths and quarters must not read as all sixteenths.
+
+    Taken from a real recording: inter-onset intervals cluster at 0.6s and
+    0.3s. Read with a beat of 1.2s those become sixteenths and eighths at an
+    implausible 50 BPM; read at 0.6s they are quarters and eighths at 100.
+    Preferring a fixed ``steps_per_beat`` always chose the former, because it
+    makes the tatum a sixteenth by construction.
+    """
+    notes, t = [], 0.0
+    for bar in range(8):
+        for step in range(4):
+            notes.append(Note(onset=t, pitch=64, duration=0.55, hand="R"))
+            notes.append(Note(onset=t + 0.3, pitch=59, duration=0.28, hand="L"))
+            t += 0.6
+
+    beat, _, _ = estimate_tempo(NoteSequence.of(notes))
+
+    assert 60.0 / beat == pytest.approx(100.0, rel=0.05), (
+        f"read the beat as {60.0 / beat:.0f} BPM; 0.6s IOIs are quarters, "
+        "not eighths"
+    )
+
+
+def test_uniform_stream_falls_back_to_the_conventional_beat() -> None:
+    """A study of nothing but sixteenths says nothing about its own metre.
+
+    Every candidate period is supported identically, and the note values carry
+    no information either, so the conventional four tatums to the beat is all
+    there is to go on and must still be reachable.
+    """
+    beat, _, _ = estimate_tempo(_grid(96.0, subdivision=4))
+    assert 60.0 / beat == pytest.approx(96.0, rel=0.03)
+
+
+def test_repeats_at_is_not_biased_toward_short_lags() -> None:
+    """Only onsets with room for a partner may vote.
+
+    Counting onsets near the end as misses made every short lag look better
+    supported than a long one purely because the clip stops.
+    """
+    import numpy as np
+
+    from dropscore.score import _repeats_at
+
+    onsets = np.arange(32) * 0.125
+    short = _repeats_at(onsets, 0.375, 0.06)
+    long = _repeats_at(onsets, 0.5, 0.06)
+
+    assert short == pytest.approx(long, abs=1e-9), (
+        f"uniform stream scored {short:.3f} at 3 steps and {long:.3f} at 4"
+    )
+
+
+def test_tempo_errors_are_octaves_not_arbitrary() -> None:
+    """Across the generator's range, any miss is a power-of-two reading.
+
+    Which metrical level is the beat is not decidable from onsets alone, so
+    an octave is a choice rather than a mistake. A ratio like two thirds is
+    a mistake, and must not happen.
+    """
+    import math
+
+    from dropscore.synth.music import generate
+
+    bad = []
+    for bpm in (60, 72, 80, 96, 110, 120, 144, 160):
+        for sustained in (False, True):
+            sequence = generate(seed=0, tempo=float(bpm), sustained=sustained)
+            beat, _, _ = estimate_tempo(sequence)
+            octaves = math.log2((60.0 / beat) / bpm)
+            if abs(octaves - round(octaves)) > 0.03:
+                bad.append(f"{bpm} BPM -> {60.0 / beat:.1f}")
+
+    assert not bad, "non-octave tempo errors: " + ", ".join(bad)
+
+
+def test_tempo_never_reads_half_speed() -> None:
+    """Doubling renotates in coarser values; halving fills the page with
+    sixteenths, which is the failure a reader actually notices."""
+    from dropscore.synth.music import generate
+
+    slow = []
+    for bpm in (60, 72, 80, 96, 110, 120, 144, 160):
+        for sustained in (False, True):
+            sequence = generate(seed=0, tempo=float(bpm), sustained=sustained)
+            beat, _, _ = estimate_tempo(sequence)
+            if (60.0 / beat) / bpm < 0.95:
+                slow.append(f"{bpm} BPM -> {60.0 / beat:.1f}")
+
+    assert not slow, "read slower than written: " + ", ".join(slow)
