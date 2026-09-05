@@ -395,6 +395,13 @@ def _cross_time(times: Sequence[float], edges: Sequence[float], strike_y: int, s
     return float(np.median(estimates))
 
 
+def _frame_interval(times: Sequence[float]) -> float:
+    """Seconds between observations, from the track's own timestamps."""
+    if len(times) < 2:
+        return 0.0
+    return float(np.median(np.diff(np.asarray(times, dtype=np.float64))))
+
+
 def track_to_note(
     track: TileTrack,
     speed: float,
@@ -411,11 +418,27 @@ def track_to_note(
     strike = calibration.strike_y
     margin = cfg.edge_margin
 
+    # A bottom edge that has reached the strike line stops advancing, and a
+    # stationary edge carries no timing: every frame it sits there reports a
+    # crossing at that frame, so a note held for five seconds contributes five
+    # seconds' worth of contradictory estimates and the median lands in the
+    # middle of the note instead of at its start.
+    #
+    # Testing the position against the strike line does not find them. The
+    # detected blob plateaus a few pixels short of the crop edge — measured at
+    # 532 against a strike line of 536 — so a fixed margin lets the whole
+    # plateau through. What marks a clipped edge is that it has stopped moving,
+    # so the plateau is found by where the edge stops rather than by where it
+    # is: anything within one frame's travel of the furthest the edge ever got.
+    bottoms = np.asarray(track.bottoms, dtype=np.float64)
+    step = speed * _frame_interval(track.times)
+    plateau = bottoms.max() - step * 0.5
+
     # Only unclipped edges carry timing information.
     bottom_times, bottom_edges = [], []
     top_times, top_edges = [], []
     for time, top, bottom in zip(track.times, track.tops, track.bottoms):
-        if bottom < strike - margin:
+        if bottom < strike - margin and bottom < plateau:
             bottom_times.append(time)
             bottom_edges.append(bottom)
         if top > margin:

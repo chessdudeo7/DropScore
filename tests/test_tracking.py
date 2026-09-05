@@ -447,3 +447,74 @@ def test_contradictory_edges_are_dropped() -> None:
     track.tops = [340.0, 350.0]  # top below the bottom: inconsistent
 
     assert track_to_note(track, 100.0, calibration) is None
+
+
+# ── edges that have stopped moving ───────────────────────────────────
+
+
+def _falling_then_held(strike: int, speed: float, fps: float, onset: float, held: float):
+    """A tile that reaches the strike line and then sits there.
+
+    Its bottom plateaus a few pixels short of the crop edge, exactly as the
+    detector reports one on a real clip.
+    """
+    from dropscore.tracking import TileTrack
+
+    track = TileTrack(pitch=60, track=0)
+    plateau = strike - 4.0
+    time = 0.0
+    while time < onset + held:
+        bottom = min(plateau, strike + (time - onset) * speed)
+        track.times.append(time)
+        track.bottoms.append(bottom)
+        track.tops.append(max(0.0, bottom - held * speed))
+        time += 1.0 / fps
+    return track
+
+
+def test_onset_ignores_an_edge_that_has_stopped_moving() -> None:
+    """A held note's onset is where its edge arrived, not the middle of it.
+
+    Once the bottom reaches the strike line it stops advancing, and every
+    frame it sits there reports a crossing at that frame. Left in, five
+    seconds of held note contribute five seconds of contradictory estimates
+    and the median lands mid-note: measured 3.00s for a note starting at 1.00.
+    """
+    strike, speed, fps = 536, 208.8, 30.0
+    track = _falling_then_held(strike, speed, fps, onset=1.0, held=5.0)
+    calibration = _plain_calibration(strike_y=strike)
+
+    note = track_to_note(track, speed, calibration, DEFAULT)
+
+    assert note is not None
+    assert note.onset == pytest.approx(1.0, abs=0.05), (
+        f"onset {note.onset:.2f}s; the plateau dragged the median into the note"
+    )
+
+
+def test_plateau_is_found_by_motion_not_by_position() -> None:
+    """The blob stops short of the crop edge, so a fixed margin misses it.
+
+    Measured on a real clip: a strike line at 536 with the detected bottom
+    plateauing at 532, comfortably inside an edge_margin of 2.
+    """
+    strike, speed, fps = 536, 208.8, 30.0
+    track = _falling_then_held(strike, speed, fps, onset=1.0, held=4.0)
+
+    assert max(track.bottoms) < strike - DEFAULT.tracking.edge_margin, (
+        "fixture must reproduce a plateau that the position test lets through"
+    )
+
+    note = track_to_note(track, speed, _plain_calibration(strike_y=strike), DEFAULT)
+    assert note is not None and note.onset == pytest.approx(1.0, abs=0.05)
+
+
+def test_a_tile_taller_than_the_screen_keeps_its_onset() -> None:
+    """Neither edge visible for most of the note, but the arrival was seen."""
+    strike, speed, fps = 536, 208.8, 30.0
+    track = _falling_then_held(strike, speed, fps, onset=0.8, held=12.0)
+
+    note = track_to_note(track, speed, _plain_calibration(strike_y=strike), DEFAULT)
+
+    assert note is not None
+    assert note.onset == pytest.approx(0.8, abs=0.05)
