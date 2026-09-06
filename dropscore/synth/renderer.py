@@ -135,6 +135,16 @@ class SynthRenderer:
                     rng.uniform(-18.0, 18.0),
                     rng.uniform(3.0, 26.0),
                 ))
+
+        # Held column-wise as arrays, and sorted by birth. A frame only needs
+        # the few alive at that instant -- about 200 of seven thousand -- and
+        # walking the whole list per frame to find them made this theme render
+        # fourteen times slower than any other, which showed up as a test suite
+        # taking fifty minutes instead of two.
+        sparks.sort(key=lambda spark: spark[0])
+        self._spark_columns = tuple(
+            np.array(column, dtype=np.float64) for column in zip(*sparks)
+        ) if sparks else ()
         return sparks
 
     def _hand_tracks(self) -> dict[str, np.ndarray]:
@@ -360,36 +370,61 @@ class SynthRenderer:
         # out before any of the interesting filters saw them — which made for a
         # pretty clip that tested nothing.
         layer = np.zeros((self.strike_y, self.spec.width), dtype=np.float32)
-        for birth, x, rise, drift, length in self._sparks:
-            age = t - birth
-            if not 0.0 <= age <= life:
-                continue
-            y = self.strike_y - age * rise
-            if y + length < 0 or y > self.strike_y:
-                continue
 
-            fade = (1.0 - age / life) ** 1.5
-            x0 = int(round(x + drift * age))
-            y0, y1 = int(max(0, y)), int(min(self.strike_y, y + length))
-            if y1 <= y0 or not 0 <= x0 < self.spec.width:
-                continue
+        # Narrow to the sparks alive at this instant before touching any of
+        # them: births are sorted, so the window is a slice, and the rest is
+        # decided with array arithmetic rather than a loop over all of them.
+        births, xs, rises, drifts, lengths = self._spark_columns
+        first = int(np.searchsorted(births, t - life, side="left"))
+        last = int(np.searchsorted(births, t, side="right"))
+        if last <= first:
+            return
 
-            x1 = min(self.spec.width, x0 + (3 if length < 14 else 6))
-            layer[y0:y1, x0:x1] = np.maximum(layer[y0:y1, x0:x1], fade)
+        age = t - births[first:last]
+        y = self.strike_y - age * rises[first:last]
+        span = lengths[first:last]
+        fades = (1.0 - age / life) ** 1.5
+        left = np.round(xs[first:last] + drifts[first:last] * age).astype(int)
+        tops = np.maximum(0, y).astype(int)
+        bottoms = np.minimum(self.strike_y, y + span).astype(int)
 
-        if not layer.any():
+        alive = (
+            (y + span >= 0)
+            & (y <= self.strike_y)
+            & (bottoms > tops)
+            & (left >= 0)
+            & (left < self.spec.width)
+        )
+        widths = np.where(span < 14, 3, 6)
+
+        drawn = np.flatnonzero(alive)
+        if not len(drawn):
+            return
+
+        for i in drawn:
+            x1 = min(self.spec.width, left[i] + int(widths[i]))
+            patch = layer[tops[i] : bottoms[i], left[i] : x1]
+            np.maximum(patch, fades[i], out=patch)
+
+        # Blur and composite only the rows that have sparks in them. Sparks
+        # live in a band near the strike line, so blending the whole fall area
+        # spent most of its time on empty pixels: the composite alone was 48ms
+        # of a 70ms frame, fourteen times the cost of any other theme.
+        sigma = self.layout.white_width * 0.10
+        margin = int(sigma * 4) + 1
+        top = max(0, int(tops[drawn].min()) - margin)
+        bottom = min(self.strike_y, int(bottoms[drawn].max()) + margin)
+        if bottom <= top:
             return
 
         # Blurred tightly and pushed hard, so the cores reach the tiles' own
         # colour rather than staying a blend of colour and background. A blend
         # is what the palette test is designed to exclude, so softer sparks
         # were dropped before the filters this clip exists to exercise.
-        layer = cv2.GaussianBlur(layer, (0, 0), self.layout.white_width * 0.10)
-        layer = np.clip(layer * 6.0, 0.0, 1.0)[:, :, None]
-        region = canvas[: self.strike_y].astype(np.float32)
-        canvas[: self.strike_y] = (
-            region * (1.0 - layer) + colour * layer
-        ).astype(np.uint8)
+        band = cv2.GaussianBlur(layer[top:bottom], (0, 0), sigma)
+        band = np.clip(band * 6.0, 0.0, 1.0)[:, :, None]
+        region = canvas[top:bottom].astype(np.float32)
+        canvas[top:bottom] = (region * (1.0 - band) + colour * band).astype(np.uint8)
 
     def _draw_key_bloom(self, canvas: np.ndarray, active: list[Note]) -> None:
         """Blow struck keys out past white, the way a real renderer does."""
