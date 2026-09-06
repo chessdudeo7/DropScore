@@ -411,7 +411,10 @@ class SynthRenderer:
         # spent most of its time on empty pixels: the composite alone was 48ms
         # of a 70ms frame, fourteen times the cost of any other theme.
         sigma = self.layout.white_width * 0.10
-        margin = int(sigma * 4) + 1
+        # Six sigma, not four: at four the Gaussian's tail is clipped at the
+        # band edge, which showed up as a handful of pixels differing by 4/255
+        # in one frame of a clip against the same clip rendered whole.
+        margin = int(sigma * 6) + 1
         top = max(0, int(tops[drawn].min()) - margin)
         bottom = min(self.strike_y, int(bottoms[drawn].max()) + margin)
         if bottom <= top:
