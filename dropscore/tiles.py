@@ -285,9 +285,27 @@ def _track_masks(
     # widens to take in the rest of the ramp. Deliberately keyed to the median
     # rather than an upper percentile: the tail is bloom, which is larger on
     # the flat themes than on the gradient one and must stay excluded.
+    # Widening is bounded by the other colours. A colour may reach out as far
+    # as it likes into empty space, but not so far that it starts claiming
+    # pixels belonging to another voice — so the bound is half the distance to
+    # the nearest one, which is the point where the two would meet.
+    #
+    # That bound is what makes the widening safe to apply generally. On a video
+    # whose palette is three shades of one colour, discovered from particle
+    # effects rather than two distinct hands, the spread is as large as a
+    # genuine gradient's and would widen the radius just as far: measured, from
+    # 22 to 31, taking the detected blobs from 63 a frame to 91. Those colours
+    # sit 22 apart where a real pair of hands sat 76, and the cap tells them
+    # apart without needing to know which is which.
     radius = np.full(len(distances), cfg.color_tolerance, dtype=np.float32)
     if palette.spreads is not None and len(palette.spreads) == len(distances):
-        radius = np.maximum(radius, palette.spreads * cfg.spread_multiple)
+        wanted = palette.spreads * cfg.spread_multiple
+        if len(targets) > 1:
+            flat = targets.reshape(len(targets), -1)
+            gaps = np.linalg.norm(flat[:, None, :] - flat[None, :, :], axis=2)
+            np.fill_diagonal(gaps, np.inf)
+            wanted = np.minimum(wanted, gaps.min(axis=1) / 2.0)
+        radius = np.maximum(radius, wanted)
 
     solid = closest < radius[nearest]
 
@@ -349,7 +367,24 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
     if start is not None:
         spans.append((y0 + start, y0 + len(filled)))
 
-    return [(a, b) for a, b in spans if b - a >= cfg.min_tile_height]
+    # A tile is a solid block of its colour. Effects are not: a video with
+    # sparks streaming off the strike line produced ninety blobs a frame where
+    # the music had eight, because a wisp crossing a key column fills enough of
+    # a row to pass row_fill_ratio even though it fills little of the region it
+    # ends up spanning.
+    #
+    # Solidity is what tells them apart, and height cannot: measured, the
+    # trails are as tall as tiles, and rejecting anything short enough to catch
+    # them cost 9% of genuine detections while leaving the trails behind. Real
+    # tiles measure 0.79 to 0.92 filled across every theme; the trails sit at
+    # 0.28 to 0.57. Outlined tiles are hollow by design and measure 0.18, which
+    # is why this is checked after the hollow case has already returned.
+    return [
+        (a, b)
+        for a, b in spans
+        if b - a >= cfg.min_tile_height
+        and float(strip[a - y0 : b - y0].mean()) >= cfg.min_solidity
+    ]
 
 
 def detect_in_frame(

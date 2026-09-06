@@ -143,6 +143,13 @@ class TileConfig:
     # partly covered and must not be read as a break in the middle of a tile.
     row_fill_ratio: float = 0.20
 
+    # How much of the region it spans a blob must actually fill to be a tile
+    # rather than a visual effect. Set from the gap between the two: solid
+    # tiles measure 0.79 to 0.92 across every theme, spark trails 0.28 to 0.57.
+    # Outlined tiles are exempt -- they are hollow on purpose, and are
+    # recognised before this applies.
+    min_solidity: float = 0.65
+
     # A region less filled than this is an outlined tile, whose middle is empty
     # by design, rather than two stacked tiles with a seam between them.
     outline_fill_ratio: float = 0.45
@@ -173,6 +180,11 @@ class TrackingConfig:
     # quantised to whole pixels, so they cluster, and a bound scaled to a tight
     # cluster throws away the second one.
     outlier_ratio: float = 2.0
+
+    # How many frames apart the correlated pair sits. More than one because a
+    # recording may not update every frame, and a duplicated pair reads zero
+    # and is discarded, leaving only the pairs that moved twice as far.
+    correlation_lag: int = 5
 
     # Known displacements used to measure the correlator's own offset, and
     # the largest offset worth believing. Anything past this is not a

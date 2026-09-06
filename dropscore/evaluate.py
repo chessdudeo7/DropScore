@@ -358,7 +358,9 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
             calibration = calibrate(samples, config)
             palette = discover_palette(samples, calibration, config)
 
-            speed = measure_scroll_speed(reader, calibration, 40, config=config)
+            speed = measure_scroll_speed(
+                reader, calibration, 40, config=config, palette=palette
+            )
 
             estimate = transcribe(reader.frames(), calibration, palette, speed, config)
 

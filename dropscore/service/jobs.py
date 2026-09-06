@@ -403,7 +403,9 @@ def transcribe_job(
         job.finish("tiles")
 
         job.begin("timing")
-        speed = measure_scroll_speed(reader, calibration, 40, config=config)
+        speed = measure_scroll_speed(
+            reader, calibration, 40, config=config, palette=palette
+        )
         job.say(f"scroll speed {speed.value:.1f} px/s (confidence {speed.confidence:.2f})")
         job.finish("timing")
 

@@ -241,7 +241,9 @@ def cmd_debug(args: argparse.Namespace) -> int:
         speed = None
         if not args.grid_only:
             try:
-                speed = measure_scroll_speed(reader, calibration, 40, config=config)
+                speed = measure_scroll_speed(
+                    reader, calibration, 40, config=config, palette=palette
+                )
             except Exception as exc:  # noqa: BLE001 - speed is optional here
                 log.warning("could not measure scroll speed: %s", exc)
 
@@ -490,7 +492,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         # a stretch of long sustained notes carries no vertical motion to
         # correlate, so a single window can land somewhere unmeasurable.
         speed = measure_scroll_speed(
-            reader, calibration, args.speed_frames, config=config
+            reader, calibration, args.speed_frames, config=config, palette=palette
         )
         log.info("scroll speed %.2f px/s (confidence %.2f)", speed.value, speed.confidence)
 

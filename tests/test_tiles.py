@@ -432,3 +432,40 @@ def test_flat_tiles_keep_the_fixed_tolerance() -> None:
     b = _track_masks(image, none, calibration, DEFAULT)[0]
 
     assert np.array_equal(a, b), "a tight cluster changed the acceptance radius"
+
+
+def test_widening_stops_short_of_a_neighbouring_colour() -> None:
+    """A colour may not widen so far that it claims another voice's pixels.
+
+    Two shades of one colour, discovered from particle effects rather than
+    from two hands, spread as widely as a genuine gradient does and would
+    widen just as far — measured on a real video, from 22 to 31, taking the
+    detected blobs from 63 a frame to 91. Crowded colours cap each other.
+    """
+    from dropscore.tiles import Palette, _to_lab, _track_masks
+
+    calibration = _plain_calibration(strike_y=60, width=40)
+    image = np.zeros((90, 40, 3), dtype=np.uint8)
+    image[:60, :] = (120, 160, 120)
+
+    # Anchor to what the pixel actually converts to, and put the colour just
+    # beyond the fixed tolerance: only a widened radius can reach it.
+    pixel = _to_lab(image[:60])[0, 0].astype(np.float64)
+    near = pixel + np.array([0.0, 25.0, 0.0])
+
+    def palette(gap: float) -> Palette:
+        return Palette(
+            background=np.array([0.0, 128.0, 128.0], dtype=np.float32),
+            colors=np.array([near, near + [0.0, gap, 0.0]], dtype=np.float32),
+            counts=np.array([1000, 1000]),
+            spreads=np.array([15.0, 15.0]),  # both loose enough to want ~37
+        )
+
+    crowded = sum(int(m.sum()) for m in _track_masks(image, palette(24.0), calibration, DEFAULT))
+    spacious = sum(int(m.sum()) for m in _track_masks(image, palette(120.0), calibration, DEFAULT))
+
+    assert spacious > 0, "the widened radius should reach a pixel 25 away"
+    assert crowded == 0, (
+        f"a colour 24 from its neighbour still matched {crowded} pixels 25 away; "
+        "the cap is not limiting how far a crowded palette may widen"
+    )
