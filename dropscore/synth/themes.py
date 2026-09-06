@@ -71,6 +71,19 @@ class Theme:
     # structure to rows the keybed search has to reject.
     hands: bool = False
 
+    # Sparks thrown off the strike line when a key is struck, drifting upward
+    # while the tiles fall. Zero disables them; around 12 is what a real
+    # channel's effects look like.
+    #
+    # These are the hardest thing in the corpus for stage 4 and 5, because they
+    # are the tile's own colour and therefore cannot be told apart by palette,
+    # and they move *against* the tiles. On a real video they outnumbered the
+    # tiles ten to one and dragged the measured scroll speed to 101px/s upward
+    # where the music was falling at 155px/s.
+    particles: int = 0
+    particle_rise: float = 100.0  # px/s upward
+    particle_life: float = 1.2  # seconds before a spark fades out
+
     # A bright line at the top of the keybed. Some renderers draw one, some do
     # not — stage 5 must not depend on finding it.
     strike_line: bool = False
@@ -196,6 +209,29 @@ THEMES: dict[str, Theme] = {
         highlight_bloom=0.9,
         hands=True,
         lead_time=2.4,
+    ),
+    # Sparks streaming off the strike line, as several piano channels draw
+    # them. Modelled on a real video where they outnumbered the tiles ten to
+    # one, share their colour exactly, and drift upward — so neither the
+    # palette nor the direction of travel can be assumed.
+    "sparks": Theme(
+        name="sparks",
+        background=(4, 6, 10),
+        lane_separators=True,
+        lane_color=(16, 20, 26),
+        right_color=(150, 235, 200),
+        left_color=(150, 235, 200),  # one colour, as this style usually is
+        tile_style="flat",
+        tile_gap=0.08,
+        glow=0.4,
+        keybed_ratio=0.24,
+        white_key_color=(236, 238, 240),  # bright keys, unlike `capture`
+        black_key_color=(24, 26, 30),
+        key_edge_color=(140, 144, 150),
+        strike_line=True,
+        strike_color=(230, 250, 240),
+        particles=36,
+        lead_time=2.3,
     ),
     # Minimal: no glow, no separators, tight gaps, fast scroll.
     "minimal": Theme(

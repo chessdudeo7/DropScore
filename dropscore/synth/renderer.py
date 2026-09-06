@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -113,6 +114,28 @@ class SynthRenderer:
 
         self._keybed = self._draw_keybed_base()
         self._hand_x = self._hand_tracks() if self.theme.hands else {}
+        self._sparks = self._spawn_sparks() if self.theme.particles else []
+
+    def _spawn_sparks(self) -> list[tuple[float, float, float, float, float]]:
+        """Sparks thrown off the strike line as each note lands.
+
+        Deterministic, so a clip renders the same way every time. Each is
+        (birth, x, rise, drift, length): they start at the struck key, climb
+        against the falling tiles, and fade after `particle_life`.
+        """
+        rng = random.Random(12345)
+        sparks = []
+        for note in self.notes:
+            centre = self.layout.key_center(note.pitch)
+            for _ in range(self.theme.particles):
+                sparks.append((
+                    note.onset + rng.uniform(0.0, 0.15),
+                    centre + rng.uniform(-1.2, 1.2) * self.layout.white_width,
+                    self.theme.particle_rise * rng.uniform(0.55, 1.5),
+                    rng.uniform(-18.0, 18.0),
+                    rng.uniform(3.0, 26.0),
+                ))
+        return sparks
 
     def _hand_tracks(self) -> dict[str, np.ndarray]:
         """A damped x-position per hand, per frame.
@@ -309,6 +332,9 @@ class SynthRenderer:
         for rect, color in rects:
             self._draw_tile(canvas, rect, color)
 
+        if self._sparks:
+            self._draw_sparks(canvas, t)
+
         self._draw_keybed(canvas, active)
         if theme.highlight_bloom > 0 and active:
             self._draw_key_bloom(canvas, active)
@@ -317,6 +343,53 @@ class SynthRenderer:
         if theme.caption and self.bottom_margin > 8:
             self._draw_caption(canvas)
         return canvas
+
+    def _draw_sparks(self, canvas: np.ndarray, t: float) -> None:
+        """Draw the sparks alive at time ``t``.
+
+        Thin, so they fill little of any key they cross, and drawn in the
+        tiles' own colour so nothing about the palette separates them.
+        """
+        theme = self.theme
+        colour = np.array(_bgr(theme.right_color), dtype=np.float32)
+        life = theme.particle_life
+
+        # Accumulated on their own layer and blurred before compositing, the
+        # way a real renderer blooms them. Drawn as bare one-pixel strokes they
+        # were narrower than the minimum tile width and the detector threw them
+        # out before any of the interesting filters saw them — which made for a
+        # pretty clip that tested nothing.
+        layer = np.zeros((self.strike_y, self.spec.width), dtype=np.float32)
+        for birth, x, rise, drift, length in self._sparks:
+            age = t - birth
+            if not 0.0 <= age <= life:
+                continue
+            y = self.strike_y - age * rise
+            if y + length < 0 or y > self.strike_y:
+                continue
+
+            fade = (1.0 - age / life) ** 1.5
+            x0 = int(round(x + drift * age))
+            y0, y1 = int(max(0, y)), int(min(self.strike_y, y + length))
+            if y1 <= y0 or not 0 <= x0 < self.spec.width:
+                continue
+
+            x1 = min(self.spec.width, x0 + (3 if length < 14 else 6))
+            layer[y0:y1, x0:x1] = np.maximum(layer[y0:y1, x0:x1], fade)
+
+        if not layer.any():
+            return
+
+        # Blurred tightly and pushed hard, so the cores reach the tiles' own
+        # colour rather than staying a blend of colour and background. A blend
+        # is what the palette test is designed to exclude, so softer sparks
+        # were dropped before the filters this clip exists to exercise.
+        layer = cv2.GaussianBlur(layer, (0, 0), self.layout.white_width * 0.10)
+        layer = np.clip(layer * 6.0, 0.0, 1.0)[:, :, None]
+        region = canvas[: self.strike_y].astype(np.float32)
+        canvas[: self.strike_y] = (
+            region * (1.0 - layer) + colour * layer
+        ).astype(np.uint8)
 
     def _draw_key_bloom(self, canvas: np.ndarray, active: list[Note]) -> None:
         """Blow struck keys out past white, the way a real renderer does."""

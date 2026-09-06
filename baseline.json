@@ -1,5 +1,5 @@
 {
-  "f1": 0.9934183463595228,
+  "f1": 0.9767617608161723,
   "clips": [
     {
       "name": "aurora_88key_seed0",
@@ -297,6 +297,33 @@
       "key_confidence": 0.08951303063309723,
       "tempo_expected": 96.0,
       "tempo_found": 96.00452084407881
+    },
+    {
+      "name": "sparks_88key_seed0",
+      "metrics": {
+        "reference_count": 193,
+        "estimate_count": 238,
+        "matched": 170,
+        "onset_mae": 0.005770945094838068,
+        "onset_p95": 0.008465972470588667,
+        "duration_mae": 0.08161995620769825,
+        "hand_accuracy": 0.8705882352941177,
+        "precision": 0.7142857142857143,
+        "recall": 0.8808290155440415,
+        "f1": 0.7888631090487238
+      },
+      "geometry": {
+        "first_pitch_correct": true,
+        "white_width_error": 0.020949263502455295,
+        "strike_y_error": 2,
+        "speed_error": -0.06015020906934865
+      },
+      "error": null,
+      "key_expected": "G major",
+      "key_found": "G major",
+      "key_confidence": 0.08772515826879185,
+      "tempo_expected": 96.0,
+      "tempo_found": 95.98530071978568
     },
     {
       "name": "synthesia_88key_seed0",

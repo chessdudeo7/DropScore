@@ -57,6 +57,7 @@ CORPUS: tuple[CorpusClip, ...] = (
     CorpusClip("minimal"),
     CorpusClip("neon"),
     CorpusClip("paper"),
+    CorpusClip("sparks"),
     CorpusClip("synthesia"),
     # Slow, and slower still: the tempo the beat finder is least sure of.
     CorpusClip("classic", "D minor", 60.0),
