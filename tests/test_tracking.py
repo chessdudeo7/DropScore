@@ -422,18 +422,45 @@ def test_speed_accepts_a_uniform_step() -> None:
 
 
 def test_a_very_short_note_is_kept_not_dropped() -> None:
-    """Losing a note costs recall permanently; a long one is fixed by quantizing."""
+    """Losing a note costs recall permanently; a long one is fixed by quantizing.
+
+    Short in *duration*, which is what this is about. Being seen in only two
+    frames is a different thing and is no longer enough on its own — see
+    test_a_tile_seen_only_twice_is_not_a_note.
+    """
     from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
 
     calibration = _plain_calibration()
     track = TileTrack(pitch=60, track=0)
     # A tile only a couple of pixels tall: a real, very short note.
-    track.observe(_tile(60, 300.0, 0.0, height=2.0))
-    track.observe(_tile(60, 310.0, 0.1, height=2.0))
+    for index in range(DEFAULT.tracking.min_observations):
+        track.observe(_tile(60, 300.0 + index * 10.0, index * 0.1, height=2.0))
 
     note = track_to_note(track, 100.0, calibration)
     assert note is not None, "a short note was discarded"
     assert note.duration >= DEFAULT.tracking.min_duration
+
+
+def test_a_tile_seen_only_twice_is_not_a_note() -> None:
+    """Appearing in two frames is what an effect looks like, not a note.
+
+    Measured across five clips: tracks that matched no real note had a median
+    of 2 observations, while real notes had 57. Admitting everything seen
+    twice let a clip with spark effects produce 67 spurious notes; requiring
+    three removes 56% of them for 3% of the real ones.
+
+    This reverses the earlier reading that anything seen twice is worth
+    keeping. That was measured too, before the corpus contained a clip with
+    effects in it — there was nothing then for the looser bound to let in.
+    """
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    track = TileTrack(pitch=60, track=0)
+    track.observe(_tile(60, 300.0, 0.0, height=2.0))
+    track.observe(_tile(60, 310.0, 0.1, height=2.0))
+
+    assert track_to_note(track, 100.0, calibration) is None
 
 
 def test_contradictory_edges_are_dropped() -> None:

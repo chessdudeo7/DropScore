@@ -201,7 +201,16 @@ class TrackingConfig:
     # Timing. Edges within this many pixels of a frame boundary or the strike
     # line are clipped, so they carry no usable position.
     edge_margin: float = 2.0
-    min_observations: int = 2
+    # Frames a tile must be seen in before it is a note. Two was every blob
+    # that appeared twice, which is what a visual effect looks like: measured
+    # across five clips, spurious tracks have a median of 2 observations where
+    # real notes have 57. Three removes 56% of the spurious ones for 3% of the
+    # real, and is the best of the range -- 4 and 5 trade more real notes than
+    # they save.
+    #
+    # It cannot go much higher without hurting the outlined theme, whose real
+    # tracks are legitimately short: its fifth percentile is 2 observations.
+    min_observations: int = 3
     min_duration: float = 0.02  # seconds; below this it is a detection artefact
 
     # Two notes on one key closer together than this are one note found twice,
