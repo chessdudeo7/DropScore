@@ -261,6 +261,28 @@ def test_hand_split_follows_the_music_up_the_keyboard() -> None:
         assert hands == {"L", "R"}, "each simultaneous pair should straddle the split"
 
 
+def test_a_sparse_bass_does_not_drag_the_split_up_into_the_melody() -> None:
+    """The melody outnumbers the bass, and density must not decide the boundary.
+
+    A left hand playing one note per bar under a right hand playing eight puts
+    most of the notes at the top of the register. Any boundary that clusters
+    the pitches is pulled up among them and hands the melody's lower notes to
+    the bass staff.
+    """
+    notes = []
+    for bar in range(8):
+        notes.append(Note(onset=bar * 2.0, pitch=45, duration=1.8, hand="L"))
+        for step in range(8):
+            pitch = 67 + (step % 5) * 2  # melody sits well above the bass
+            notes.append(
+                Note(onset=bar * 2.0 + step * 0.25, pitch=pitch, duration=0.2, hand="R")
+            )
+
+    split = assign_hands(NoteSequence.of(notes))
+    assert all(n.hand == "L" for n in split if n.pitch == 45)
+    assert all(n.hand == "R" for n in split if n.pitch >= 67)
+
+
 def _hand_config(mode: str) -> Config:
     return Config(score=ScoreConfig(hand_mode=mode))
 

@@ -392,20 +392,37 @@ def _relabel(sequence: NoteSequence, hand_of) -> NoteSequence:
 
 
 def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequence:
+    """Split one colour into two hands with a boundary that follows the music.
+
+    The boundary is the midpoint of the register in play around each note --
+    halfway between the highest and lowest pitch of its nearest neighbours in
+    time. Deliberately not a clustering of those pitches: the left hand plays
+    sparse bass under a dense melody, and any rule that weights by how many
+    notes sit where gets dragged up into the melody, putting its lower notes on
+    the bass staff. Taking only the extremes ignores density, which is the one
+    thing that misleads here.
+
+    Neighbours are counted, not timed. A window measured in seconds spans a
+    different amount of music at 60bpm than at 144, and the accuracy fell off
+    either side of whichever duration was chosen; a fixed count holds across
+    the tempo range.
+    """
     cfg = config.score
     notes = list(sequence)
+    onsets = np.array([n.onset for n in notes], dtype=float)
     pitches = np.array([n.pitch for n in notes], dtype=float)
 
-    global_split = _two_means(pitches)
+    global_split = (pitches.min() + pitches.max()) / 2.0
     assigned: list[Note] = []
 
-    for note in notes:
-        window = [
-            n.pitch
-            for n in notes
-            if abs(n.onset - note.onset) <= cfg.hand_window
-        ]
-        split = _two_means(np.array(window, dtype=float)) if len(window) >= 4 else global_split
+    for index, note in enumerate(notes):
+        nearest = np.argsort(np.abs(onsets - note.onset), kind="stable")
+        window = pitches[nearest[: cfg.hand_neighbours]]
+        split = (
+            (window.min() + window.max()) / 2.0
+            if len(window) >= 4
+            else global_split
+        )
         hand: Hand = "R" if note.pitch >= split else "L"
         assigned.append(Note(note.onset, note.pitch, note.duration, hand, note.velocity))
 

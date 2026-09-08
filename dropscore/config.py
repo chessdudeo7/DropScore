@@ -299,8 +299,12 @@ class ScoreConfig:
     # the measured durations unchanged.
     legato_ratio: float = 0.6
 
-    # Seconds either side of a note considered when splitting hands by pitch.
-    hand_window: float = 1.0
+    # How many neighbouring notes in time set the local hand boundary. Counted
+    # rather than timed: a window in seconds spans different amounts of music
+    # across the tempo range, and accuracy fell off either side of whichever
+    # duration was picked. Measured on 30 held-out pieces at 60-144bpm, this
+    # is flat from 8 to 10 and falls away by 5 and 14.
+    hand_neighbours: int = 8
 
     # How well a single pitch boundary must sort the two colour groups before
     # they are believed to be hands. Real hands cross and share the middle of
