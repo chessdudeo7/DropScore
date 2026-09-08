@@ -385,6 +385,18 @@ def cmd_eval(args: argparse.Namespace) -> int:
 
     print(f"\ncorpus F1 {report.f1:.4f} over {len(report.clips)} clips")
 
+    # Hands are scored over matched pairs only, so this says nothing about
+    # whether the notes were found -- but without it a staff-assignment
+    # regression is invisible: F1 counts a note on the wrong staff as found.
+    handed = [c for c in report.clips if c.metrics.matched]
+    if handed:
+        total = sum(c.metrics.matched for c in handed)
+        weighted = sum(c.metrics.hand_accuracy * c.metrics.matched for c in handed)
+        print(f"hands {weighted / total:.4f} correct")
+        for clip in sorted(handed, key=lambda c: c.metrics.hand_accuracy)[:3]:
+            if clip.metrics.hand_accuracy < 1.0:
+                print(f"  {clip.name:<{width}}  hands {clip.metrics.hand_accuracy:.3f}")
+
     scored = [c for c in report.clips if c.key_correct is not None]
     if scored:
         right = [c for c in scored if c.key_correct]
