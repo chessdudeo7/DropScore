@@ -302,6 +302,21 @@ class ScoreConfig:
     # Seconds either side of a note considered when splitting hands by pitch.
     hand_window: float = 1.0
 
+    # How well a single pitch boundary must sort the two colour groups before
+    # they are believed to be hands. Real hands cross and share the middle of
+    # the keyboard, so this is well under 1.0; a colour split that fell along
+    # some other axis -- black keys against white, most often -- lands near
+    # chance. Measured over the corpus and two real captures: genuine hands
+    # score 0.877 to 0.954, and a one-colour video whose tiles darkened over
+    # the accidentals scored 0.664. This sits between them but nearer the
+    # failure, because the safer error is to trust the colours -- falling back
+    # only helps where they are plainly not hands.
+    hand_separability: float = 0.75
+
+    # Below this many notes the separability test is skipped and the colours
+    # are taken at their word: a handful of notes can look unseparable by luck.
+    min_hand_notes: int = 8
+
     # How hands are decided:
     #   "color" — trust the tile colours, fall back to pitch when there is one
     #   "pitch" — always split by a moving pitch boundary

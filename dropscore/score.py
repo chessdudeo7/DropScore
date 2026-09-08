@@ -336,7 +336,7 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
     left = sequence.hand("L")
     right = sequence.hand("R")
 
-    if left and right:
+    if left and right and _looks_like_hands(sequence, config):
         if np.median([n.pitch for n in left]) > np.median([n.pitch for n in right]):
             flipped = [
                 Note(n.onset, n.pitch, n.duration, "R" if n.hand == "L" else "L", n.velocity)
@@ -347,6 +347,35 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
         return sequence
 
     return _split_by_pitch(sequence, config)
+
+
+def _looks_like_hands(sequence: NoteSequence, config: Config = DEFAULT) -> bool:
+    """Do the two colour groups sit in different registers, as hands do?
+
+    Stage 5 finds colours, not hands. A video that draws every note in one
+    colour can still yield two palettes when the tiles over the black keys
+    render darker than the ones over the white keys, and the split that comes
+    back is accidentals-versus-naturals: two groups interleaved across the
+    whole keyboard. Trusting it puts bass notes on the treble staff and buries
+    the result in ledger lines.
+
+    Hands are not perfectly separable -- they cross, and they share the middle
+    of the keyboard -- but a single pitch boundary still sorts most of a real
+    pair correctly. A split along some other axis does no better than chance.
+    """
+    cfg = config.score
+    notes = list(sequence)
+    if len(notes) < cfg.min_hand_notes:
+        return True  # too little evidence to overrule the colours
+
+    pitches = np.array([n.pitch for n in notes])
+    is_right = np.array([n.hand == "R" for n in notes])
+
+    thresholds = np.arange(pitches.min(), pitches.max() + 2)
+    above = pitches[None, :] >= thresholds[:, None]
+    agree = (above == is_right[None, :]).mean(axis=1)
+    best = float(max(agree.max(), 1.0 - agree.min()))
+    return best >= cfg.hand_separability
 
 
 def _relabel(sequence: NoteSequence, hand_of) -> NoteSequence:

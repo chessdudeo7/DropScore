@@ -184,6 +184,55 @@ def test_correct_hand_labels_are_left_alone() -> None:
     assert by_pitch[40] == "L" and by_pitch[80] == "R"
 
 
+def test_colour_labels_are_ignored_when_they_are_not_registers() -> None:
+    """A one-colour video whose accidentals render darker yields two palettes.
+
+    The split that comes back is black keys against white, not left against
+    right, so the two groups interleave across the whole keyboard. Believing it
+    would put bass notes on the treble staff.
+    """
+    black = {1, 3, 6, 8, 10}
+
+    def coloured(onset: float, pitch: int) -> Note:
+        return Note(
+            onset=onset,
+            pitch=pitch,
+            duration=0.2,
+            hand="R" if pitch % 12 in black else "L",
+        )
+
+    notes = []
+    for i in range(16):
+        notes.append(coloured(i * 0.25, 45 + (i % 6)))  # bass line
+        notes.append(coloured(i * 0.25, 76 + (i % 6)))  # treble line, same instant
+
+    split = assign_hands(NoteSequence.of(notes))
+    assert all(n.hand == "L" for n in split if n.pitch < 60)
+    assert all(n.hand == "R" for n in split if n.pitch > 70)
+
+
+def test_hands_that_share_the_middle_of_the_keyboard_are_still_believed() -> None:
+    """Real hands cross and overlap; only a split along some other axis is
+    rejected. These two lines share four semitones and must survive."""
+    notes = []
+    for i in range(12):
+        notes.append(Note(onset=i * 0.25, pitch=52 + (i % 8), duration=0.2, hand="L"))
+        notes.append(Note(onset=i * 0.25, pitch=56 + (i % 8), duration=0.2, hand="R"))
+
+    split = assign_hands(NoteSequence.of(notes))
+    assert [n.hand for n in split] == [n.hand for n in NoteSequence.of(notes)]
+
+
+def test_a_handful_of_notes_does_not_overrule_the_colours() -> None:
+    """Under the evidence floor an unseparable pair could be chance."""
+    notes = [
+        Note(onset=0.0, pitch=60, duration=0.2, hand="L"),
+        Note(onset=0.5, pitch=64, duration=0.2, hand="R"),
+        Note(onset=1.0, pitch=62, duration=0.2, hand="L"),
+    ]
+    assert [n.hand for n in assign_hands(NoteSequence.of(notes))] == ["L", "R", "L"]
+
+
 def test_single_track_is_split_by_pitch() -> None:
     notes = []
     for i in range(16):
