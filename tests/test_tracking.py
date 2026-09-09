@@ -421,6 +421,68 @@ def test_speed_accepts_a_uniform_step() -> None:
     assert estimate.value == pytest.approx(renderer.speed, rel=0.1)
 
 
+def test_a_rising_track_is_not_a_note() -> None:
+    """Sparks thrown off a struck key rise; tiles fall. Colour cannot tell them
+    apart, and on one clip they cost 41 spurious notes."""
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    track = TileTrack(pitch=60, track=0)
+    for index in range(8):
+        # Climbing away from the strike line, the way a particle does.
+        track.observe(_tile(60, 400.0 - index * 10.0, index * 0.1, height=20.0))
+
+    assert track_to_note(track, 100.0, calibration) is None
+
+
+def test_a_falling_track_is_still_a_note() -> None:
+    """The same test must leave an ordinary descending tile alone."""
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    track = TileTrack(pitch=60, track=0)
+    for index in range(8):
+        track.observe(_tile(60, 300.0 + index * 10.0, index * 0.1, height=20.0))
+
+    assert track_to_note(track, 100.0, calibration) is not None
+
+
+def test_a_fragment_with_a_pinned_top_edge_is_still_a_note() -> None:
+    """Only rising disqualifies a track, not failing to descend.
+
+    A real recording breaks one tile into partial blobs whose top edge is held
+    by whatever occludes them while the bottom falls normally. Asking the top
+    edge alone to descend cost 190 notes on one capture, all of them on the
+    beat.
+    """
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    track = TileTrack(pitch=60, track=0)
+    for index in range(8):
+        bottom = 250.0 + index * 10.0
+        # Top stays at 240 while the bottom falls, so the blob grows.
+        track.observe(_tile(60, bottom, index * 0.1, height=bottom - 240.0))
+
+    assert track_to_note(track, 100.0, calibration) is not None
+
+
+def test_a_tile_too_tall_to_show_its_top_is_not_asked_to_fall() -> None:
+    """A tile taller than the fall area never shows an unclipped top edge, so
+    the fall test has nothing to measure — and must not read that as a no."""
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    track = TileTrack(pitch=60, track=0)
+    for index in range(8):
+        # Top edge pinned above the crop, bottom descending normally.
+        track.observe(
+            _tile(60, 300.0 + index * 10.0, index * 0.1, height=300.0 + index * 10.0)
+        )
+
+    assert track_to_note(track, 100.0, calibration) is not None
+
+
 def test_a_very_short_note_is_kept_not_dropped() -> None:
     """Losing a note costs recall permanently; a long one is fixed by quantizing.
 

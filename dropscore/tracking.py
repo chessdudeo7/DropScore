@@ -35,7 +35,7 @@ import cv2
 import numpy as np
 
 from .calibrate import Calibration
-from .config import Config, DEFAULT
+from .config import Config, DEFAULT, TrackingConfig
 from .notes import Hand, Note, NoteSequence
 from .tiles import Palette, Tile, detect_in_frame
 from .video import Frame, VideoReader
@@ -508,6 +508,52 @@ def _frame_interval(times: Sequence[float]) -> float:
     return float(np.median(np.diff(np.asarray(times, dtype=np.float64))))
 
 
+def _falls_like_a_tile(
+    top: tuple[Sequence[float], Sequence[float]],
+    bottom: tuple[Sequence[float], Sequence[float]],
+    speed: float,
+    cfg: TrackingConfig,
+) -> bool:
+    """Is this track ascending, the way a particle does and a tile cannot?
+
+    A spark thrown off a struck key rises. Nothing that is a tile does, so a
+    track whose every measurable edge climbs was not one, whatever colour it
+    was drawn in. Measured on a clip with sparks, the spurious tracks fit -0.46
+    of the scroll speed against 1.00 for the real ones.
+
+    The stronger claim -- that a tile descends at the scroll speed exactly,
+    because that is what scrolling means -- is true of a tile and false of a
+    *track*. A real recording breaks one tile into dozens of partial blobs
+    whose edges are pinned by whatever occludes them rather than by the tile:
+    on one capture 69% of tracks had an edge that never moved, and requiring
+    descent dropped 190 notes whose onsets sat on the beat grid as tightly as
+    the ones it kept. So stationary has to be allowed through. It is only the
+    sign that can be trusted here, not the rate.
+
+    Either edge may answer. A particle rises at both ends, so it fails whichever
+    is asked, while a fragment need only show one edge that is not climbing.
+    Neither is always visible -- a tile taller than the fall area has no
+    unclipped end, and the bottom stops dead at the strike line -- and a
+    question that cannot be answered must not be read as a no.
+    """
+    fits = [
+        rate
+        for times, edges in (top, bottom)
+        if (rate := _fall_rate(times, edges)) is not None
+    ]
+    return not fits or max(fits) >= cfg.min_fall_ratio * speed
+
+
+def _fall_rate(times: Sequence[float], edges: Sequence[float]) -> float | None:
+    """Pixels per second this edge descends, or None if it cannot be measured."""
+    if len(times) < DEFAULT.tracking.min_fall_samples:
+        return None
+    t = np.asarray(times, dtype=np.float64)
+    if float(t.max() - t.min()) <= 0.0:
+        return None
+    return float(np.polyfit(t, np.asarray(edges, dtype=np.float64), 1)[0])
+
+
 def track_to_note(
     track: TileTrack,
     speed: float,
@@ -553,6 +599,12 @@ def track_to_note(
 
     if not bottom_times:
         # Never seen before it reached the line; its onset is unrecoverable.
+        return None
+
+    if not _falls_like_a_tile(
+        (top_times, top_edges), (bottom_times, bottom_edges), speed, cfg
+    ):
+        log.debug("dropping pitch %d: does not fall at the scroll speed", track.pitch)
         return None
 
     onset = _cross_time(bottom_times, bottom_edges, strike, speed)

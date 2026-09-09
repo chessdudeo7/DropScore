@@ -211,6 +211,29 @@ class TrackingConfig:
     # It cannot go much higher without hurting the outlined theme, whose real
     # tracks are legitimately short: its fifth percentile is 2 observations.
     min_observations: int = 3
+
+    # Particles rise; tiles do not. A spark thrown off a struck key travels
+    # upward, so a track whose every measurable edge is *ascending* was not a
+    # tile, whatever colour it was drawn in.
+    #
+    # Stated as "rising", not "falling at the scroll speed", though the second
+    # is the truer description of a tile and separates the synthetic clips far
+    # better. It cannot be used. A real recording breaks one tile into dozens
+    # of partial blobs whose edges are pinned by whatever occludes them: on one
+    # capture 69% of tracks had an edge that never moved at all, and demanding
+    # they descend threw away 190 notes that were as well aligned to the beat
+    # as the ones it kept. Stationary is what fragmentation looks like, and
+    # only rising is what a particle looks like.
+    #
+    # Slightly below zero rather than at it, so that noise in a short fit does
+    # not read as ascent.
+    min_fall_ratio: float = -0.05
+
+    # Unclipped samples needed before the test is allowed to reject a track. A
+    # tile taller than the fall area never shows its top edge and its bottom
+    # stops dead at the strike line, so the question cannot always be asked --
+    # and unanswerable must not read as no.
+    min_fall_samples: int = 4
     min_duration: float = 0.02  # seconds; below this it is a detection artefact
 
     # Two notes on one key closer together than this are one note found twice,
