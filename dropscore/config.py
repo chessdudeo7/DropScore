@@ -280,6 +280,14 @@ class ScoreConfig:
     # worth 11 points of exact accuracy on its own.
     tempo_prior_width: float = 2.0
 
+    # How close a partner must land, as a fraction of the tatum, to count as a
+    # repeat. Strictly under a half: at a half the acceptance window is a whole
+    # tatum wide and takes in the *neighbouring* gridline, so on grid-aligned
+    # music every candidate period scores near one and the measure stops
+    # discriminating -- two readings of one piece came back at 0.913 apiece,
+    # and noise between saturated scores chose the beat.
+    repeat_tolerance: float = 0.25
+
     # Third, how idiomatic the commonest note value looks against the beat.
     # A piece written almost entirely in sixteenths is far rarer than one in
     # eighths or quarters, so a beat making the modal note a sixteenth is

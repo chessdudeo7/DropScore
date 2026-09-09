@@ -218,7 +218,7 @@ def _beat_from_tatum(
         if not cfg.min_bpm <= bpm <= cfg.max_bpm:
             continue
 
-        support = _repeats_at(onsets, beat, tatum * 0.5)
+        support = _repeats_at(onsets, beat, tatum * cfg.repeat_tolerance)
         prior = math.exp(
             -0.5 * (math.log(bpm / cfg.tempo_prior) / cfg.tempo_prior_width) ** 2
         )

@@ -561,19 +561,24 @@ def test_tempo_errors_are_octaves_not_arbitrary() -> None:
     Which metrical level is the beat is not decidable from onsets alone, so
     an octave is a choice rather than a mistake. A ratio like two thirds is
     a mistake, and must not happen.
+
+    Several seeds, because one is not a sample. Written against seed 0 alone
+    this passed while a two-thirds reading sat in the generator's range the
+    whole time, found only by sweeping seeds by hand.
     """
     import math
 
     from dropscore.synth.music import generate
 
     bad = []
-    for bpm in (60, 72, 80, 96, 110, 120, 144, 160):
-        for sustained in (False, True):
-            sequence = generate(seed=0, tempo=float(bpm), sustained=sustained)
-            beat, _, _ = estimate_tempo(sequence)
-            octaves = math.log2((60.0 / beat) / bpm)
-            if abs(octaves - round(octaves)) > 0.03:
-                bad.append(f"{bpm} BPM -> {60.0 / beat:.1f}")
+    for bpm in (60, 72, 80, 96, 110, 120, 144, 152, 160):
+        for seed in (0, 47, 113):
+            for sustained in (False, True):
+                sequence = generate(seed=seed, tempo=float(bpm), sustained=sustained)
+                beat, _, _ = estimate_tempo(sequence)
+                octaves = math.log2((60.0 / beat) / bpm)
+                if abs(octaves - round(octaves)) > 0.03:
+                    bad.append(f"{bpm} BPM (seed {seed}) -> {60.0 / beat:.1f}")
 
     assert not bad, "non-octave tempo errors: " + ", ".join(bad)
 
