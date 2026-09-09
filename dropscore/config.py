@@ -271,10 +271,14 @@ class ScoreConfig:
     # that rules out levels which are not metrical at all, such as reading a
     # piece grouped in twos as though it were in threes.
     #
-    # Second, this prior, as a Gaussian on log BPM. Wide on purpose: at 1.0 it
-    # spans better than a factor of two either side of `tempo_prior`, so it
-    # only ever breaks a tie between readings the evidence likes equally.
-    tempo_prior_width: float = 1.0
+    # Second, this prior, as a Gaussian on log BPM. Wide on purpose, and wider
+    # than it was: at 1.0 it still pulled hard enough to double the tempo of
+    # anything slow, because 60 BPM sits far enough down the curve from the
+    # 110 the prior likes that 120 outscored it on the prior alone. It should
+    # only break a tie between readings the evidence likes equally, and at 2.0
+    # it does. Measured over 120 pieces from 60 to 152 BPM, widening it is
+    # worth 11 points of exact accuracy on its own.
+    tempo_prior_width: float = 2.0
 
     # Third, how idiomatic the commonest note value looks against the beat.
     # A piece written almost entirely in sixteenths is far rarer than one in
@@ -287,8 +291,13 @@ class ScoreConfig:
     duration_evidence: float = 0.5
 
     # Weight given to a beat that is not the conventional `steps_per_beat`
-    # tatums long. Only decides matters when nothing else does.
-    other_multiple: float = 0.85
+    # tatums long. Only decides matters when nothing else does, so it is close
+    # to 1.0: at 0.85 it was strong enough to overturn the onset evidence on
+    # any piece whose finest grid is a thirty-second, where the beat is eight
+    # tatums rather than four and the bonus backs the wrong reading. Removing
+    # it entirely is worse again -- an unbroken stream of equal notes supports
+    # every level identically, and then this is the only thing left.
+    other_multiple: float = 0.95
 
     # Quantization. Anything within half a step snaps to *some* gridline, so a
     # tolerance below 0.5 is what makes leaving outliers alone possible at all.

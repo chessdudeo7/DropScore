@@ -165,16 +165,25 @@ def _repeats_at(onsets: np.ndarray, lag: float, tolerance: float) -> float:
     return float(np.mean(np.abs(onsets[index] - (eligible + lag)) <= tolerance))
 
 
-def _duration_fit(modal: float, beat: float) -> float:
+def _duration_fit(modal: float, beat: float, articulation: float = 1.0) -> float:
     """How idiomatic the commonest note value is against this beat.
 
     Full marks once the modal note is an eighth or longer, falling away below
     that: a piece written almost entirely in sixteenths is rare enough that
     reading one is better evidence of a beat twice too slow than of the piece.
+
+    The measured duration is how long the key was held, which is shorter than
+    the value written -- a quarter played detached at 60 BPM lasts around a
+    third of a second, not a whole one. Taken literally every piece looks
+    written in finer values than it is, and finer values argue for a faster
+    beat, so this term voted for double the tempo on exactly the slow pieces
+    where it should have argued against. Dividing out the articulation
+    compares like with like.
     """
     if modal <= 0 or beat <= 0:
         return 1.0
-    return min(1.0, (modal / beat) / 0.5)
+    written = modal / articulation if articulation > 0 else modal
+    return min(1.0, (written / beat) / 0.5)
 
 
 def _beat_from_tatum(
@@ -213,13 +222,20 @@ def _beat_from_tatum(
         prior = math.exp(
             -0.5 * (math.log(bpm / cfg.tempo_prior) / cfg.tempo_prior_width) ** 2
         )
-        fit = _duration_fit(modal, beat) ** (cfg.duration_evidence * variety)
+        fit = _duration_fit(modal, beat, cfg.legato_ratio) ** (
+            cfg.duration_evidence * variety
+        )
 
         # A mild preference for the conventional four tatums to the beat. On
         # music that says nothing about its own metre — an unbroken stream of
         # equal notes, where every candidate is supported identically — this
         # is the only thing left to go on. Weak enough that any real evidence
         # overrules it.
+        #
+        # Rewarding binary multiples generally instead, so that a beat of eight
+        # tatums is not punished where the finest grid is a thirty-second, is
+        # worse: it hands the same bonus to a beat of two tatums, and reading a
+        # slow piece at double speed is the commoner error by far.
         conventional = 1.0 if multiple == cfg.steps_per_beat else cfg.other_multiple
 
         score = support * prior * fit * conventional

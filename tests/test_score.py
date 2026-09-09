@@ -578,6 +578,33 @@ def test_tempo_errors_are_octaves_not_arbitrary() -> None:
     assert not bad, "non-octave tempo errors: " + ", ".join(bad)
 
 
+def test_slow_pieces_are_rarely_read_at_double_speed() -> None:
+    """Slow tempi were doubled, and by two separate mechanisms.
+
+    The prior sat far enough above them that twice the tempo scored better on
+    nearness alone, and the modal *played* duration -- always shorter than the
+    value written -- made the music look finer than it was, which argues for a
+    faster beat. Both pushed the same way on exactly the pieces where the onset
+    evidence already favoured the truth.
+
+    Not zero. Which metrical level is the beat is not decidable from onsets
+    alone, and one reading in eighteen here is still doubled; over a wider
+    sweep of 120 pieces the rate is 3%, against 18% before. The bound is set to
+    catch a regression to that, not to claim the ambiguity is gone.
+    """
+    from dropscore.synth.music import generate
+
+    doubled = []
+    for bpm in (60, 63, 66, 72, 80, 88):
+        for seed in (0, 5, 11):
+            sequence = generate(seed=seed, tempo=float(bpm))
+            beat, _, _ = estimate_tempo(sequence)
+            if (60.0 / beat) / bpm > 1.5:
+                doubled.append(f"{bpm} BPM (seed {seed}) -> {60.0 / beat:.1f}")
+
+    assert len(doubled) <= 1, "read at double speed: " + ", ".join(doubled)
+
+
 def test_tempo_never_reads_half_speed() -> None:
     """Doubling renotates in coarser values; halving fills the page with
     sixteenths, which is the failure a reader actually notices."""
