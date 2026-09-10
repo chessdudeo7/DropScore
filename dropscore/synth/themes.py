@@ -36,6 +36,11 @@ class Theme:
     tile_style: TileStyle = "flat"
     corner_radius: float = 0.0  # as a fraction of tile width
     tile_gap: float = 0.10  # horizontal inset, as a fraction of key width
+
+    # Stroke width for ``tile_style="outline"``, in pixels. Fixed rather than a
+    # fraction of the tile: a black key is little more than half the width of a
+    # white one, and a proportional stroke rounded down to a single pixel there.
+    outline_width: int = 2
     glow: float = 0.0  # 0 disables; ~0.5 is a strong bloom
 
     # Keybed.

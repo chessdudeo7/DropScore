@@ -335,6 +335,7 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
         return []
 
     cfg = config.tiles
+
     fill = strip.mean(axis=1)
 
     # An outlined tile is hollow: both side edges drawn down its full height,
@@ -344,12 +345,20 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
     # Sparseness alone was not enough: a key whose neighbour bleeds into its
     # edge column is also sparse, and calling that an outline kept it whole and
     # handed it the neighbour's full height.
+    # Each side is judged by its strongest column rather than its outermost.
+    # Exactly which column a stroke lands in is not something the caller can
+    # settle: a key boundary falls between pixels, and a blob can run a column
+    # wide of its key through antialiasing. Reading the outermost column alone,
+    # a stroke one column in -- or split across two, at 1.0 and 0.75 -- was
+    # read as no stroke at all, and the tile was handed to the solidity rule
+    # meant for filled ones. That cost every tile on one key for a whole clip.
     columns = strip.mean(axis=0)
+    edge = 2 if columns.size >= 6 else 1
     hollow = (
         columns.size > 2
-        and columns[0] >= cfg.outline_edge_ratio
-        and columns[-1] >= cfg.outline_edge_ratio
-        and float(columns[1:-1].mean()) < cfg.outline_fill_ratio
+        and float(columns[:edge].max()) >= cfg.outline_edge_ratio
+        and float(columns[-edge:].max()) >= cfg.outline_edge_ratio
+        and float(columns[edge:-edge].mean()) < cfg.outline_fill_ratio
     )
     if hollow:
         return [(y0, y1)] if y1 - y0 >= cfg.min_tile_height else []
@@ -416,8 +425,18 @@ def detect_in_frame(
             # music, so this is not an edge case.
             for pitch in pitches:
                 left, right = calibration.layout.key_span(pitch)
-                x0 = max(x, int(round(left)))
-                x1 = min(x + w, int(round(right)))
+                if len(pitches) == 1:
+                    # The blob is this key's alone, so take it whole. Cutting
+                    # it to the key's span loses whatever the span's rounded
+                    # edge trims away, and an outlined tile keeps its strokes
+                    # exactly there: on a black key, whose tile fills its span
+                    # almost exactly, the right-hand stroke fell outside the
+                    # cut entirely. Nothing downstream can recover a stroke
+                    # that was never in the strip.
+                    x0, x1 = x, x + w
+                else:
+                    x0 = max(x, int(round(left)))
+                    x1 = min(x + w, int(round(right)))
                 if x1 <= x0:
                     continue
 

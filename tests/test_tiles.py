@@ -135,6 +135,24 @@ def test_adjacent_keys_of_different_lengths_keep_their_own_heights() -> None:
     assert short_tile.top == pytest.approx(150, abs=3)
 
 
+def test_an_outlined_tile_on_a_black_key_is_detected() -> None:
+    """A black key's tile fills its span almost exactly, so its edges sit on
+    the span's boundary. Rounding the boundary inward dropped the column the
+    right-hand stroke was drawn in: the blob stopped reading as hollow, was
+    judged by the solidity rule meant for filled tiles, and one key went
+    undetected for a whole clip -- 14 notes, with nothing else missed.
+    """
+    black = 78
+    sequence = NoteSequence.of([Note(onset=0.6, pitch=black, duration=1.2)])
+    renderer = _renderer("paper", sequence)
+    calibration = _truth_calibration(renderer)
+    frame = _frame_at(renderer, 1.0)
+    palette = discover_palette(_frames(renderer), calibration)
+
+    found = {tile.pitch for tile in detect_in_frame(frame, palette, calibration)}
+    assert black in found, f"black key missed; found {sorted(found)}"
+
+
 def test_a_gap_on_one_key_does_not_split_its_neighbour() -> None:
     """Two strikes on D, one long note on C, touching.
 

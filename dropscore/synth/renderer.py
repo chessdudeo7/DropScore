@@ -288,8 +288,12 @@ class SynthRenderer:
         bgr = _bgr(color)
 
         if theme.tile_style == "outline":
-            thickness = max(1, (x1 - x0) // 8)
-            cv2.rectangle(canvas, (x0, y0), (x1, y1), bgr, thickness)
+            # Constant, not a fraction of the width. Scaling by width gave a
+            # white key two pixels of stroke and a black key one, and a single
+            # antialiased pixel of a colour near the paper never resolves: one
+            # side of every black-key tile vanished entirely, costing 14 notes
+            # on one key. Real designs pick a stroke and keep it.
+            cv2.rectangle(canvas, (x0, y0), (x1, y1), bgr, theme.outline_width)
             return
 
         if theme.tile_style == "gradient":
