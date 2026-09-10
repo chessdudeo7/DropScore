@@ -140,9 +140,19 @@ def _correlation_bias(
     Rolling wraps the image, which is precisely the periodicity the DFT behind
     phase correlation assumes, so the probe is a fair one.
     """
+    # Only frames with something in them can answer. A probe landing after the
+    # last tile has fallen sees an empty fall area, and phase correlation on a
+    # blank image returns a peak from nowhere -- measured, a shift of 270 on
+    # every probe, which is the guard below firing on all fifteen corpus clips
+    # for a signal that was never there. Same test the frame pairs get.
+    usable = [image for image in residuals if float(image.std()) >= cfg.min_residual]
+    if not usable:
+        log.debug("no signal to measure the correlation bias on; assuming none")
+        return 0.0
+
     errors = [
         cv2.phaseCorrelate(image, np.roll(image, probe, axis=0), window)[0][1] - probe
-        for image in residuals
+        for image in usable
         for probe in cfg.bias_probe_shifts
     ]
     bias = float(np.median(errors)) if errors else 0.0

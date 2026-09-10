@@ -7,6 +7,7 @@ the nearest frame could achieve.
 
 from __future__ import annotations
 
+import cv2
 import numpy as np
 import pytest
 
@@ -419,6 +420,33 @@ def test_speed_accepts_a_uniform_step() -> None:
 
     estimate = estimate_speed(strided, calibration)
     assert estimate.value == pytest.approx(renderer.speed, rel=0.1)
+
+
+def test_an_empty_fall_area_measures_no_correlation_bias() -> None:
+    """A probe landing after the last tile has fallen has nothing to measure.
+
+    Phase correlation on a blank image returns a peak from nowhere -- a shift
+    of about 270, which is not a sub-pixel offset but noise. The guard against
+    implausible values caught it, so nothing was ever miscorrected, but it
+    caught it on every clip in the corpus and the warning meant nothing.
+    """
+    from dropscore.tracking import _correlation_bias  # noqa: PLC0415
+
+    blank = np.zeros((240, 320), dtype=np.float32)
+    window = cv2.createHanningWindow((320, 240), cv2.CV_32F)
+
+    assert _correlation_bias([blank, blank], window, DEFAULT.tracking) == 0.0
+
+
+def test_correlation_bias_still_reads_a_frame_that_has_tiles_in_it() -> None:
+    """The gate above must not silence the measurement it was built for."""
+    from dropscore.tracking import _correlation_bias  # noqa: PLC0415
+
+    rng = np.random.default_rng(0)
+    image = rng.random((240, 320), dtype=np.float32) * 255.0
+    window = cv2.createHanningWindow((320, 240), cv2.CV_32F)
+
+    assert abs(_correlation_bias([image], window, DEFAULT.tracking)) < 1.0
 
 
 def test_a_rising_track_is_not_a_note() -> None:
