@@ -211,6 +211,27 @@ def test_colour_labels_are_ignored_when_they_are_not_registers() -> None:
     assert all(n.hand == "R" for n in split if n.pitch > 70)
 
 
+def test_a_lopsided_colour_split_is_not_believed_for_being_lopsided() -> None:
+    """Most notes in one colour, the rest scattered over the same range.
+
+    Nothing about pitch separates the colours, but a boundary below every
+    note already sorts 78% of them correctly. As a raw accuracy against 0.75
+    that passed, and on a real capture it put 172 notes on the wrong staff.
+    """
+    import random  # noqa: PLC0415
+
+    rng = random.Random(3)
+    notes = []
+    for i in range(200):
+        hand = "R" if i % 9 < 2 else "L"  # 22% one way, 78% the other
+        notes.append(Note(onset=i * 0.2, pitch=rng.randint(45, 88), duration=0.15, hand=hand))
+
+    split = assign_hands(NoteSequence.of(notes))
+    left = [n.pitch for n in split.hand("L")]
+    right = [n.pitch for n in split.hand("R")]
+    assert sorted(left)[len(left) // 2] < sorted(right)[len(right) // 2] - 12, "the colours were believed"
+
+
 def test_hands_that_share_the_middle_of_the_keyboard_are_still_believed() -> None:
     """Real hands cross and overlap; only a split along some other axis is
     rejected. These two lines share four semitones and must survive."""

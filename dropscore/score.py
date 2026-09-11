@@ -391,7 +391,17 @@ def _looks_like_hands(sequence: NoteSequence, config: Config = DEFAULT) -> bool:
     above = pitches[None, :] >= thresholds[:, None]
     agree = (above == is_right[None, :]).mean(axis=1)
     best = float(max(agree.max(), 1.0 - agree.min()))
-    return best >= cfg.hand_separability
+
+    # Scored as the gain over putting every note on the larger side, not as a
+    # raw accuracy. A boundary drawn below every note already sorts a lopsided
+    # split as well as the split is lopsided: 78 to 22 scores 0.78 without
+    # pitch separating anything, and on a real capture that let a colour split
+    # of accidentals against naturals through a threshold of 0.75 and put 172
+    # notes on the wrong staff. Measured as gain, genuine pairs of hands score
+    # 0.61 to 0.88 and colour splits along some other axis 0.01 to 0.12.
+    majority = float(max(is_right.mean(), 1.0 - is_right.mean()))
+    gain = (best - majority) / (1.0 - majority)
+    return gain >= cfg.hand_separability
 
 
 def _relabel(sequence: NoteSequence, hand_of) -> NoteSequence:

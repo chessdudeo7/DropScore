@@ -357,16 +357,18 @@ class ScoreConfig:
     # is flat from 8 to 10 and falls away by 5 and 14.
     hand_neighbours: int = 8
 
-    # How well a single pitch boundary must sort the two colour groups before
-    # they are believed to be hands. Real hands cross and share the middle of
-    # the keyboard, so this is well under 1.0; a colour split that fell along
-    # some other axis -- black keys against white, most often -- lands near
-    # chance. Measured over the corpus and two real captures: genuine hands
-    # score 0.877 to 0.954, and a one-colour video whose tiles darkened over
-    # the accidentals scored 0.664. This sits between them but nearer the
-    # failure, because the safer error is to trust the colours -- falling back
-    # only helps where they are plainly not hands.
-    hand_separability: float = 0.75
+    # How much better than chance a single pitch boundary must sort the two
+    # colour groups before they are believed to be hands, as the gain over
+    # putting every note on the larger side: 0 is no better than that, 1 is a
+    # perfect split. Real hands cross and share the middle of the keyboard, so
+    # they fall well short of 1; a colour split that fell along some other axis
+    # -- black keys against white, most often -- does barely better than 0.
+    # Measured: genuine pairs 0.61 to 0.88 across the corpus and a real
+    # two-colour capture, colour splits of a one-colour capture 0.01 and 0.12.
+    #
+    # It was a raw accuracy once, with a threshold of 0.75, and a lopsided
+    # enough split clears that by being lopsided.
+    hand_separability: float = 0.35
 
     # Below this many notes the separability test is skipped and the colours
     # are taken at their word: a handful of notes can look unseparable by luck.
