@@ -63,8 +63,14 @@ def generate(
     tempo: float = 96.0,
     key: str | None = None,
     sustained: bool = False,
+    beats_per_bar: int = 4,
 ) -> NoteSequence:
     """Build a deterministic sequence with the awkward cases baked in.
+
+    ``beats_per_bar`` of 3 writes a waltz: the bass takes the downbeat and the
+    chord answers on the other two. Everything before this generated 4/4, so
+    nothing could show that the meter written out was never measured -- every
+    piece in three came back barred in four.
 
     ``sustained`` writes the other kind of piece: slow chords held for bars at
     a time, inside a register barely wider than an octave. It is not a stylistic
@@ -81,7 +87,7 @@ def generate(
     key = key or rng.choice(sorted(KEYS))
     tonic, scale = KEYS[key]
     beat = 60.0 / tempo
-    bar = beat * 4
+    bar = beat * beats_per_bar
 
     progression = rng.choice(_PROGRESSIONS)
     notes: list[Note] = []
@@ -97,8 +103,12 @@ def generate(
             0 if index in (0, bars - 1) else progression[index % len(progression)]
         )
 
-        notes.extend(_left_hand(rng, tonic, scale, degree, start, beat, index))
-        notes.extend(_right_hand(rng, tonic, scale, degree, start, beat, index))
+        notes.extend(
+            _left_hand(rng, tonic, scale, degree, start, beat, index, beats_per_bar)
+        )
+        notes.extend(
+            _right_hand(rng, tonic, scale, degree, start, beat, index, beats_per_bar)
+        )
 
     # One long pedal-ish tone under the middle section, so something is always
     # held while other tiles come and go.
@@ -227,6 +237,7 @@ def _left_hand(
     start: float,
     beat: float,
     bar_index: int,
+    beats_per_bar: int = 4,
 ) -> list[Note]:
     root = _degree_pitch(tonic - 12, scale, degree)
     triad = [root, _degree_pitch(tonic - 12, scale, degree + 2), root + 12]
@@ -243,9 +254,40 @@ def _left_hand(
     # start on the same frame across several keys at once.
     if bar_index % 4 == 3:
         return [
-            Note(onset=start, pitch=p, duration=beat * 3.6, hand="L", velocity=70)
+            Note(
+                onset=start,
+                pitch=p,
+                duration=beat * (beats_per_bar - 0.4),
+                hand="L",
+                velocity=70,
+            )
             for p in triad
         ]
+
+    if beats_per_bar == 3:
+        # Oom-pah-pah: the root alone and low on the downbeat, the rest of the
+        # chord an octave up on two and three.
+        notes = [
+            Note(
+                onset=start,
+                pitch=root,
+                duration=beat * rng.uniform(0.8, 0.95),
+                hand="L",
+                velocity=rng.randint(70, 84),
+            )
+        ]
+        for i in (1, 2):
+            for pitch in (triad[1] + 12, triad[2] + 7):
+                notes.append(
+                    Note(
+                        onset=start + i * beat,
+                        pitch=pitch,
+                        duration=beat * rng.uniform(0.6, 0.8),
+                        hand="L",
+                        velocity=rng.randint(52, 66),
+                    )
+                )
+        return notes
 
     notes = []
     for i in range(4):
@@ -270,16 +312,18 @@ def _right_hand(
     start: float,
     beat: float,
     bar_index: int,
+    beats_per_bar: int = 4,
 ) -> list[Note]:
     notes: list[Note] = []
     position = 0.0
+    span = beat * beats_per_bar
 
     # Every third bar, hammer one note repeatedly. Adjacent tiles on a single
     # key with a small gap are exactly what merges into one blob.
     if bar_index % 3 == 2:
         pitch = _degree_pitch(tonic, scale, degree + rng.randint(0, 2))
         step = beat / 2
-        for i in range(8):
+        for i in range(2 * beats_per_bar):
             notes.append(
                 Note(
                     onset=start + i * step,
@@ -291,10 +335,10 @@ def _right_hand(
             )
         return notes
 
-    while beat * 4 - position >= beat / 4:
+    while span - position >= beat / 4:
         length = rng.choice((beat / 4, beat / 2, beat / 2, beat))
         # Never leave a sliver too short to render as a visible tile.
-        length = min(length, beat * 4 - position)
+        length = min(length, span - position)
 
         degree_here = degree + rng.randint(0, 6)
         pitch = _degree_pitch(tonic, scale, degree_here)

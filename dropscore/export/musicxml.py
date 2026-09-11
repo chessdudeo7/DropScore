@@ -22,6 +22,7 @@ approximate.** When they disagree, the MIDI is right.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -203,6 +204,31 @@ def _add_note(
                 ET.SubElement(notations, "tied", type=kind)
 
 
+def _from_the_downbeat(sequence: NoteSequence, analysis: Analysis) -> NoteSequence:
+    """Measure time from a bar line rather than from the start of the video.
+
+    Notes were placed by their seconds from zero, so the first bar began when
+    the video did. A synthetic clip starts on a downbeat and never showed it;
+    a recording starts wherever it was started, and every beat and bar line on
+    the page sat that far off true however well the beat had been found --
+    three quarter notes a bar came out as an eighth rest, a sixteenth and more
+    rests, three times over. The analysis knows where the bars fall; the page
+    now starts on the last bar line before the first note.
+    """
+    notes = list(sequence)
+    if not notes or analysis.beat <= 0:
+        return sequence
+    bar = analysis.beat * analysis.beats_per_bar
+    first = min(n.onset for n in notes)
+    origin = analysis.downbeat_phase + math.floor((first - analysis.downbeat_phase) / bar) * bar
+    return NoteSequence.of(
+        [Note(n.onset - origin, n.pitch, n.duration, n.hand, n.velocity) for n in notes],
+        tempo=sequence.tempo,
+        key=sequence.key,
+        source=sequence.source,
+    )
+
+
 def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.ElementTree:
     """Build a two-staff piano score."""
     tempo = (analysis.tempo if analysis else sequence.tempo) or 120.0
@@ -220,6 +246,7 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
         from ..score import notate_durations  # noqa: PLC0415
 
         sequence = notate_durations(sequence, analysis)
+        sequence = _from_the_downbeat(sequence, analysis)
 
     # Two voices per staff. MusicXML voice numbers are unique across the part,
     # so the staves take 1-2 and 5-6, which is the convention notation editors

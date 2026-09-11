@@ -272,7 +272,11 @@ class ScoreConfig:
     min_bpm: float = 40.0
     max_bpm: float = 208.0
     tempo_prior: float = 110.0  # where a listener prefers to hear the beat
-    beats_per_bar: int = 4
+
+    # Beats in a bar. None measures it, choosing between three and four; set it
+    # to write a meter the measurement gets wrong. It used to be fixed at four,
+    # which barred every piece in three as though it were in four.
+    beats_per_bar: int | None = None
 
     # Which multiple of the tatum is the beat cannot be read off the onsets
     # alone: a stream of quarters at 100 BPM and one of eighths at 50 produce

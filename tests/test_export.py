@@ -388,3 +388,26 @@ def test_pdf_keeps_the_musicxml_when_asked(
     out = pdf.write(_two_hands(), tmp_path / "a.pdf", keep_musicxml=True)
 
     assert out.with_suffix(".musicxml").exists()
+
+
+def test_bar_lines_fall_on_the_measured_downbeat_not_the_start_of_the_video() -> None:
+    """A recording starts wherever it was started. Measuring the page from
+    time zero put every bar line that far off true: three quarter notes a bar
+    came out as a rest, an offbeat sixteenth and more rests."""
+    from dropscore.export.musicxml import _from_the_downbeat  # noqa: PLC0415
+    from dropscore.score import analyze  # noqa: PLC0415
+
+    beat, start = 0.6, 0.37
+    notes = [Note(onset=start + i * beat, pitch=64, duration=0.15) for i in range(60)]
+    for bar in range(4, 20):
+        notes.append(Note(onset=start + bar * 3 * beat, pitch=57, duration=1.6))
+    sequence = NoteSequence.of(notes)
+
+    analysis = analyze(sequence)
+    anchored = _from_the_downbeat(sequence, analysis)
+    positions = [n.onset / analysis.beat for n in anchored]
+    assert all(abs(p - round(p)) < 0.05 for p in positions), "notes fell between beats"
+
+    bar = analysis.beat * analysis.beats_per_bar
+    downbeats = [n.onset for n in anchored if n.pitch == 57]
+    assert all(abs(t / bar - round(t / bar)) < 0.05 for t in downbeats), "bars do not start on the bass"

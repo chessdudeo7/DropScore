@@ -68,6 +68,63 @@ def test_phase_puts_offset_onsets_back_on_the_grid() -> None:
     assert min(residual, step - residual) < 0.02
 
 
+def _started_late(sequence: NoteSequence, offset: float) -> NoteSequence:
+    """As a recording is: begun at some arbitrary moment, not on a downbeat."""
+    return NoteSequence.of(
+        [Note(n.onset + offset, n.pitch, n.duration, n.hand, n.velocity) for n in sequence],
+        tempo=sequence.tempo,
+    )
+
+
+@pytest.mark.parametrize("beats_per_bar", [3, 4])
+@pytest.mark.parametrize("offset_beats", [0.25, 0.5, 0.75, 2.5])
+def test_the_beat_is_found_wherever_the_recording_starts(
+    beats_per_bar: int, offset_beats: float
+) -> None:
+    """Every synthetic clip starts on a downbeat at time zero, which hid that
+    the phase chose whichever tatum line came first after the start: on a real
+    capture that put every beat half a beat late."""
+    from dropscore.score import analyze  # noqa: PLC0415
+
+    tempo = 96.0
+    beat = 60.0 / tempo
+    offset = offset_beats * beat
+    piece = _started_late(generate(seed=11, tempo=tempo, beats_per_bar=beats_per_bar), offset)
+
+    result = analyze(piece)
+    error = ((result.beat_phase - offset % beat) / beat + 0.5) % 1.0 - 0.5
+    assert abs(error) < 0.05, f"beat grid {error * 4:+.2f} sixteenths off"
+
+
+@pytest.mark.parametrize("beats_per_bar", [3, 4])
+def test_the_meter_is_measured_not_assumed(beats_per_bar: int) -> None:
+    from dropscore.score import analyze  # noqa: PLC0415
+
+    for seed in (2, 5, 9):
+        piece = _started_late(generate(seed=seed, tempo=100.0, beats_per_bar=beats_per_bar), 1.3)
+        assert analyze(piece).beats_per_bar == beats_per_bar, f"seed {seed}"
+
+
+def test_a_steady_pulse_under_a_slow_melody_is_heard_in_three() -> None:
+    """The shape of a real capture that came back in four: a short repeated
+    note on every beat, and over it a melody and bass moving once a bar in
+    dotted halves. The pulse is the same on every beat; only the long notes
+    say where the bar is."""
+    from dropscore.score import analyze  # noqa: PLC0415
+
+    beat = 0.6
+    notes = [Note(onset=0.37 + i * beat, pitch=64, duration=0.15) for i in range(72)]
+    melody = [69, 71, 71, 72, 71, 71, 69, 72, 71, 71, 72, 74, 76]
+    for bar, pitch in enumerate(melody, start=4):
+        start = 0.37 + bar * 3 * beat
+        notes.append(Note(onset=start, pitch=pitch, duration=1.6))
+        notes.append(Note(onset=start, pitch=pitch - 12, duration=1.6))
+
+    result = analyze(NoteSequence.of(notes))
+    assert result.beats_per_bar == 3
+    assert result.tempo == pytest.approx(100.0, rel=0.02)
+
+
 def test_tempo_survives_jittered_onsets() -> None:
     import random  # noqa: PLC0415
 
