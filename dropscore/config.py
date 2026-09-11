@@ -64,6 +64,12 @@ class CalibrationConfig:
     # it can be part of the keybed. A row of keys spans nearly all of it;
     # tiles held still long enough to survive into the background span only
     # the register they are written in.
+    # How far either side of the walked-back keybed edge to look for the row
+    # where the picture actually changes. Small: this is a refinement of an
+    # edge already found, and a wider search starts finding the bottoms of the
+    # black keys instead.
+    strike_refine_px: int = 8
+
     min_keybed_coverage: float = 0.5
 
     # Sanity bounds on the keybed band, as guards against non-piano video.

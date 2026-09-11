@@ -133,6 +133,7 @@ def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config)
     # width; a few static bars are busy in a narrow strip. Measured on the same
     # clip: 0.98 of the width against 0.21.
     coverage = _row_coverage(gray)
+    structure_raw = structure.copy()
     structure = structure * (coverage >= cfg.min_keybed_coverage)
 
     # Find the keybed as a *band*, not as a split with everything below it.
@@ -170,6 +171,26 @@ def find_keybed(frames: Sequence[Frame], background: np.ndarray, config: Config)
     limit = max(0, top - max(2, int(height * cfg.keybed_edge_max)))
     while top > limit and structure[top - 1] > floor:
         top -= 1
+
+    # Then place the edge at the sharpest change rather than where the walk
+    # happened to stop. Both tests above ask whether a row looks like keys, and
+    # on a piece of long held chords they cannot tell: the temporal median
+    # keeps those tiles, so the fall area's last rows read *more* structured
+    # than the keybed (measured 50 against 34), the walk runs past the true
+    # edge and halts on the shadow band above the keybed, which spans the full
+    # width and so satisfies the coverage test too. Four pixels of error there
+    # is 28ms of onset on every note in the clip.
+    #
+    # The edge itself does not depend on which side is busier -- only that the
+    # two sides differ, which they do whichever way round they are: 50 to 34
+    # with the tiles held, 3 to 15 without. Across the corpus this halves the
+    # error, and it is what the two sustained clips were missing.
+    window = cfg.strike_refine_px
+    lo = max(1, top - window)
+    hi = min(height - 1, top + window + 1)
+    if hi > lo:
+        steps = np.abs(np.diff(structure_raw[lo - 1 : hi]))
+        top = lo + int(np.argmax(steps))
 
     # The band that stands out is the part crossed by black keys; below them
     # the keybed is near-uniform white and barely varies, so it does not show

@@ -101,6 +101,46 @@ def test_keybed_is_found_at_the_strike_line() -> None:
     assert bottom == pytest.approx(renderer.spec.height, abs=3)
 
 
+def test_the_strike_line_lands_on_the_change_not_on_the_first_busy_row() -> None:
+    """A shadow band above the keybed can pass for keys, and on held chords does.
+
+    Both tests for "looks like keys" are satisfied by the band a renderer
+    draws above the keybed: it carries the key separators, so it is busy right
+    across the frame. Normally the rows above it are quiet and the search stops
+    anyway -- but a piece of long held chords keeps tiles in the temporal
+    median, so the fall area reads as structured too and the edge is placed
+    several pixels high. Four pixels there was 28ms of onset error on every
+    note of one clip.
+
+    What marks the edge is not which side is busier but that the two differ.
+    """
+    height, width, strike = 400, 640, 300
+    background = np.full((height, width, 3), 30, dtype=np.uint8)
+
+    # Held chords: a few columns lit all the way down the fall area.
+    for x in (100, 140, 180):
+        background[:strike, x : x + 24] = (200, 180, 120)
+
+    # The shadow band, carrying the key separators through it.
+    background[strike - 4 : strike, :] = (70, 70, 70)
+    for x in range(0, width, 18):
+        background[strike - 4 : strike, x : x + 2] = (210, 210, 210)
+
+    # The keybed itself: white keys with black keys standing on them.
+    background[strike:, :] = 245
+    for x in range(0, width, 18):
+        background[strike : strike + 60, x : x + 8] = 20
+
+    frames = [
+        Frame(index=i, time=i / 30.0, image=background.copy(), scale=1.0)
+        for i in range(4)
+    ]
+    frames[1].image[0:50, 300:340] = (255, 255, 255)  # something has to move
+
+    top, _ = find_keybed(frames, background, DEFAULT)
+    assert top == strike
+
+
 def test_calibration_needs_more_than_one_frame() -> None:
     renderer = _render()
     with pytest.raises(CalibrationError, match="at least two frames"):
