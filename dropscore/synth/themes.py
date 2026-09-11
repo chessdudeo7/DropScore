@@ -40,7 +40,15 @@ class Theme:
     # Stroke width for ``tile_style="outline"``, in pixels. Fixed rather than a
     # fraction of the tile: a black key is little more than half the width of a
     # white one, and a proportional stroke rounded down to a single pixel there.
-    outline_width: int = 2
+    #
+    # Three, because that is what the paper theme has always actually shown:
+    # the value was 2, but OpenCV paints a 2px stroke three rows wide. When the
+    # stroke was moved inside the tile, where the truth says it belongs, taking
+    # 2 at its word thinned it -- and a 2px coloured line does not survive the
+    # encoder reliably: one side of most tiles on one hand washed out, and the
+    # clip lost 82 notes. Keeping it inside was the fix; changing its weight
+    # was not meant to be part of it.
+    outline_width: int = 3
     glow: float = 0.0  # 0 disables; ~0.5 is a strong bloom
 
     # Keybed.

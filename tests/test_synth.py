@@ -86,6 +86,36 @@ def test_tile_bottom_crosses_the_strike_line_at_onset() -> None:
     assert rect[3] == pytest.approx(renderer.strike_y, abs=1)
 
 
+@pytest.mark.parametrize("theme", ["minimal", "classic", "paper", "aurora"])
+def test_painted_tile_covers_exactly_the_rows_its_truth_says(theme: str) -> None:
+    """Pixels, not the rectangle: the rectangle was always right.
+
+    Every other test here checks ``_tile_rect``, and every one passed while
+    three of four tile styles painted a row past it -- OpenCV draws its end
+    points, the rectangle is half-open. The detector read those pixels
+    faithfully, so every onset in the corpus came back about a pixel early,
+    and the error was blamed on the detector for a whole round of work.
+    """
+    spec = RenderSpec(width=SMALL.width, height=SMALL.height, fps=SMALL.fps, theme=get_theme(theme))
+    renderer = SynthRenderer(_one_note(onset=2.0, duration=0.8), spec)
+    note = renderer.notes[0]
+    index = int(round((note.onset - 0.4) * spec.fps))
+    t = index / spec.fps
+
+    x0, y0, x1, y1 = renderer._tile_rect(note, t)
+    column = renderer.frame(index)[:, (x0 + x1) // 2].astype(int)
+    blank = SynthRenderer(NoteSequence.of([]), spec).frame(index)[:, (x0 + x1) // 2].astype(int)
+    painted = np.flatnonzero(np.abs(column - blank).sum(axis=1) > 60)
+
+    # Glow spreads colour beyond the tile, so look for the solid core only.
+    assert painted.size
+    assert painted.max() <= y1 - 1 + (6 if renderer.theme.glow else 0)
+    assert painted.min() >= y0 - (6 if renderer.theme.glow else 0)
+    core = renderer.frame(index)[y1, (x0 + x1) // 2].astype(int)
+    inside = renderer.frame(index)[y1 - 1, (x0 + x1) // 2].astype(int)
+    assert np.abs(inside - core).sum() > 20, "the row past the tile is painted like the tile"
+
+
 def test_tile_height_encodes_duration() -> None:
     renderer = SynthRenderer(_one_note(onset=2.0, duration=0.8), SMALL)
     note = renderer.notes[0]

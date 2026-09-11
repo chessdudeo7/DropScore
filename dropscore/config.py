@@ -116,6 +116,11 @@ class TileConfig:
     # voice, which keeps a gradient- or bloom-shaded tile from splitting into
     # several palettes while leaving genuinely different hands apart.
     merge_distance: float = 25.0
+
+    # How far off the line between the background and a tile colour another
+    # colour may sit and still be read as that tile's bloom or antialiasing
+    # rather than a voice of its own. A glow halo measured 0.46.
+    blend_tolerance: float = 6.0
     min_palette_share: float = 0.05
     max_sample_pixels: int = 200_000
 

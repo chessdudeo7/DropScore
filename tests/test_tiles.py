@@ -190,6 +190,43 @@ def test_a_gap_on_one_key_does_not_split_its_neighbour() -> None:
 # ── palette discovery ────────────────────────────────────────────────
 
 
+def test_a_glow_halo_is_folded_into_its_tile_colour() -> None:
+    """A halo is the tile's colour blended toward the background, so it lies
+    on the line between them. Hue decided this before, with a hard chroma
+    cutoff the halo sat 0.2 below, and the glow became a second voice."""
+    from dropscore.tiles import _fold_blends  # noqa: PLC0415
+
+    background = np.array([6.0, 128.0, 126.0])
+    tile = np.array([221.0, 126.0, 183.0])
+    halo = background + 0.24 * (tile - background)  # chroma just under 12
+    colors = np.stack([tile, halo])
+    counts = np.array([17532, 2706])
+
+    kept, kept_counts = _fold_blends(colors, counts, background, DEFAULT.tiles)
+    assert len(kept) == 1
+    assert kept_counts[0] == 17532 + 2706
+
+
+def test_two_grey_voices_are_not_folded_together() -> None:
+    """Every grey lies on the line from black to white, so the blend test on
+    its own would merge two voices told apart only by lightness."""
+    from dropscore.tiles import _fold_blends  # noqa: PLC0415
+
+    background = np.array([5.0, 128.0, 128.0])
+    white, grey = np.array([240.0, 128.0, 128.0]), np.array([120.0, 128.0, 128.0])
+    kept, _ = _fold_blends(np.stack([white, grey]), np.array([9000, 8000]), background, DEFAULT.tiles)
+    assert len(kept) == 2
+
+
+def test_a_second_hand_of_another_hue_is_not_folded() -> None:
+    from dropscore.tiles import _fold_blends  # noqa: PLC0415
+
+    background = np.array([18.0, 128.0, 126.0])
+    green, blue = np.array([170.0, 80.0, 170.0]), np.array([140.0, 150.0, 70.0])
+    kept, _ = _fold_blends(np.stack([green, blue]), np.array([9000, 7000]), background, DEFAULT.tiles)
+    assert len(kept) == 2
+
+
 def test_finds_two_colours_for_a_two_hand_video() -> None:
     renderer = _renderer("synthesia")  # clearly distinct green and blue
     palette = discover_palette(_frames(renderer), _truth_calibration(renderer))

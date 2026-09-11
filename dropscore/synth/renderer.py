@@ -287,13 +287,30 @@ class SynthRenderer:
         theme = self.theme
         bgr = _bgr(color)
 
+        # ``rect`` is half-open, as the ground truth is: the tile covers rows
+        # y0 up to but not including y1. OpenCV's shape calls paint their end
+        # points, so they are handed the last row and column *inside* the tile.
+        # Passing y1 straight through drew every tile one row past the truth
+        # written alongside it -- at the strike line, one row into the keybed
+        # -- and the detector, reading the pixels faithfully, reported every
+        # onset about a pixel early on every theme but the one that slices.
+        xe, ye = x1 - 1, y1 - 1
+
         if theme.tile_style == "outline":
             # Constant, not a fraction of the width. Scaling by width gave a
             # white key two pixels of stroke and a black key one, and a single
             # antialiased pixel of a colour near the paper never resolves: one
             # side of every black-key tile vanished entirely, costing 14 notes
             # on one key. Real designs pick a stroke and keep it.
-            cv2.rectangle(canvas, (x0, y0), (x1, y1), bgr, theme.outline_width)
+            # Painted by slicing, not cv2.rectangle, which centres its stroke
+            # on the border and so puts half of it outside the tile -- a row
+            # above the truth and a row below. Sliced, the stroke lies inside
+            # and is exactly ``outline_width`` wide, as the theme says.
+            w = max(1, min(theme.outline_width, (x1 - x0) // 2, (y1 - y0) // 2))
+            canvas[y0 : y0 + w, x0:x1] = bgr
+            canvas[y1 - w : y1, x0:x1] = bgr
+            canvas[y0:y1, x0 : x0 + w] = bgr
+            canvas[y0:y1, x1 - w : x1] = bgr
             return
 
         if theme.tile_style == "gradient":
@@ -308,10 +325,10 @@ class SynthRenderer:
         if theme.tile_style == "rounded" and theme.corner_radius > 0:
             radius = int(min((x1 - x0) * theme.corner_radius, (y1 - y0) / 2))
             if radius >= 1:
-                _rounded_rect(canvas, x0, y0, x1, y1, radius, bgr)
+                _rounded_rect(canvas, x0, y0, xe, ye, radius, bgr)
                 return
 
-        cv2.rectangle(canvas, (x0, y0), (x1, y1), bgr, -1)
+        cv2.rectangle(canvas, (x0, y0), (xe, ye), bgr, -1)
 
     def frame(self, index: int) -> np.ndarray:
         """Render frame ``index``."""
@@ -542,7 +559,7 @@ def _apply_glow(
     """
     layer = np.zeros_like(canvas)
     for (x0, y0, x1, y1), color in rects:
-        cv2.rectangle(layer, (x0, y0), (x1, y1), _bgr(color), -1)
+        cv2.rectangle(layer, (x0, y0), (x1 - 1, y1 - 1), _bgr(color), -1)  # half-open, as tiles
 
     blur = max(3, int(canvas.shape[1] * 0.012) | 1)  # odd kernel
     layer = cv2.GaussianBlur(layer, (blur, blur), 0)

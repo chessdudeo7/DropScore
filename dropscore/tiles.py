@@ -131,6 +131,7 @@ def discover_palette(
         pixels = pixels[::step]
 
     colors, counts = _cluster(pixels, cfg.max_palettes, cfg.lightness_weight, cfg.merge_distance)
+    colors, counts = _fold_blends(colors, counts, background, cfg)
 
     # Drop colours too rare to be a hand; they are usually antialiasing.
     keep = counts >= counts.sum() * cfg.min_palette_share
@@ -188,6 +189,57 @@ def discover_palette(
         counts=counts[keep],
         spreads=spreads,
     )
+
+
+def _fold_blends(
+    colors: np.ndarray, counts: np.ndarray, background: np.ndarray, cfg
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fold a colour that is only a blend of the background and another into it.
+
+    Bloom and antialiasing are mixtures of a tile's colour with what lies
+    behind it, so they sit on the straight line between the two. Hue alone was
+    relied on to fold them back, and it decides with a hard cutoff: below
+    ``MIN_CHROMA`` a colour counts as neutral and is never merged. A halo dims
+    toward that cutoff by construction, so whether a theme's glow became a
+    phantom second voice came down to a fraction of a unit of chroma --
+    measured, 11.8 against 12.0, flipped by drawing tiles one pixel smaller.
+
+    On the line is a far tighter test than "same hue" and needs no cutoff: that
+    halo sat 0.46 from it, a quarter of the way out from the background. Only
+    chromatic parents are considered, so two greys on a dark ground -- a pair of
+    voices told apart by lightness alone, and every grey lies on the line from
+    black to white -- are still left apart as ``_same_hue`` intends.
+    """
+    if len(colors) < 2:
+        return colors, counts
+
+    counts = counts.copy()
+    points = _weighted(colors, cfg.lightness_weight)
+    origin = _weighted(background[None, :], cfg.lightness_weight)[0]
+    keep = np.ones(len(colors), dtype=bool)
+
+    # Children are visited from least common up and may only fold into a more
+    # common colour, but the palette keeps the order it arrived in.
+    order = [int(i) for i in np.argsort(-counts, kind="stable")]
+    for rank, index in enumerate(order[1:], start=1):
+        for parent in order[:rank]:
+            if not keep[parent]:
+                continue
+            chroma = float(np.hypot(colors[parent][1] - 128.0, colors[parent][2] - 128.0))
+            if chroma < MIN_CHROMA:
+                continue
+            direction = points[parent] - origin
+            length = float(np.dot(direction, direction))
+            if length <= 0:
+                continue
+            along = float(np.dot(points[index] - origin, direction)) / length
+            off = float(np.linalg.norm(points[index] - (origin + along * direction)))
+            if 0.0 < along < 1.0 and off < cfg.blend_tolerance:
+                counts[parent] += counts[index]
+                keep[index] = False
+                break
+
+    return colors[keep], counts[keep]
 
 
 #: Below this Lab chroma a colour has no meaningful hue — greys and near-whites.
