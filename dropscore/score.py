@@ -375,6 +375,14 @@ def find_downbeat(
 # ── key ──────────────────────────────────────────────────────────────
 
 
+#: The note the two staves are divided at.
+MIDDLE_C = 60
+
+
+#: Pitch classes spelled without an accidental: the white keys.
+NATURAL_CLASSES = frozenset((0, 2, 4, 5, 7, 9, 11))
+
+
 def estimate_key(
     sequence: NoteSequence, config: Config = DEFAULT
 ) -> tuple[str, float]:
@@ -415,7 +423,25 @@ def estimate_key(
             if math.isnan(correlation):
                 correlation = -1.0
             outside = 1.0 - float(rotated[list(scale)].sum()) / total
-            score = correlation - cfg.out_of_scale_penalty * outside
+
+            # A key signature claims that certain notes are altered. Claiming
+            # one the music never plays is a claim about nothing: on a real
+            # capture with no F of either kind anywhere, E minor beat A minor
+            # on template shape alone and put a sharp on the page that the
+            # piece never sounds. Both fit the notes; only one asserts
+            # something unheard.
+            unfounded = sum(
+                1
+                for step in scale
+                if (tonic + step) % 12 not in NATURAL_CLASSES
+                and weights[(tonic + step) % 12] == 0.0
+            )
+
+            score = (
+                correlation
+                - cfg.out_of_scale_penalty * outside
+                - cfg.unfounded_accidental * unfounded
+            )
             results.append((score, f"{PITCH_CLASS_NAMES[tonic]} {quality}"))
 
     results.sort(reverse=True)
@@ -549,6 +575,14 @@ def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeq
             if len(window) >= 4
             else global_split
         )
+        # Kept near middle C. What is being chosen here is which staff a note
+        # is written on, and a staff is chosen by register: the boundary is
+        # middle C, give or take. Free to go where it liked, it followed the
+        # music -- on a real capture with a pedal note repeating under a high
+        # melody it rose above the pedal and sent it to the bass staff, where
+        # the printed music keeps it in the treble throughout.
+        reach = cfg.staff_boundary_reach
+        split = min(max(split, MIDDLE_C - reach), MIDDLE_C + reach)
         hand: Hand = "R" if note.pitch >= split else "L"
         assigned.append(Note(note.onset, note.pitch, note.duration, hand, note.velocity))
 

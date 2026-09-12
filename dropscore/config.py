@@ -344,6 +344,12 @@ class ScoreConfig:
     # near-tie, not enough to overturn a genuinely clear winner. Chromatic
     # music is unaffected — accuracy over the generated corpus is identical at
     # every value from 0 to 1.2, even with 30% of notes displaced chromatically.
+    # Charged per accidental in a candidate's key signature that the music
+    # never plays, in either its altered or its natural form. Two keys can fit
+    # a piece equally well and differ in what their signatures assert: the one
+    # asserting a sharp nothing ever sounds is the worse description of it.
+    unfounded_accidental: float = 0.2
+
     out_of_scale_penalty: float = 0.3
 
     # How much of the way to the next onset a note must cover before it is
@@ -368,6 +374,15 @@ class ScoreConfig:
     # duration was picked. Measured on 30 held-out pieces at 60-144bpm, this
     # is flat from 8 to 10 and falls away by 5 and 14.
     hand_neighbours: int = 8
+
+    # How far from middle C the boundary between the staves may travel, in
+    # semitones. It follows the music within that, which is what carries a
+    # passage that sits entirely high or entirely low, but a staff is chosen
+    # by register and middle C is where the two meet. Measured against printed
+    # music, a boundary free to go anywhere put a repeated pedal note on the
+    # bass staff for a whole page; held within four semitones, every note of
+    # that page lands on the staff it was printed on.
+    staff_boundary_reach: float = 4.0
 
     # How much better than chance a single pitch boundary must sort the two
     # colour groups before they are believed to be hands, as the gain over

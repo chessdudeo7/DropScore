@@ -322,21 +322,41 @@ def test_single_track_is_split_by_pitch() -> None:
     assert all(n.hand == "R" for n in split if n.pitch > 70)
 
 
-def test_hand_split_follows_the_music_up_the_keyboard() -> None:
-    """A fixed middle-C split would cut straight through a passage that moves."""
+def test_the_split_follows_the_music_but_only_so_far() -> None:
+    """A fixed middle-C split would cut straight through a passage that moves,
+    so the boundary travels with the music -- within a few semitones of middle
+    C, and no further.
+
+    Chasing the music without limit is what put a repeated pedal note on the
+    bass staff for a whole page of a real capture: the melody above it lifted
+    the boundary over the pedal. Which staff a note is written on is a question
+    about register, and the staves meet at middle C.
+    """
     notes = []
     for i in range(16):
-        base = 40 + i * 2  # both hands climb together
+        base = 52 + (i % 6)  # moves, but stays within reach of middle C
         notes.append(Note(onset=i * 0.25, pitch=base, duration=0.2, hand="R"))
-        notes.append(Note(onset=i * 0.25, pitch=base + 24, duration=0.2, hand="R"))
+        notes.append(Note(onset=i * 0.25, pitch=base + 14, duration=0.2, hand="R"))
 
     split = assign_hands(NoteSequence.of(notes))
-    pairs = {}
+    pairs: dict[float, list[Note]] = {}
     for note in split:
         pairs.setdefault(round(note.onset, 3), []).append(note)
     for group in pairs.values():
-        hands = {n.hand for n in group}
-        assert hands == {"L", "R"}, "each simultaneous pair should straddle the split"
+        assert {n.hand for n in group} == {"L", "R"}, "a pair failed to straddle the split"
+
+
+def test_a_passage_far_above_middle_c_is_written_on_one_staff() -> None:
+    """Both voices high is both voices on the treble staff, which is how it is
+    printed. The boundary does not climb after them to manufacture a bass part
+    out of the lower one."""
+    notes = []
+    for i in range(16):
+        notes.append(Note(onset=i * 0.25, pitch=76 + (i % 3), duration=0.2, hand="R"))
+        notes.append(Note(onset=i * 0.25, pitch=88 + (i % 3), duration=0.2, hand="R"))
+
+    split = assign_hands(NoteSequence.of(notes))
+    assert all(n.hand == "R" for n in split), "a high passage was split across the staves"
 
 
 def test_a_sparse_bass_does_not_drag_the_split_up_into_the_melody() -> None:
@@ -359,6 +379,26 @@ def test_a_sparse_bass_does_not_drag_the_split_up_into_the_melody() -> None:
     split = assign_hands(NoteSequence.of(notes))
     assert all(n.hand == "L" for n in split if n.pitch == 45)
     assert all(n.hand == "R" for n in split if n.pitch >= 67)
+
+
+def test_a_key_signature_does_not_assert_a_note_the_music_never_plays() -> None:
+    """Two keys can fit a piece equally and differ in what they claim.
+
+    The sounding weight here is the one measured on a real capture: B heaviest,
+    then E, then C and A, and no F of either kind anywhere. E minor and A minor
+    both fit it perfectly -- nothing falls outside either scale -- and E minor
+    won on the shape of the template alone, putting an F sharp in the signature
+    of a piece that never sounds one. The printed music has no signature at all.
+    """
+    plan = [(71, 48), (64, 31), (72, 20), (69, 19), (74, 4), (67, 2)]
+    notes, when = [], 0.0
+    for pitch, weight in plan:
+        for _ in range(weight):
+            notes.append(Note(onset=when, pitch=pitch, duration=1.0))
+            when += 0.6
+
+    key, _ = estimate_key(NoteSequence.of(notes))
+    assert key in {"A minor", "C major"}, f"chose {key}, whose signature is never played"
 
 
 def _hand_config(mode: str) -> Config:
