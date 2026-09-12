@@ -707,6 +707,57 @@ def test_tempo_never_reads_half_speed() -> None:
 # ── written durations against played ones ────────────────────────────
 
 
+def test_a_staccato_quarter_is_written_as_a_quarter() -> None:
+    """Articulation is a dot over the note, not a shorter note and rests.
+
+    A real capture played its repeated quarters at a quarter of their length.
+    Engraved as played, they became sixteenths with rests after them, and only
+    39% of the written values on the page matched the printed music.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = [Note(onset=i * beat, pitch=64, duration=0.15) for i in range(12)]
+    sequence = NoteSequence.of(notes)
+    analysis = analyze(sequence)
+
+    written = notate_durations(sequence, analysis)
+    values = [n.duration / analysis.beat for n in written][:-1]  # the last has no successor
+    assert all(abs(v - 1.0) < 0.05 for v in values), f"wrote {values[:4]}"
+
+
+def test_a_real_rest_is_still_written() -> None:
+    """A note followed by a bar of silence is not a note held for a bar."""
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = [Note(onset=i * 4 * beat, pitch=64, duration=0.3) for i in range(8)]
+    sequence = NoteSequence.of(notes)
+    analysis = analyze(sequence)
+
+    written = notate_durations(sequence, analysis)
+    values = [n.duration / analysis.beat for n in written][:-1]
+    assert all(v < 2.0 for v in values), f"filled a real silence: {values[:4]}"
+
+
+def test_a_note_inside_a_chord_is_written_as_reaching_the_next_one() -> None:
+    """Measured to the nearest onset, a note struck with another had a gap of
+    nothing, so nothing in a chord was ever written as reaching anything."""
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = []
+    for i in range(8):
+        notes.append(Note(onset=i * beat, pitch=64, duration=0.2))
+        notes.append(Note(onset=i * beat, pitch=67, duration=0.2))
+    sequence = NoteSequence.of(notes)
+    analysis = analyze(sequence)
+
+    written = notate_durations(sequence, analysis)
+    values = [n.duration / analysis.beat for n in written if n.onset < 7 * beat - 0.01]
+    assert all(abs(v - 1.0) < 0.05 for v in values), f"wrote {values[:4]}"
+
+
 def _analysis(tempo: float = 100.0, key: str = "E minor"):
     from dropscore.score import Analysis
 
@@ -742,18 +793,25 @@ def test_detached_notes_are_written_at_full_value() -> None:
 
 
 def test_a_real_rest_is_left_alone() -> None:
-    """Half the gap is a rest, not articulation, and must stay a rest."""
+    """Half the gap is a rest, not articulation, and must stay a rest.
+
+    Measured over a gap of two beats. It used to be measured over one, where
+    this now fills: sheet music for a real capture showed its repeated quarters
+    held a quarter of the way and printed as quarters, no rests anywhere, so
+    within a single beat the silence is articulation whatever its length.
+    Beyond a beat the old reading stands and a rest is a rest.
+    """
     from dropscore.score import notate_durations
 
     beat = 0.6
     notes = [
-        Note(onset=i * beat, pitch=64, duration=beat * 0.5, hand="R")
+        Note(onset=i * 2 * beat, pitch=64, duration=beat, hand="R")
         for i in range(6)
     ]
 
     written = notate_durations(NoteSequence.of(notes), _analysis())
 
-    assert all(n.duration == pytest.approx(beat * 0.5, abs=1e-6) for n in written)
+    assert all(n.duration == pytest.approx(beat, abs=1e-6) for n in written)
 
 
 def test_notation_never_shortens_a_note() -> None:

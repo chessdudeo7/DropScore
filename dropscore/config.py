@@ -354,6 +354,14 @@ class ScoreConfig:
     # the measured durations unchanged.
     legato_ratio: float = 0.6
 
+    # A silence shorter than this many beats between two notes of one hand is
+    # articulation, not a rest, so the first is written as reaching the second
+    # whatever fraction of the way it was actually held. Without it a staccato
+    # passage is engraved as it was played -- a real capture wrote its quarter
+    # notes as sixteenths with rests after them, and only 32% of its written
+    # values matched the printed music.
+    articulation_gap: float = 1.0
+
     # How many neighbouring notes in time set the local hand boundary. Counted
     # rather than timed: a window in seconds spans different amounts of music
     # across the tempo range, and accuracy fell off either side of whichever

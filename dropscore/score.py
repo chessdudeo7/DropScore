@@ -658,11 +658,29 @@ def notate_durations(
 
     for hand in ("L", "R"):
         voice = sorted(sequence.hand(hand), key=lambda n: n.onset)
-        for note, following in zip(voice, voice[1:] + [None]):
+        onsets = [n.onset for n in voice]
+        for index, note in enumerate(voice):
             duration = note.duration
+            # The next *different* onset. Notes struck together are one event,
+            # and measuring to the nearest of them gives a gap of nothing, so
+            # no note inside a chord was ever written as reaching anything.
+            following = next(
+                (t for t in onsets[index + 1 :] if t > note.onset + 1e-6), None
+            )
             if following is not None:
-                gap = following.onset - note.onset
-                if gap > 0 and cfg.legato_ratio <= duration / gap < 1.0:
+                gap = following - note.onset
+                held = duration / gap if gap > 0 else 0.0
+                # Held most of the way: detached, and written as reaching.
+                # Or the gap is short enough that no rest would be written
+                # there anyway -- a staccato quarter is a quarter with a dot
+                # over it, not a sixteenth and three rests. Taken literally,
+                # a real capture wrote 5 quarters as 0.58 of a beat, 5 as
+                # 0.38, 5 as 0.33 and so on: 32% of its written values
+                # matched the printed music.
+                if gap > 0 and (
+                    cfg.legato_ratio <= held < 1.0
+                    or gap <= cfg.articulation_gap * analysis.beat + step / 2
+                ):
                     filled = gap
                     if step > 0:
                         filled = round(filled / step) * step
