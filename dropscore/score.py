@@ -111,7 +111,7 @@ def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[fl
         )
 
     periods = np.linspace(cfg.min_tatum, cfg.max_tatum, cfg.tempo_resolution)
-    scores = np.array([abs(_coherence(onsets, p)) for p in periods])
+    scores = _grid_scores(onsets, periods, cfg)
 
     best = scores.max()
     # Prefer the coarsest grid that still explains the onsets: a grid twice as
@@ -133,7 +133,10 @@ def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[fl
     # tatum grid contains every gridline the beat grid has, which is what
     # quantization actually needs.
     z = _coherence(onsets, tatum)
-    beat = _beat_from_tatum(tatum, onsets, [n.duration for n in sequence], cfg)
+    drifting = bool(scores.max() < cfg.steady_tempo)
+    beat = _beat_from_tatum(
+        tatum, onsets, [n.duration for n in sequence], cfg, drifting
+    )
     tatum_phase = (math.atan2(z.imag, z.real) * tatum / (2 * math.pi)) % tatum
     phase = _beat_phase(sequence, tatum, tatum_phase, beat)
 
@@ -155,6 +158,41 @@ def _accents(sequence: NoteSequence, beat: float) -> list[float]:
     return [
         min(n.duration / beat, 4.0) * (3.0 if n.pitch <= low else 1.0) for n in notes
     ]
+
+
+def _grid_scores(onsets: np.ndarray, periods: np.ndarray, cfg) -> np.ndarray:
+    """How well each candidate grid explains the onsets, over the whole clip.
+
+    Measured in windows and averaged, not across the clip at once. A player
+    slowing and pushing by a few percent -- which is most playing that is not
+    a machine -- leaves no single grid fitting end to end, and the reading
+    collapses: on pieces warped by a smooth 4%, the period found was half or a
+    third of the true one on half of them, and the tempo came back as 150 BPM
+    where the music was at 100. Inside a window the drift is small enough that
+    the true grid still stands out, and averaging the windows' scores keeps
+    what they agree on.
+    """
+    whole = np.array([abs(_coherence(onsets, p)) for p in periods])
+
+    span = float(onsets[-1] - onsets[0])
+    window = cfg.tempo_window
+    if span <= window * 1.5 or whole.max() >= cfg.steady_tempo:
+        # One grid fits the clip, so use it: measured in windows and averaged,
+        # the peak broadens and the coarsest period still within tolerance sits
+        # a little long -- 72 BPM read as 70.4, and one piece halved outright.
+        return whole
+
+    spectra = []
+    start = float(onsets[0])
+    while start < onsets[-1] - window / 2:
+        piece = onsets[(onsets >= start) & (onsets < start + window)]
+        if len(piece) >= cfg.min_onsets_for_tempo:
+            spectra.append([abs(_coherence(piece, p)) for p in periods])
+        start += window / 2
+
+    if not spectra:
+        return whole
+    return np.asarray(spectra, dtype=float).mean(axis=0)
 
 
 def _beat_phase(
@@ -261,6 +299,34 @@ def _repeats_at(onsets: np.ndarray, lag: float, tolerance: float) -> float:
     return float(np.mean(np.abs(onsets[index] - (eligible + lag)) <= tolerance))
 
 
+def _repeats_over_windows(
+    onsets: np.ndarray, lag: float, tolerance: float, cfg, drifting: bool
+) -> float:
+    """``_repeats_at``, asked a window at a time and averaged.
+
+    Two notes a beat apart are a beat apart only if the beat has not changed
+    in between. Over a whole clip a player drifting a few percent pulls them
+    outside any tolerance tight enough to be worth having, and the level that
+    looks best supported is then whichever one the drift happens to flatter --
+    a piece at 100 BPM came back at 127 with its grid found correctly, because
+    the beat was read as three of its sixteenths rather than four.
+    """
+    span = float(onsets[-1] - onsets[0])
+    window = cfg.tempo_window
+    whole = _repeats_at(onsets, lag, tolerance)
+    if span <= window * 1.5 or not drifting:
+        return whole
+
+    scores = []
+    start = float(onsets[0])
+    while start < onsets[-1] - window / 2:
+        piece = onsets[(onsets >= start) & (onsets < start + window)]
+        if len(piece) >= cfg.min_onsets_for_tempo:
+            scores.append(_repeats_at(piece, lag, tolerance))
+        start += window / 2
+    return float(np.mean(scores)) if scores else whole
+
+
 def _duration_fit(modal: float, beat: float, articulation: float = 1.0) -> float:
     """How idiomatic the commonest note value is against this beat.
 
@@ -283,7 +349,11 @@ def _duration_fit(modal: float, beat: float, articulation: float = 1.0) -> float
 
 
 def _beat_from_tatum(
-    tatum: float, onsets: np.ndarray, durations: Sequence[float], cfg
+    tatum: float,
+    onsets: np.ndarray,
+    durations: Sequence[float],
+    cfg,
+    drifting: bool = False,
 ) -> float:
     """Scale the tatum up to a beat.
 
@@ -314,7 +384,9 @@ def _beat_from_tatum(
         if not cfg.min_bpm <= bpm <= cfg.max_bpm:
             continue
 
-        support = _repeats_at(onsets, beat, tatum * cfg.repeat_tolerance)
+        support = _repeats_over_windows(
+            onsets, beat, tatum * cfg.repeat_tolerance, cfg, drifting
+        )
         prior = math.exp(
             -0.5 * (math.log(bpm / cfg.tempo_prior) / cfg.tempo_prior_width) ** 2
         )

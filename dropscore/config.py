@@ -269,6 +269,22 @@ class ScoreConfig:
     # period scoring within this fraction of the best is taken as the tatum.
     tatum_tolerance: float = 0.92
 
+    # Seconds of music judged at once when looking for the grid. Long enough
+    # to hold several bars, short enough that a player's drift inside it is
+    # small: a performance that pushes and slows by a few percent has no one
+    # grid fitting it end to end, and asking for one read a piece at 100 BPM
+    # as 150. Over 30 pieces warped by a smooth 4%, six seconds reads 24 of
+    # them exactly against 7 for the clip at once, and turns 21 readings at
+    # the wrong metrical level into 3. Longer windows lose that; at 8 and 12
+    # seconds the drift inside one is enough to jump a level again.
+    tempo_window: float = 6.0
+
+    # Peak coherence above which one grid is taken to fit the whole clip, and
+    # the windows are not consulted. Measured over 15 pieces each: a steady
+    # tempo peaks at 0.73 to 0.76, and a smooth drift of as little as 2% falls
+    # to between 0.24 and 0.44.
+    steady_tempo: float = 0.6
+
     min_bpm: float = 40.0
     max_bpm: float = 208.0
     tempo_prior: float = 110.0  # where a listener prefers to hear the beat
