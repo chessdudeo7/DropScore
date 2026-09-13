@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -204,6 +204,57 @@ def _add_note(
                 ET.SubElement(notations, "tied", type=kind)
 
 
+def _in_uniform_time(
+    sequence: NoteSequence, analysis: Analysis
+) -> tuple[NoteSequence, Analysis]:
+    """Rewrite the playing against a steady beat, where it was not played to one.
+
+    A page carries one tempo mark. Pushing and slowing is performance, not
+    notation, and a note is written where it falls in the bar rather than at
+    the second it happened -- so where the beats were tracked, each note is
+    placed by which beat it fell on and how far through it, and the page is
+    laid out from that. Without this the notes are quantized to the beats the
+    player actually played and then engraved as though those beats were even,
+    which puts them back where they started.
+    """
+    from ..score import beat_position  # noqa: PLC0415
+
+    if not analysis.beat_times:
+        return sequence, analysis
+
+    notes = list(sequence)
+    if not notes:
+        return sequence, analysis
+
+    beat = analysis.beat
+    rewritten = [
+        Note(
+            beat_position(n.onset, analysis) * beat,
+            n.pitch,
+            max(
+                (beat_position(n.onset + n.duration, analysis)
+                 - beat_position(n.onset, analysis)) * beat,
+                1e-4,
+            ),
+            n.hand,
+            n.velocity,
+        )
+        for n in notes
+    ]
+    steady = replace(
+        analysis,
+        beat_phase=0.0,
+        downbeat_phase=(beat_position(analysis.downbeat_phase, analysis) * beat)
+        % (beat * analysis.beats_per_bar),
+        beat_times=(),
+    )
+    return (
+        NoteSequence.of(rewritten, tempo=sequence.tempo, key=sequence.key,
+                        source=sequence.source),
+        steady,
+    )
+
+
 def _from_the_downbeat(sequence: NoteSequence, analysis: Analysis) -> NoteSequence:
     """Measure time from a bar line rather than from the start of the video.
 
@@ -245,6 +296,7 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
     if analysis is not None:
         from ..score import notate_durations  # noqa: PLC0415
 
+        sequence, analysis = _in_uniform_time(sequence, analysis)
         sequence = notate_durations(sequence, analysis)
         sequence = _from_the_downbeat(sequence, analysis)
 

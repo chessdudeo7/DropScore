@@ -296,6 +296,13 @@ class ScoreConfig:
     # the beat.
     min_accented_onsets: int = 30
 
+    # Seconds per step when tracking where the beats fall, and how hard the
+    # tracker is held to the tempo it started at. The inertia is deliberately
+    # light: held tightly the tracker refuses the drift it exists to follow,
+    # and the notes it places are worse than a steady grid's.
+    beat_resolution: float = 0.01
+    beat_inertia: float = 5.0
+
     min_bpm: float = 40.0
     max_bpm: float = 208.0
     tempo_prior: float = 110.0  # where a listener prefers to hear the beat

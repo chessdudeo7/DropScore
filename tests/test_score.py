@@ -401,6 +401,70 @@ def test_a_key_signature_does_not_assert_a_note_the_music_never_plays() -> None:
     assert key in {"A minor", "C major"}, f"chose {key}, whose signature is never played"
 
 
+def _played_with_rubato(sequence: NoteSequence, depth: float = 0.06) -> NoteSequence:
+    """The same music, pushed and slowed smoothly the way a person plays it."""
+    import math as _math  # noqa: PLC0415
+
+    notes = sorted(sequence, key=lambda n: n.onset)
+    span = max(n.onset + n.duration for n in notes)
+    steps = [0.0]
+    grid = [i * span / 2000 for i in range(2001)]
+    for a, b in zip(grid, grid[1:]):
+        rate = 1.0 + depth * _math.sin(2 * _math.pi * 2 * a / span)
+        steps.append(steps[-1] + (b - a) * rate)
+
+    def when(t: float) -> float:
+        for i, g in enumerate(grid):
+            if g >= t:
+                return steps[i]
+        return steps[-1]
+
+    return NoteSequence.of(
+        [Note(when(n.onset), n.pitch, max(when(n.onset + n.duration) - when(n.onset), 0.02),
+              n.hand, n.velocity) for n in notes],
+        tempo=sequence.tempo,
+    )
+
+
+def test_a_steady_performance_is_not_tracked() -> None:
+    """Its period and phase already describe it, and a tracker given nothing to
+    follow wanders: on an unbroken stream of equal notes at 120 BPM it laid
+    beats from 0.37s to 0.62s apart, where every one of them is 0.5."""
+    assert analyze(generate(seed=4, tempo=100.0)).beat_times == ()
+    assert analyze(_grid(120.0)).beat_times == ()
+
+
+def test_playing_that_drifts_is_followed() -> None:
+    """Pushed and slowed by 6%, this piece puts 168 of its 248 notes in the
+    wrong subdivision when they are snapped to one steady grid. Followed, 26
+    of them are still wrong -- the drift is not undone, only tracked."""
+    from dropscore.score import beat_position  # noqa: PLC0415
+
+    written = generate(seed=4, tempo=100.0, bars=20)
+    played = _played_with_rubato(written)
+    analysis = analyze(played)
+    assert analysis.beat_times, "a drifting performance was not tracked"
+
+    quantized, _ = quantize(played, analysis)
+    wrong = 0
+    for original, got in zip(sorted(written, key=lambda n: n.onset),
+                             sorted(quantized, key=lambda n: n.onset)):
+        want = original.onset / 0.6
+        landed = beat_position(got.onset, analysis)
+        drift = (landed - want) - round(landed - want)
+        wrong += abs(drift) > 0.125
+    assert wrong <= len(written) * 0.15, f"{wrong} of {len(written)} notes in the wrong subdivision"
+
+
+def test_beat_positions_and_times_are_inverses() -> None:
+    from dropscore.score import beat_position, beat_time  # noqa: PLC0415
+
+    analysis = analyze(_played_with_rubato(generate(seed=6, tempo=100.0, bars=16)))
+    assert analysis.beat_times
+    for position in (0.0, 1.25, 7.5, 31.75):
+        assert beat_position(beat_time(position, analysis), analysis) == pytest.approx(position, abs=0.02)
+
+
 def _hand_config(mode: str) -> Config:
     return Config(score=ScoreConfig(hand_mode=mode))
 

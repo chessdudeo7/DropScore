@@ -74,6 +74,11 @@ class Analysis:
     tempo_confidence: float  # 0-1, onset alignment to the beat grid
     key_confidence: float  # 0-1, correlation margin over the runner-up
 
+    # Where each beat falls, for playing that does not hold one tempo. Empty
+    # when the beats were not tracked, and everything then falls back to the
+    # steady grid that ``beat`` and ``beat_phase`` describe.
+    beat_times: tuple[float, ...] = ()
+
     def __str__(self) -> str:
         return (
             f"{self.tempo:.1f} BPM ({self.tempo_confidence:.2f}), "
@@ -234,6 +239,105 @@ def _beat_phase(
         if best is None or score > best[0]:
             best = (score, candidate)
     return best[1]
+
+
+def track_beats(
+    sequence: NoteSequence, beat: float, phase: float, config: Config = DEFAULT
+) -> tuple[float, ...]:
+    """Where each beat actually falls, rather than where a steady one would.
+
+    One period and one phase describe a metronome. A person pushes and slows,
+    and everything downstream is then measured against a grid the playing
+    never followed: on pieces warped by a smooth 4%, fewer than seven notes in
+    ten landed in the right subdivision, and at 8% barely a quarter did.
+
+    The beats are chosen together rather than one at a time -- every sequence
+    of them is scored on the weight of the notes it lands on, less a penalty
+    for changing speed, and the best is taken. Chosen greedily instead, each
+    beat snapping to whatever is nearest, subdivisions drag it off course and
+    it slips a half beat within a bar or two.
+
+    The penalty is light. Heavy, it holds the beat to the tempo it started at
+    and so refuses the drift it exists to follow: the same pieces scored 79%
+    and 42% against 100% and 100% once it was loosened.
+    """
+    cfg = config.score
+    notes = sorted(sequence, key=lambda n: n.onset)
+    if len(notes) < cfg.min_onsets_for_tempo or beat <= 0:
+        return ()
+
+    onsets = np.array([n.onset for n in notes])
+    weights = np.array(_accents(sequence, beat))
+    start, end = float(onsets[0]), float(onsets[-1])
+    resolution = cfg.beat_resolution
+    bins = int((end - start) / resolution) + 2
+    if bins < 4:
+        return ()
+
+    accent = np.zeros(bins)
+    for when, weight in zip(onsets, weights):
+        accent[int(round((when - start) / resolution))] += weight
+    peak = accent.max()
+    if peak <= 0:
+        return ()
+    accent /= peak
+
+    period = beat / resolution
+    lo, hi = max(2, int(period * 0.5)), int(period * 2.0)
+    steps = np.arange(lo, hi + 1)
+    penalty = -cfg.beat_inertia * np.log(steps / period) ** 2
+
+    score = accent.copy()
+    previous = np.full(bins, -1, dtype=int)
+    for index in range(lo, bins):
+        earlier = index - steps
+        usable = earlier >= 0
+        if not usable.any():
+            continue
+        candidates = score[earlier[usable]] + penalty[usable]
+        best = int(np.argmax(candidates))
+        if candidates[best] > 0:
+            score[index] += candidates[best]
+            previous[index] = earlier[usable][best]
+
+    tail = np.arange(max(0, bins - int(period * 2)), bins)
+    index = int(tail[np.argmax(score[tail])])
+    chain: list[float] = []
+    while index >= 0:
+        chain.append(index * resolution + start)
+        index = previous[index]
+    chain.reverse()
+    return tuple(chain) if len(chain) >= 2 else ()
+
+
+def beat_position(when: float, analysis: Analysis) -> float:
+    """Where a moment falls, counted in beats from the first tracked one."""
+    times = analysis.beat_times
+    if not times:
+        return (when - analysis.beat_phase) / analysis.beat
+    grid = np.asarray(times)
+    indices = np.arange(len(grid), dtype=float)
+    period = float(np.median(np.diff(grid))) if len(grid) > 1 else analysis.beat
+    if when <= grid[0]:
+        return float((when - grid[0]) / period)
+    if when >= grid[-1]:
+        return float(len(grid) - 1 + (when - grid[-1]) / period)
+    return float(np.interp(when, grid, indices))
+
+
+def beat_time(position: float, analysis: Analysis) -> float:
+    """The moment a beat position falls at: ``beat_position`` reversed."""
+    times = analysis.beat_times
+    if not times:
+        return analysis.beat_phase + position * analysis.beat
+    grid = np.asarray(times)
+    indices = np.arange(len(grid), dtype=float)
+    period = float(np.median(np.diff(grid))) if len(grid) > 1 else analysis.beat
+    if position <= 0:
+        return float(grid[0] + position * period)
+    if position >= len(grid) - 1:
+        return float(grid[-1] + (position - (len(grid) - 1)) * period)
+    return float(np.interp(position, indices, grid))
 
 
 def estimate_meter(
@@ -760,18 +864,42 @@ def quantize(
     step = analysis.beat / cfg.steps_per_beat
     tolerance = step * cfg.max_shift
 
+    # Snapped where the beats are, not where a steady one would have put them.
+    # The two are the same for a metronome and part company for a person: a
+    # grid laid down at one tempo walks away from playing that drifts, and
+    # after a few bars it is snapping notes to the wrong subdivision.
+    in_beats = bool(analysis.beat_times)
+    grid = 1.0 / cfg.steps_per_beat
+    allowed = grid * cfg.max_shift
+
     quantized: list[Note] = []
     skipped = 0
 
     for note in sequence:
-        onset = _snap(note.onset, step, analysis.beat_phase, tolerance)
-        if onset is None:
-            onset = note.onset
-            skipped += 1
+        if in_beats:
+            position = beat_position(note.onset, analysis)
+            landed = _snap(position, grid, 0.0, allowed)
+            if landed is None:
+                onset = note.onset
+                skipped += 1
+            else:
+                onset = beat_time(landed, analysis)
+                position = landed
+            length = beat_position(note.onset + note.duration, analysis) - position
+            snapped = _snap(length, grid, 0.0, allowed)
+            if snapped is None or snapped < grid / 2:
+                duration = max(note.duration, cfg.min_duration)
+            else:
+                duration = max(beat_time(position + snapped, analysis) - onset, cfg.min_duration)
+        else:
+            onset = _snap(note.onset, step, analysis.beat_phase, tolerance)
+            if onset is None:
+                onset = note.onset
+                skipped += 1
 
-        duration = _snap(note.duration, step, 0.0, tolerance)
-        if duration is None or duration < step / 2:
-            duration = max(note.duration, cfg.min_duration)
+            duration = _snap(note.duration, step, 0.0, tolerance)
+            if duration is None or duration < step / 2:
+                duration = max(note.duration, cfg.min_duration)
 
         quantized.append(Note(max(0.0, onset), note.pitch, duration, note.hand, note.velocity))
 
@@ -874,6 +1002,16 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
         phase %= beat
         tempo_confidence = 1.0
 
+    # Only where one grid does not fit. A steady performance is already
+    # described by its period and phase, and tracking it can only be worse:
+    # given an unbroken stream of equal notes there is no weight anywhere to
+    # follow, and the tracker wanders -- on such a stream at 120 BPM it laid
+    # beats from 0.37s to 0.62s apart where every one of them is 0.5.
+    beat_times = (
+        track_beats(sequence, beat, phase, config)
+        if tempo_confidence < cfg.steady_tempo
+        else ()
+    )
     beats_per_bar = cfg.beats_per_bar or estimate_meter(sequence, beat, phase, config)
     downbeat = find_downbeat(sequence, beat, phase, config, beats_per_bar)
 
@@ -891,6 +1029,7 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
         key=key,
         tempo_confidence=tempo_confidence,
         key_confidence=key_confidence,
+        beat_times=beat_times,
     )
 
 
