@@ -285,6 +285,17 @@ class ScoreConfig:
     # to between 0.24 and 0.44.
     steady_tempo: float = 0.6
 
+    # The share of notes, by how much weight they carry, whose spacing decides
+    # which multiple of the tatum is the beat. The rest move in subdivisions
+    # and argue for a beat too fast.
+    accent_share: float = 0.4
+
+    # Below this many long notes the question goes back to every onset. Dense
+    # playing leaves 50 to 70 of them; a clip of slow held chords left 19, and
+    # among so few the spacing that recurs is as likely to be half the beat as
+    # the beat.
+    min_accented_onsets: int = 30
+
     min_bpm: float = 40.0
     max_bpm: float = 208.0
     tempo_prior: float = 110.0  # where a listener prefers to hear the beat

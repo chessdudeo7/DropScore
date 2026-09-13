@@ -133,9 +133,14 @@ def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[fl
     # tatum grid contains every gridline the beat grid has, which is what
     # quantization actually needs.
     z = _coherence(onsets, tatum)
-    drifting = bool(scores.max() < cfg.steady_tempo)
+    accented = _accented_onsets(sequence, tatum * cfg.steps_per_beat, cfg)
     beat = _beat_from_tatum(
-        tatum, onsets, [n.duration for n in sequence], cfg, drifting
+        tatum,
+        onsets,
+        [n.duration for n in sequence],
+        cfg,
+        accented,
+        drifting=bool(scores.max() < cfg.steady_tempo),
     )
     tatum_phase = (math.atan2(z.imag, z.real) * tatum / (2 * math.pi)) % tatum
     phase = _beat_phase(sequence, tatum, tatum_phase, beat)
@@ -299,6 +304,40 @@ def _repeats_at(onsets: np.ndarray, lag: float, tolerance: float) -> float:
     return float(np.mean(np.abs(onsets[index] - (eligible + lag)) <= tolerance))
 
 
+def _accented_onsets(sequence: NoteSequence, beat: float, cfg) -> np.ndarray:
+    """When the longer notes begin, both ends of the question.
+
+    Which multiple of the tatum is the beat is asked of these rather than of
+    every onset. Any onset serves to find the grid, but not to find the beat
+    on it: music moves in eighths and sixteenths, so a shorter lag genuinely
+    has more partners than a longer one and the measure prefers a beat too
+    fast whatever the music does. The terms beside it held that in check only
+    while the tempo held still -- a piece changing pace halfway through was
+    read at half its beat 16 times out of 16.
+
+    Long notes fall on beats rather than between them, so the question is put
+    to them alone, and a partner must be one of them too. Weighting the notes
+    instead of setting the others aside is not enough: the partner is still
+    found among the subdivisions, and the same piece stays wrong 16 times out
+    of 16. Length only, not register -- taking the lowest notes as well picks
+    out a line of its own in plain material and reads its spacing as the beat,
+    which turned three pieces in four into dotted ones.
+    """
+    notes = sorted(sequence, key=lambda n: n.onset)
+    if not notes or beat <= 0:
+        return np.zeros(0)
+
+    held: dict[float, float] = {}
+    for note in notes:
+        when = round(note.onset, 4)
+        held[when] = max(held.get(when, 0.0), min(note.duration / beat, 4.0))
+
+    onsets = np.array(sorted(held))
+    weights = np.array([held[t] for t in onsets])
+    keep = weights >= np.quantile(weights, 1.0 - cfg.accent_share)
+    return onsets[keep]
+
+
 def _repeats_over_windows(
     onsets: np.ndarray, lag: float, tolerance: float, cfg, drifting: bool
 ) -> float:
@@ -306,12 +345,9 @@ def _repeats_over_windows(
 
     Two notes a beat apart are a beat apart only if the beat has not changed
     in between. Over a whole clip a player drifting a few percent pulls them
-    outside any tolerance tight enough to be worth having, and the level that
-    looks best supported is then whichever one the drift happens to flatter --
-    a piece at 100 BPM came back at 127 with its grid found correctly, because
-    the beat was read as three of its sixteenths rather than four.
+    outside any tolerance tight enough to be worth having.
     """
-    span = float(onsets[-1] - onsets[0])
+    span = float(onsets[-1] - onsets[0]) if len(onsets) else 0.0
     window = cfg.tempo_window
     whole = _repeats_at(onsets, lag, tolerance)
     if span <= window * 1.5 or not drifting:
@@ -353,6 +389,7 @@ def _beat_from_tatum(
     onsets: np.ndarray,
     durations: Sequence[float],
     cfg,
+    accented: np.ndarray | None = None,
     drifting: bool = False,
 ) -> float:
     """Scale the tatum up to a beat.
@@ -377,6 +414,16 @@ def _beat_from_tatum(
         modal, modal_count = counts.most_common(1)[0]
         variety = 1.0 - modal_count / len(durations)
 
+    # Too few long notes to measure repetition among, and the measure is
+    # noise: a clip of slow held chords left 19 of them, scoring 0.111 at its
+    # true beat against 0.222 at half, where every onset together scored 0.956
+    # and 0.933. Sparse music is also the music that needs no help here.
+    chosen = (
+        accented
+        if accented is not None and len(accented) >= cfg.min_accented_onsets
+        else onsets
+    )
+
     best: tuple[float, float] | None = None
     for multiple in BEAT_MULTIPLES:
         beat = tatum * multiple
@@ -385,7 +432,7 @@ def _beat_from_tatum(
             continue
 
         support = _repeats_over_windows(
-            onsets, beat, tatum * cfg.repeat_tolerance, cfg, drifting
+            chosen, beat, tatum * cfg.repeat_tolerance, cfg, drifting
         )
         prior = math.exp(
             -0.5 * (math.log(bpm / cfg.tempo_prior) / cfg.tempo_prior_width) ** 2
