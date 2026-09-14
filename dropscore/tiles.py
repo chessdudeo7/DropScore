@@ -242,6 +242,12 @@ def _fold_blends(
     return colors[keep], counts[keep]
 
 
+#: Fixed seed for palette clustering; any constant would do.
+PALETTE_SEED = 12345
+
+#: k-means restarts; the most compact result is kept.
+PALETTE_ATTEMPTS = 30
+
 #: Below this Lab chroma a colour has no meaningful hue — greys and near-whites.
 #: Such colours are compared by lightness rather than merged by hue.
 MIN_CHROMA = 12.0
@@ -273,7 +279,15 @@ def _cluster(
     k = max(1, min(k, len(pixels)))
 
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
-    _, labels, _ = cv2.kmeans(weighted, k, None, criteria, 3, cv2.KMEANS_PP_CENTERS)
+    # Seeded, so that the same video gives the same palette every time. k-means
+    # starts from random centres and OpenCV draws them from a process-wide
+    # generator, so two identical calls disagreed: colours moved by up to 3 Lab
+    # units between runs, and on one clip the palette held three colours on
+    # some runs and two on others. A result that can change on its own cannot
+    # be compared with the last one, and every regression check depends on
+    # exactly that comparison.
+    cv2.setRNGSeed(PALETTE_SEED)
+    _, labels, _ = cv2.kmeans(weighted, k, None, criteria, PALETTE_ATTEMPTS, cv2.KMEANS_PP_CENTERS)
     labels = labels.ravel()
 
     # Take true (unweighted) means so the stored colours are usable directly.

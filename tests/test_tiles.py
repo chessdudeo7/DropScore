@@ -227,6 +227,20 @@ def test_a_second_hand_of_another_hue_is_not_folded() -> None:
     assert len(kept) == 2
 
 
+def test_the_same_frames_give_the_same_palette_every_time() -> None:
+    """Clustering starts from random centres, and unseeded two identical calls
+    disagreed -- colours moved by up to 3 Lab units, and one clip's palette
+    held three colours on some runs and two on others. Nothing downstream can
+    be compared run to run if this can change on its own."""
+    renderer = _renderer("aurora")
+    calibration = _truth_calibration(renderer)
+    frames = _frames(renderer)
+
+    first = discover_palette(frames, calibration).colors
+    for _ in range(3):
+        assert np.array_equal(discover_palette(frames, calibration).colors, first)
+
+
 def test_finds_two_colours_for_a_two_hand_video() -> None:
     renderer = _renderer("synthesia")  # clearly distinct green and blue
     palette = discover_palette(_frames(renderer), _truth_calibration(renderer))
