@@ -969,6 +969,28 @@ def notate_durations(
                     # gap under half a step rounds to nothing, which is not a
                     # note at all.
                     duration = max(duration, filled)
+
+                # A note that outlasts the next onset is a voice held under a
+                # moving one, and the gap that matters is from where it ends,
+                # not from where it began. Measured from the start, a dotted
+                # half under a pulse of quarters had a gap of one beat, which
+                # it already outlasted, so it was left as it was played -- two
+                # and a quarter beats of a three-beat note, eight times on one
+                # page. From its end, the next onset is most of a beat away
+                # and inside the articulation gap, like any other.
+                end = note.onset + note.duration
+                if duration <= note.duration + 1e-9 and following <= end:
+                    after = next(
+                        (t for t in onsets[index + 1 :] if t >= end - step / 2), None
+                    )
+                    if (
+                        after is not None
+                        and after - end <= cfg.articulation_gap * analysis.beat + step / 2
+                    ):
+                        reach = after - note.onset
+                        if step > 0:
+                            reach = round(reach / step) * step
+                        duration = max(duration, reach)
             written.append(
                 Note(note.onset, note.pitch, duration, note.hand, note.velocity)
             )

@@ -896,6 +896,29 @@ def test_detached_notes_are_written_at_full_value() -> None:
     assert written[-1].duration == pytest.approx(beat * 0.75, abs=1e-6)
 
 
+def test_a_held_note_under_a_pulse_is_written_at_its_full_value() -> None:
+    """A dotted half held under a pulse of quarters, released a little early.
+
+    Measured from its start, the next onset in its hand is one beat away, and
+    the note already outlasts that -- so it was taken for a voice overlapping
+    another and left as played: two and a quarter beats of a three-beat note,
+    eight times on one page of real music. The gap that matters is from where
+    it ends.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = [Note(onset=i * beat, pitch=64, duration=0.15, hand="R") for i in range(24)]
+    for bar in range(8):
+        notes.append(Note(onset=bar * 3 * beat, pitch=69, duration=2.25 * beat, hand="R"))
+    sequence = NoteSequence.of(notes)
+    analysis = analyze(sequence)
+
+    written = notate_durations(sequence, analysis)
+    held = [n.duration / analysis.beat for n in written if n.pitch == 69][:-1]
+    assert all(abs(v - 3.0) < 0.05 for v in held), f"wrote {held[:3]}"
+
+
 def test_a_real_rest_is_left_alone() -> None:
     """Half the gap is a rest, not articulation, and must stay a rest.
 
