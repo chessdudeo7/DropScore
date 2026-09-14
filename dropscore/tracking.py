@@ -611,6 +611,11 @@ def track_to_note(
         # Never seen before it reached the line; its onset is unrecoverable.
         return None
 
+    travelled = float(np.max(bottom_edges) - np.min(bottom_edges))
+    if travelled < cfg.min_travel * speed:
+        log.debug("dropping pitch %d: its edge barely moved", track.pitch)
+        return None
+
     if not _falls_like_a_tile(
         (top_times, top_edges), (bottom_times, bottom_edges), speed, cfg
     ):

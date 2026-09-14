@@ -195,6 +195,21 @@ class TrackingConfig:
     # How many frames apart the correlated pair sits. More than one because a
     # recording may not update every frame, and a duplicated pair reads zero
     # and is discarded, leaving only the pairs that moved twice as far.
+    # How long a tile's lower edge must be seen travelling, in seconds of
+    # scrolling, before the track is believed to be a tile at all. A spark
+    # thrown off a struck key is bright, tile-coloured and briefly the right
+    # shape, but it goes nowhere: measured on a clip full of them, the tracks
+    # that became real notes moved their edge 454px where the spurious ones
+    # moved 14, and the two do not overlap.
+    #
+    # Well under what the clip full of sparks would choose for itself. At 0.20
+    # it scores 0.976 against 0.965 here, but a real capture starts losing
+    # notes there -- recall 0.963 against 0.985, and 0.919 by 0.30 -- because
+    # a recording breaks a tile into fragments and a fragment is not seen for
+    # long. Kept short enough, too, that a tile seen for the minimum three
+    # frames still travels far enough to count.
+    min_travel: float = 0.06
+
     correlation_lag: int = 5
 
     # Known displacements used to measure the correlator's own offset, and
