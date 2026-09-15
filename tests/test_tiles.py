@@ -153,6 +153,42 @@ def test_an_outlined_tile_on_a_black_key_is_detected() -> None:
     assert black in found, f"black key missed; found {sorted(found)}"
 
 
+def test_a_held_black_key_beside_a_later_white_one_leaves_both_intact() -> None:
+    """An F#4 held from earlier, a G4 starting later, their tiles touching.
+
+    A black key's lane overlaps its white neighbour's columns, so the two form
+    one blob. The black key was not claimed -- a black key is only claimed by
+    span when no white neighbour is, to keep two merged white tiles from
+    reading as a phantom accidental -- and the G4, judged over its full width,
+    took the F#4's tile for its own and read as reaching the strike line. Its
+    lower edge never fell, and on a clip of held chords it vanished twice.
+    """
+    renderer = _renderer()
+    calibration = _truth_calibration(renderer)
+    layout = renderer.layout
+    height, width = renderer.spec.height, renderer.spec.width
+    import cv2  # noqa: PLC0415
+
+    image = np.full((height, width, 3), 12, dtype=np.uint8)
+    colour = (110, 215, 245)
+    black_left, black_right = layout.key_span(66)
+    white_left, white_right = layout.key_span(67)
+    cv2.rectangle(image, (int(black_left), 0), (int(black_right), 400), colour, -1)
+    cv2.rectangle(image, (int(white_left), 0), (int(white_right), 180), colour, -1)
+
+    painted = Frame(0, 0.0, image, 1.0)
+    blank = np.full((height, width, 3), 12, dtype=np.uint8)
+    frames = [Frame(i, i / SPEC.fps, blank, 1.0) for i in range(1, 6)] + [painted]
+    palette = discover_palette(frames, calibration)
+
+    tiles = detect_in_frame(painted, palette, calibration)
+    by_pitch = {t.pitch: t for t in tiles}
+    assert 66 in by_pitch, f"the held black key was lost; found {sorted(by_pitch)}"
+    assert by_pitch[67].bottom == pytest.approx(180, abs=4), (
+        f"the white key took the black key's tile: bottom {by_pitch[67].bottom}"
+    )
+
+
 def test_a_gap_on_one_key_does_not_split_its_neighbour() -> None:
     """Two strikes on D, one long note on C, touching.
 

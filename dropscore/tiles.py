@@ -482,6 +482,7 @@ def detect_in_frame(
             pitches = calibration.layout.keys_covered(x, x + w, cfg.min_coverage)
             if not pitches:
                 continue
+            pitches = _with_hidden_black_keys(mask, (x, y, x + w, y + h), pitches, calibration, config)
 
             # Split each key over its *own* columns. Measuring row fill across
             # the whole blob and sharing the result gets adjacent keys of
@@ -501,8 +502,9 @@ def detect_in_frame(
                     # that was never in the strip.
                     x0, x1 = x, x + w
                 else:
-                    x0 = max(x, int(round(left)))
-                    x1 = min(x + w, int(round(right)))
+                    lo, hi = _exposed_span(pitch, pitches, calibration)
+                    x0 = max(x, int(round(lo)))
+                    x1 = min(x + w, int(round(hi)))
                 if x1 <= x0:
                     continue
 
@@ -521,6 +523,112 @@ def detect_in_frame(
                     )
 
     return tiles
+
+
+def _with_hidden_black_keys(
+    mask: np.ndarray,
+    box: tuple[int, int, int, int],
+    pitches: list[int],
+    calibration: Calibration,
+    config: Config,
+) -> list[int]:
+    """Add a black key merged into its white neighbour's blob, if its tile is there.
+
+    A black key is not claimed by span alone when a white neighbour is, because
+    two merged white tiles cover the boundary between them and would otherwise
+    read as a phantom accidental. But a real black tile merged with a white one
+    was then suppressed along with the phantoms.
+
+    The pixels tell them apart. Two merged white tiles fill the boundary only
+    where the white keys' own columns are filled too. A black tile fills its
+    lane on rows where neither neighbour's uncovered columns are -- an F#4 held
+    for five seconds beside a G4 that started later filled rows the G4 had not
+    reached yet.
+    """
+    from .keyboard import is_black  # noqa: PLC0415
+
+    cfg = config.tiles
+    x0, y0, x1, y1 = box
+    layout = calibration.layout
+    claimed = list(pitches)
+
+    def filled_rows(lo: float, hi: float, ratio: float) -> np.ndarray:
+        a, b = max(x0, int(round(lo))), min(x1, int(round(hi)))
+        if b <= a:
+            return np.zeros(y1 - y0, dtype=bool)
+        return mask[y0:y1, a:b].mean(axis=1) >= ratio
+
+    def longest_run(rows: np.ndarray) -> int:
+        best = run = 0
+        for filled in rows:
+            run = run + 1 if filled else 0
+            best = max(best, run)
+        return best
+
+    # A tile is solid across its lane and unbroken down it; sparks scattered
+    # through the lane are neither. Counting filled rows alone claimed black
+    # keys for them -- three phantom accidentals in one frame of a spark clip.
+    tall_enough = max(cfg.min_tile_height, int(calibration.white_width * 0.5))
+
+    for pitch in layout.pitches:
+        if not is_black(pitch) or pitch in claimed:
+            continue
+        left, right = layout.key_span(pitch)
+        if right <= x0 or left >= x1:
+            continue
+
+        lane = filled_rows(left, right, cfg.min_solidity)
+        neighbours = np.zeros_like(lane)
+        for white in (pitch - 1, pitch + 1):
+            if white in claimed:
+                lo, hi = _exposed_span(white, claimed + [pitch], calibration)
+                neighbours |= filled_rows(lo, hi, cfg.row_fill_ratio)
+        if longest_run(lane & ~neighbours) >= tall_enough:
+            claimed.append(pitch)
+
+    return sorted(claimed)
+
+
+def _exposed_span(
+    pitch: int, together: Sequence[int], calibration: Calibration
+) -> tuple[float, float]:
+    """The columns of a key that no black key in the same blob also covers.
+
+    A black key's lane sits across the boundary between two white keys, so its
+    tile overlaps a third or so of each neighbour's columns. Judged over its
+    full width, a white key inside a blob with a black neighbour counts that
+    neighbour's tile as its own wherever the two are side by side -- and when
+    the neighbour is held longer, the white key reads as reaching all the way
+    down to the strike line. On a clip of held chords a G4 lasting five seconds
+    sat beside an F#4 lasting as long from earlier: G4 read as filling its
+    whole column, its lower edge never seemed to fall, no onset could be read,
+    and the note vanished, twice in each of two clips.
+
+    Only black keys in the same blob are set aside, so a white key standing
+    alone keeps every column it has, and a black key keeps its own span.
+    """
+    from .keyboard import is_black  # noqa: PLC0415
+
+    left, right = calibration.layout.key_span(pitch)
+    if is_black(pitch):
+        return left, right
+
+    lo, hi = left, right
+    for other in together:
+        if other == pitch or not is_black(other):
+            continue
+        other_left, other_right = calibration.layout.key_span(other)
+        if other_right <= left or other_left >= right:
+            continue
+        if other_left <= left:
+            lo = max(lo, other_right)
+        else:
+            hi = min(hi, other_left)
+
+    # Too little left to judge by, and the full width is the better evidence.
+    if hi - lo < calibration.white_width * 0.25:
+        return left, right
+    return lo, hi
 
 
 def detect(
