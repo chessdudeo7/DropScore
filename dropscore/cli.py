@@ -426,11 +426,10 @@ def cmd_eval(args: argparse.Namespace) -> int:
     if report.failures:
         print(f"{len(report.failures)} clip(s) failed outright")
 
+    status = 0
     if args.save_baseline:
         print(f"wrote baseline {report.save(args.save_baseline)}")
-        return 0
-
-    if args.baseline:
+    elif args.baseline:
         baseline_path = Path(args.baseline)
         if not baseline_path.exists():
             log.error("no baseline at %s; write one with --save-baseline", baseline_path)
@@ -445,9 +444,53 @@ def cmd_eval(args: argparse.Namespace) -> int:
             print(f"\n{len(regressions)} regression(s):")
             for regression in regressions:
                 print(f"  {regression}")
-            return 1
+            status = 1
 
-    return 0
+    if not args.no_printed:
+        status = max(status, _eval_printed(args))
+    return status
+
+
+def _eval_printed(args: argparse.Namespace) -> int:
+    """Score any real recordings that have their printed music alongside.
+
+    They live outside the repository, so on most machines there are none and
+    this says nothing. Each keeps its own baseline beside it and is compared
+    against that whenever one exists: a regression on a real page fails the
+    run the way one on the corpus does.
+    """
+    import json  # noqa: PLC0415
+
+    from .printed import PrintedResult, find_pieces, load, regressions, score  # noqa: PLC0415
+
+    paths = find_pieces(args.printed)
+    if not paths:
+        return 0
+
+    config = _config_from_args(args)
+    status = 0
+    print(f"\nprinted music, {len(paths)} piece(s) from {args.printed}")
+    for path in paths:
+        piece = load(path)
+        result = score(piece, config)
+        print(f"  {piece.name}  {result}")
+
+        if args.save_baseline:
+            piece.baseline_path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+            print(f"  wrote baseline {piece.baseline_path}")
+            continue
+
+        if piece.baseline_path.exists():
+            before = PrintedResult.from_dict(
+                json.loads(piece.baseline_path.read_text(encoding="utf-8"))
+            )
+            worse = regressions(before, result)
+            if worse:
+                status = 1
+                print(f"  {piece.name} got worse against its baseline:")
+                for line in worse:
+                    print(f"    {line}")
+    return status
 
 
 def cmd_export(args: argparse.Namespace) -> int:
@@ -727,6 +770,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("-b", "--baseline", help="baseline JSON to compare against")
     evaluate.add_argument("--save-baseline", metavar="PATH", help="write a new baseline")
+    evaluate.add_argument(
+        "--printed",
+        default="out/printed",
+        metavar="DIR",
+        help="real recordings with their printed music (*.printed.json), scored "
+        "alongside the corpus when any are present",
+    )
+    evaluate.add_argument(
+        "--no-printed", action="store_true", help="skip the real recordings"
+    )
     evaluate.set_defaults(func=cmd_eval)
 
     export = sub.add_parser(
