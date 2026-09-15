@@ -599,11 +599,25 @@ def track_to_note(
     # Only unclipped edges carry timing information.
     bottom_times, bottom_edges = [], []
     top_times, top_edges = [], []
+    # A tile's top edge only ever moves down. When it moves up by more than a
+    # frame's travel, what the track is following is no longer that tile but
+    # the next one on the key, which has reached it from above: near a strike
+    # line thick with sparks the two touch and are followed as one. Read past
+    # that point, the top edge belongs to later tiles and times the note's end
+    # later and later -- one note's samples implied it ended at 1.24s for over
+    # a second, then jumped to 1.60, 2.02, 2.58 as the notes behind it arrived,
+    # and the stretched note swallowed the next note on its key.
+    lowest_top = -np.inf
+    rising = max(step, 2.0 * margin)
+    arrived = False
     for time, top, bottom in zip(track.times, track.tops, track.bottoms):
         if bottom < strike - margin and bottom < plateau:
             bottom_times.append(time)
             bottom_edges.append(bottom)
-        if top > margin:
+        if top < lowest_top - rising:
+            arrived = True
+        lowest_top = max(lowest_top, top)
+        if top > margin and not arrived:
             top_times.append(time)
             top_edges.append(top)
 
@@ -611,9 +625,26 @@ def track_to_note(
         # Never seen before it reached the line; its onset is unrecoverable.
         return None
 
-    travelled = float(np.max(bottom_edges) - np.min(bottom_edges))
-    if travelled < cfg.min_travel * speed:
-        log.debug("dropping pitch %d: its edge barely moved", track.pitch)
+    # Either edge, and downward. A spark goes nowhere on both. A tile taller
+    # than the fall area does not: the part of its track that carries its end
+    # has a lower edge pinned at the strike line while the upper one is still
+    # falling, and judged on the lower edge alone it was thrown away with the
+    # sparks -- on a real capture, two six-beat tied notes written as three.
+    #
+    # The upper edge is held to more, though, because sparks show one too: a
+    # spark drifting down alongside a tile can fall as far. What it cannot do
+    # is fall at the scroll speed for long -- measured, the sparks let back in
+    # fell at 1.24 of the scroll speed over 3 frames, and the tails of those
+    # tied notes at 1.00 and 1.01 over 7 to 10.
+    needed = cfg.min_travel * speed
+    fell_bottom = float(bottom_edges[-1] - bottom_edges[0])
+    fell_top = 0.0
+    if len(top_edges) >= cfg.min_scrolling_samples and top_times[-1] > top_times[0]:
+        rate = float(np.polyfit(top_times, top_edges, 1)[0]) / speed
+        if abs(rate - 1.0) <= cfg.scroll_rate_tolerance:
+            fell_top = float(top_edges[-1] - top_edges[0])
+    if max(fell_bottom, fell_top) < needed:
+        log.debug("dropping pitch %d: neither edge fell like a tile", track.pitch)
         return None
 
     if not _falls_like_a_tile(

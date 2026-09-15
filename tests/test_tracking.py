@@ -689,3 +689,64 @@ def test_speed_pools_frame_pairs_not_probe_summaries() -> None:
 
     assert estimate.shifts, "the per-pair measurements must survive for pooling"
     assert len(estimate.shifts) == 3
+
+
+def _observe(track, time: float, top: float, bottom: float) -> None:
+    from dropscore.tiles import Tile  # noqa: PLC0415
+
+    track.observe(Tile(frame=int(time * 100), time=time, pitch=track.pitch, top=top,
+                       bottom=bottom, track=0, left=0.0, right=10.0))
+
+
+def test_a_track_that_goes_nowhere_is_not_a_note() -> None:
+    """A spark sits on its key, tile-coloured and briefly the right shape, and
+    goes nowhere. Real tracks moved their lower edge 454px on a clip full of
+    them; the spurious ones 14."""
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    speed, calibration = 100.0, _plain_calibration()
+    spark = TileTrack(pitch=60, track=0)
+    for i in range(12):
+        _observe(spark, i * 0.033, 300.0 + (i % 2), 320.0 + (i % 2))
+    assert track_to_note(spark, speed, calibration) is None
+
+
+def test_the_tail_of_a_note_longer_than_the_screen_is_kept() -> None:
+    """Its lower edge is already at the strike line and never moves; its upper
+    edge is still falling at the scroll speed. Judged on the lower edge alone
+    it was thrown away with the sparks, and two six-beat tied notes on a real
+    page were written as three."""
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    speed, strike = 100.0, 400
+    calibration = _plain_calibration(strike)
+    tail = TileTrack(pitch=60, track=0)
+    for i in range(3):                      # the lower edge, creeping the last pixels
+        _observe(tail, i * 0.033, 0.0, strike - 10.0 + i)
+    for i in range(3, 16):                  # then only the upper edge falls, at scroll speed
+        _observe(tail, i * 0.033, 100.0 + (i - 3) * 3.3, float(strike))
+    assert track_to_note(tail, speed, calibration) is not None
+
+
+def test_a_note_is_not_stretched_by_the_next_tile_joining_its_track() -> None:
+    """Near a strike line thick with sparks, the next tile on the key touches
+    this one and is followed as part of it. A tile's top edge only moves down;
+    when it jumps up, the rest belongs to someone else."""
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    speed, strike = 100.0, 400
+    calibration = _plain_calibration(strike)
+    track = TileTrack(pitch=60, track=0)
+    # a 0.3s note: top 30px above bottom, both falling, reaching the strike at t=1.0
+    for i in range(30):
+        t = i * 0.033
+        bottom = strike - (1.0 - t) * speed
+        _observe(track, t, bottom - 30.0, min(bottom, float(strike)))
+    # the next tile arrives from above and the top edge jumps up
+    for i in range(30, 60):
+        t = i * 0.033
+        _observe(track, t, strike - 90.0 + (i - 30) * 1.0, float(strike))
+
+    note = track_to_note(track, speed, calibration)
+    assert note is not None
+    assert note.duration == pytest.approx(0.3, abs=0.08), f"stretched to {note.duration:.2f}s"

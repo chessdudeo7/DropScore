@@ -210,6 +210,14 @@ class TrackingConfig:
     # frames still travels far enough to count.
     min_travel: float = 0.06
 
+    # When only a track's upper edge is falling -- the tail of a note too long
+    # for the screen, its lower edge already at the strike line -- that edge
+    # counts only if it falls at the scroll speed, within this tolerance, over
+    # at least this many frames. Sparks fell at 1.24 of it over 3; the tails of
+    # real held notes at 1.00 and 1.01 over 7 to 10.
+    scroll_rate_tolerance: float = 0.15
+    min_scrolling_samples: int = 5
+
     correlation_lag: int = 5
 
     # Known displacements used to measure the correlator's own offset, and
