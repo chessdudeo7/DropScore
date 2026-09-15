@@ -27,6 +27,13 @@ A piece file looks like this::
 
 Staff means the staff the note is printed on, "R" for treble and "L" for
 bass -- which is what is being judged, rather than which hand plays it.
+
+Copy the recording in beside its piece file and give ``video`` as a bare file
+name. Screen recorders keep their output in scratch folders: the Windows
+Snipping Tool holds only its most recent recording, and two reference
+recordings were lost from there when the next one was made. A piece whose
+recording is missing is reported and skipped, never scored as a regression,
+and its baseline is left alone.
 """
 
 from __future__ import annotations

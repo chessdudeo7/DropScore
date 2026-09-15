@@ -472,10 +472,24 @@ def _eval_printed(args: argparse.Namespace) -> int:
     print(f"\nprinted music, {len(paths)} piece(s) from {args.printed}")
     for path in paths:
         piece = load(path)
+
+        # A recording that is not there says nothing about the transcriber, and
+        # is not a regression. Recording tools keep them in scratch folders --
+        # the Snipping Tool keeps only its latest, and deleted two this way --
+        # so it is warned about and skipped. Its baseline is left alone: saving
+        # one here would overwrite the numbers the piece is judged against.
+        if not piece.video.exists():
+            print(f"  {piece.name}  not checked: recording missing at {piece.video}")
+            continue
+
         result = score(piece, config)
         print(f"  {piece.name}  {result}")
 
         if args.save_baseline:
+            if result.error:
+                print(f"  {piece.name}  baseline not saved: transcription failed")
+                status = 1
+                continue
             piece.baseline_path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
             print(f"  wrote baseline {piece.baseline_path}")
             continue
