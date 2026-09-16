@@ -50,6 +50,10 @@ def white_pitches(first: int, last: int) -> list[int]:
     return [p for p in range(first, last + 1) if is_white(p)]
 
 
+#: Black-key pitch classes in keyboard order: C#, D#, F#, G#, A#.
+BLACK_PITCH_CLASSES = (1, 3, 6, 8, 10)
+
+
 @dataclass(frozen=True)
 class KeyboardLayout:
     """Maps pitches to pixel columns across a keybed strip.
@@ -67,6 +71,15 @@ class KeyboardLayout:
     # Black keys as a fraction of white-key width and of keybed height.
     black_width_ratio: float = 0.62
     black_height_ratio: float = 0.62
+
+    # How far each black key sits from the boundary between its white
+    # neighbours, as a fraction of a black key's width, for C#, D#, F#, G# and
+    # A# in that order; positive is to the right. A real keyboard does not
+    # centre them -- C# and F# sit left, D# and A# right, G# in the middle --
+    # and a capture measured offsets of up to a quarter of a black key, three
+    # to four pixels, which was enough to hand a glowing A# tile to the B
+    # beside it. Zero draws them centred, as the synthetic renderer does.
+    black_offsets: tuple[float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
         if self.first_pitch >= self.last_pitch:
@@ -126,7 +139,8 @@ class KeyboardLayout:
             return (left + right) / 2
         # white_ordinal() already resolved to the white key below.
         boundary_index = self.white_index(pitch) + 1
-        return self.x0 + boundary_index * self.white_width
+        offset = self.black_offsets[BLACK_PITCH_CLASSES.index(pitch % 12)]
+        return self.x0 + boundary_index * self.white_width + offset * self.black_width
 
     def key_span(self, pitch: int) -> tuple[float, float]:
         """Left and right edges of any key, as drawn."""

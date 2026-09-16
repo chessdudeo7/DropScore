@@ -23,7 +23,7 @@ built from three independent signals, each checked against the next:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Sequence
 
 import cv2
@@ -425,6 +425,61 @@ def _first_pitch(white_index_of_first: int, white_count: int) -> int:
     return min(candidates, key=centre_error)
 
 
+def _measure_black_offsets(
+    upper: np.ndarray, layout: KeyboardLayout
+) -> tuple[float, float, float, float, float]:
+    """Where the black keys actually sit, per note name, from the keybed itself.
+
+    Assumed centred on the boundary between their white neighbours, as a
+    renderer drawing an idealised keyboard does. A real one is not, and the
+    difference is systematic by note name: measured on a capture, C# and F#
+    sat 0.1 to 0.3 of a black key's width left of centre, D# and A# 0.2 to 0.3
+    right, and G# within 0.06. Three or four pixels is enough, where a tile's
+    glow runs wider than its lane, to hand its note to the neighbouring key.
+
+    Each black key visible in the band is found as a dark run near where the
+    model puts it, and the offsets are the median for each note name over the
+    whole keyboard -- robust to a key a hand is resting on. A name seen fewer
+    than twice keeps the centred position.
+    """
+    from .keyboard import BLACK_PITCH_CLASSES, is_black  # noqa: PLC0415
+
+    profile = upper.mean(axis=0)
+    if profile.size == 0:
+        return (0.0, 0.0, 0.0, 0.0, 0.0)
+    dark = profile < float(np.percentile(profile, 90)) * 0.45
+    runs: list[tuple[int, int]] = []
+    start = None
+    for x, is_dark in enumerate(dark):
+        if is_dark and start is None:
+            start = x
+        elif not is_dark and start is not None:
+            runs.append((start, x))
+            start = None
+
+    width = layout.black_width
+    measured: dict[int, list[float]] = {pc: [] for pc in BLACK_PITCH_CLASSES}
+    centred = replace(layout, black_offsets=(0.0, 0.0, 0.0, 0.0, 0.0))
+    for pitch in layout.pitches:
+        if not is_black(pitch):
+            continue
+        model = centred.key_center(pitch)
+        near = [r for r in runs if abs((r[0] + r[1]) / 2 - model) < width * 0.6
+                and width * 0.6 <= r[1] - r[0] <= width * 1.6]
+        if not near:
+            continue
+        a, b = min(near, key=lambda r: abs((r[0] + r[1] - 1) / 2 - model))
+        # A run covers columns a to b-1, whose centre is (a + b - 1) / 2; taking
+        # (a + b) / 2 read every black key half a pixel right, a bias the same
+        # for every note name that no keyboard has.
+        measured[pitch % 12].append(((a + b - 1) / 2 - model) / width)
+
+    return tuple(
+        float(np.clip(np.median(values), -0.5, 0.5)) if len(values) >= 2 else 0.0
+        for values in (measured[pc] for pc in BLACK_PITCH_CLASSES)
+    )
+
+
 def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
     """Fit a keyboard to sampled frames."""
     if len(frames) < 2:
@@ -492,6 +547,7 @@ def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
         x0=x0,
         width=float(boundaries[-1] - boundaries[0]),
     )
+    layout = replace(layout, black_offsets=_measure_black_offsets(upper, layout))
 
     if confidence < cfg.min_confidence:
         raise CalibrationError(
