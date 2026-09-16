@@ -117,6 +117,15 @@ class TileConfig:
     # several palettes while leaving genuinely different hands apart.
     merge_distance: float = 25.0
 
+    # Below this distance in Lab two colours are one colour, hue or no hue.
+    # Hue merging spares neutrals on purpose -- two greys can be two hands --
+    # but a plain grey theme also clustered its tiles into a colour and a
+    # near-copy of it 1.1 apart, which held only the tiles' antialiased edge
+    # columns. Those edges read as outlines and were tracked as a voice of
+    # their own, putting six bass notes on the treble staff. Two hands drawn
+    # in grey sat 84 apart, so there is room between the two cases.
+    duplicate_distance: float = 6.0
+
     # How far off the line between the background and a tile colour another
     # colour may sit and still be read as that tile's bloom or antialiasing
     # rather than a voice of its own. A glow halo measured 0.46.
@@ -170,6 +179,14 @@ class TileConfig:
     # bar is deliberately low, and reusing it let a key with a neighbour
     # bleeding into one edge column pass as hollow.
     outline_edge_ratio: float = 0.80
+
+    # An outlined tile has a column stroked at least this full in each side
+    # third, and is judged from its middle rather than its edges; columns under
+    # the fringe ratio are trimmed off first, since sparks brushing a tile's
+    # edge widen its box with nearly empty ones. Rounded neon outlines keep even
+    # their stroke columns short of full, so this is well under the edge ratio.
+    outline_side_ratio: float = 0.60
+    outline_fringe_ratio: float = 0.15
 
 
 @dataclass(frozen=True)
@@ -440,6 +457,13 @@ class ScoreConfig:
     # bass staff for a whole page; held within four semitones, every note of
     # that page lands on the staff it was printed on.
     staff_boundary_reach: float = 4.0
+
+    # Notes spanning no more than this many semitones around a note are taken
+    # as one part and kept on one staff, the staff their middle falls on. Ten
+    # is about what a hand covers without stretching. Wider takes in passages
+    # that do have a bass line under them: at 12, one real capture lost three
+    # notes to the treble staff for every one the other gained.
+    one_hand_span: int = 10
 
     # How much better than chance a single pitch boundary must sort the two
     # colour groups before they are believed to be hands, as the gain over

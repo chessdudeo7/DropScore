@@ -130,7 +130,14 @@ def discover_palette(
         step = len(pixels) // cfg.max_sample_pixels
         pixels = pixels[::step]
 
-    colors, counts = _cluster(pixels, cfg.max_palettes, cfg.lightness_weight, cfg.merge_distance)
+    colors, counts = _cluster(
+        pixels,
+        cfg.max_palettes,
+        cfg.lightness_weight,
+        cfg.merge_distance,
+        background,
+        cfg.duplicate_distance,
+    )
     colors, counts = _fold_blends(colors, counts, background, cfg)
 
     # Drop colours too rare to be a hand; they are usually antialiasing.
@@ -271,8 +278,19 @@ def _same_hue(a: np.ndarray, b: np.ndarray, tolerance_degrees: float) -> bool:
     return bool(abs((difference + 180.0) % 360.0 - 180.0) < tolerance_degrees)
 
 
+def _distance_to(color: np.ndarray, other: np.ndarray, lightness_weight: float) -> float:
+    return float(np.linalg.norm(
+        _weighted(color[None, :], lightness_weight)[0] - _weighted(other[None, :], lightness_weight)[0]
+    ))
+
+
 def _cluster(
-    pixels: np.ndarray, k: int, lightness_weight: float, merge_distance: float
+    pixels: np.ndarray,
+    k: int,
+    lightness_weight: float,
+    merge_distance: float,
+    background: np.ndarray | None = None,
+    duplicate_distance: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """k-means in weighted Lab, then merge clusters of near-identical chroma."""
     weighted = np.ascontiguousarray(_weighted(pixels, lightness_weight), dtype=np.float32)
@@ -304,13 +322,28 @@ def _cluster(
     merged_counts: list[int] = []
     for color, count in sorted(zip(colors, counts), key=lambda pair: -pair[1]):
         for i, existing in enumerate(merged_colors):
-            if _same_hue(color, existing, merge_distance):
-                # Keep the dominant member's colour rather than averaging.
-                # Clusters arrive largest-first, so `existing` is the tile's own
-                # colour and `color` is usually its bloom or a shaded end of a
-                # gradient. Averaging the two lands between them — close enough
-                # to the halo that the mask then admits it, which turned the
-                # whole glow field into detected tiles.
+            # Near-identical colours are one colour whether or not they have a
+            # hue to compare: the neutral guard below exists for two grey
+            # *voices*, which stand far apart, not for a colour and a copy of
+            # itself.
+            duplicate = float(np.linalg.norm(color - existing)) < duplicate_distance
+            if duplicate or _same_hue(color, existing, merge_distance):
+                # Keep one member's colour rather than averaging: the average
+                # lands between a tile and its bloom, close enough to the halo
+                # that the mask admits it, which turned a whole glow field into
+                # detected tiles.
+                #
+                # And keep the one farther from the background, not the more
+                # common. Bloom is the tile's colour blended toward what lies
+                # behind it, so the source is the member farther out. Keeping
+                # the commoner assumed a tile outnumbers its glow, which filled
+                # tiles do and neon outlines do not: a capture of them had 0.7%
+                # of its fall area in outline and 7.8% in green haze of the same
+                # hue, and the palette became the haze.
+                if background is not None and _distance_to(color, background, lightness_weight) > (
+                    _distance_to(existing, background, lightness_weight)
+                ):
+                    merged_colors[i] = color
                 merged_counts[i] += count
                 break
         else:
@@ -371,6 +404,14 @@ def _track_masks(
             gaps = np.linalg.norm(flat[:, None, :] - flat[None, :, :], axis=2)
             np.fill_diagonal(gaps, np.inf)
             wanted = np.minimum(wanted, gaps.min(axis=1) / 2.0)
+        # Nor so far that it takes in the background. The other colours bound
+        # it, but a palette of one colour had nothing to bound it at all: on a
+        # capture of neon outlines its radius grew to 57, the black background
+        # sat 41 away, and every pixel of the fall area matched -- one blob, a
+        # "tile" on every key, every frame.
+        ground = _weighted(palette.background[None, :], cfg.lightness_weight)[0]
+        to_ground = np.linalg.norm(targets.reshape(len(targets), -1) - ground[None, :], axis=1)
+        wanted = np.minimum(wanted, to_ground / 2.0)
         radius = np.maximum(radius, wanted)
 
     solid = closest < radius[nearest]
@@ -386,6 +427,60 @@ def _track_masks(
         ((nearest == index) & solid).astype(np.uint8)
         for index in range(palette.track_count)
     ]
+
+
+def _looks_outlined(strip: np.ndarray, cfg) -> bool:
+    """Is this a tile drawn as an outline: stroked down both sides, empty inside?
+
+    Judged by the strongest column within each side third, and by the middle of
+    the tile rather than every column between the edges. Reading the outermost
+    columns and averaging all the rest suited thin strokes on tall tiles, and
+    failed a style drawn thick and rounded: a neon outline's rounded corners
+    keep even its stroke columns short of full, and on a short tile the top and
+    bottom strokes are much of its height, so every interior column read about
+    half full. Those tiles were too full to be outlines and too empty to be
+    solid, and a whole capture of them came back as two notes.
+
+    The middle of an outline is empty whatever its stroke or its corners, and
+    the middle of a filled tile is not. Near-empty fringe columns are trimmed
+    first: sparks brushing a tile's edge widened its box by columns 4% full.
+    """
+    columns = strip.mean(axis=0)
+    occupied = np.flatnonzero(columns >= cfg.outline_fringe_ratio)
+    if occupied.size < 3:
+        return False
+    strip = strip[:, occupied[0] : occupied[-1] + 1]
+    height, width = strip.shape
+    if width < 3 or height < 3:
+        return False
+
+    # Sides and middle are read over the same rows. Measured down the whole
+    # height instead, a box holding two filled tiles with a gap between them
+    # passed as an outline: its side columns are full for both tiles and so
+    # read full on average, while its middle rows -- the gap -- read empty.
+    # That merged the pair into one note, and on a plain two-voice clip it cost
+    # a quarter of the notes their staff.
+    top, bottom = int(height * 0.25), max(int(height * 0.75), int(height * 0.25) + 1)
+    band = strip[top:bottom]
+
+    columns = band.mean(axis=0)
+    side = max(1, int(round(width * 0.3)))
+    if min(float(columns[:side].max()), float(columns[-side:].max())) < cfg.outline_side_ratio:
+        return False
+
+    # An outline is closed: it is stroked across the top and the bottom as well
+    # as down the sides. Only one of the two is required, because a tile
+    # reaching past the top of the fall area or down through the strike line
+    # keeps just the other. Without this, two thin tiles on neighbouring keys
+    # that merged into one box read as an outline -- stroked at either side,
+    # empty between -- and were kept whole as a single note on the wrong key.
+    rows = strip.mean(axis=1)
+    edge = max(1, int(round(height * 0.1)))
+    if max(float(rows[:edge].max()), float(rows[-edge:].max())) < cfg.outline_side_ratio:
+        return False
+
+    left, right = int(width * 0.35), max(int(width * 0.65), int(width * 0.35) + 1)
+    return float(band[:, left:right].mean()) < cfg.outline_fill_ratio
 
 
 def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: Config) -> list[tuple[int, int]]:
@@ -418,14 +513,7 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
     # a stroke one column in -- or split across two, at 1.0 and 0.75 -- was
     # read as no stroke at all, and the tile was handed to the solidity rule
     # meant for filled ones. That cost every tile on one key for a whole clip.
-    columns = strip.mean(axis=0)
-    edge = 2 if columns.size >= 6 else 1
-    hollow = (
-        columns.size > 2
-        and float(columns[:edge].max()) >= cfg.outline_edge_ratio
-        and float(columns[-edge:].max()) >= cfg.outline_edge_ratio
-        and float(columns[edge:-edge].mean()) < cfg.outline_fill_ratio
-    )
+    hollow = _looks_outlined(strip, cfg)
     if hollow:
         return [(y0, y1)] if y1 - y0 >= cfg.min_tile_height else []
 

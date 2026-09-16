@@ -15,7 +15,13 @@ from dropscore.keyboard import KeyboardLayout
 from dropscore.notes import Note, NoteSequence
 from dropscore.synth import RenderSpec, SynthRenderer, generate, get_theme
 from dropscore.synth.themes import THEMES
-from dropscore.tiles import TileError, detect_in_frame, discover_palette
+from dropscore.tiles import (
+    TileError,
+    _cluster,
+    _looks_outlined,
+    detect_in_frame,
+    discover_palette,
+)
 from dropscore.video import Frame
 
 SPEC = RenderSpec(width=960, height=540, fps=10.0)
@@ -586,3 +592,70 @@ def test_widening_stops_short_of_a_neighbouring_colour() -> None:
         f"a colour 24 from its neighbour still matched {crowded} pixels 25 away; "
         "the cap is not limiting how far a crowded palette may widen"
     )
+
+
+def test_two_filled_tiles_with_a_gap_are_not_read_as_one_outline() -> None:
+    """A box holding two tiles of one key, one above the other.
+
+    Read down the whole height, its side columns are full for both tiles and
+    the gap between them reads as an empty middle -- an outline, which is kept
+    whole as a single note. Sides and middle have to be read over the same
+    rows, and there the sides are as empty as the middle is.
+    """
+    strip = np.zeros((100, 12), dtype=np.uint8)
+    strip[:32] = 1
+    strip[68:] = 1
+
+    assert not _looks_outlined(strip, DEFAULT.tiles)
+
+
+def test_a_hollow_tile_is_still_read_as_an_outline() -> None:
+    strip = np.zeros((100, 12), dtype=np.uint8)
+    strip[:, :2] = 1
+    strip[:, -2:] = 1
+    strip[:3] = 1
+    strip[-3:] = 1
+
+    assert _looks_outlined(strip, DEFAULT.tiles)
+
+
+def test_two_thin_tiles_side_by_side_are_not_read_as_one_outline() -> None:
+    """Two narrow tiles on neighbouring keys, merged into one box.
+
+    Stroked at either side and empty between, the box reads as an outline --
+    but nothing closes it top or bottom, which every real outline has.
+    """
+    strip = np.zeros((222, 23), dtype=np.uint8)
+    strip[:, 2:4] = 1
+    strip[:, 22] = 1
+
+    assert not _looks_outlined(strip, DEFAULT.tiles)
+
+
+def test_an_outline_clipped_at_the_top_is_still_an_outline() -> None:
+    """A tile running past the top of the fall area keeps only its lower stroke."""
+    strip = np.zeros((100, 12), dtype=np.uint8)
+    strip[:, :2] = 1
+    strip[:, -2:] = 1
+    strip[-3:] = 1
+
+    assert _looks_outlined(strip, DEFAULT.tiles)
+
+
+def test_a_colour_and_a_near_copy_of_it_are_one_voice() -> None:
+    """Two greys 1.1 apart are one voice; two grey hands stand far apart."""
+    grey = np.full((400, 3), (147.0, 127.0, 129.0), dtype=np.float32)
+    near = np.full((100, 3), (148.1, 127.0, 129.0), dtype=np.float32)
+    other = np.full((300, 3), (231.0, 127.0, 129.0), dtype=np.float32)
+
+    colors, counts = _cluster(
+        np.concatenate([grey, near, other]),
+        DEFAULT.tiles.max_palettes,
+        DEFAULT.tiles.lightness_weight,
+        DEFAULT.tiles.merge_distance,
+        np.array([14.0, 128.0, 129.0]),
+        DEFAULT.tiles.duplicate_distance,
+    )
+
+    assert len(colors) == 2, f"expected two voices, got {np.round(colors, 1).tolist()}"
+    assert sorted(counts.tolist()) == [300, 500]
