@@ -139,3 +139,14 @@ def test_a_failed_transcription_is_a_regression() -> None:
     before = PrintedResult(name="p", printed=10, detected=10, matched=10)
     after = PrintedResult(name="p", error="boom")
     assert regressions(before, after) == ["failed: boom"]
+
+
+def test_a_recording_read_as_almost_nothing_is_a_failure_not_a_crash(tmp_path: Path) -> None:
+    """Two notes are too few to find a tempo in, and the error that raised
+    took the whole eval down with it."""
+    piece = load(_write_piece(tmp_path))
+    two = NoteSequence.of([Note(onset=1.0, pitch=64, duration=0.2), Note(onset=2.0, pitch=64, duration=0.2)])
+
+    result = score_sequence(piece, two)
+    assert result.error and "could not analyse" in result.error
+    assert regressions(PrintedResult(name="p", printed=10, detected=10, matched=10), result)

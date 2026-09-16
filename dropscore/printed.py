@@ -22,11 +22,16 @@ A piece file looks like this::
       "window": [0.5, 77.5],         # the beats scored, inclusive
       "tempo": 100, "beats_per_bar": 3,
       "keys": ["A minor", "C major"], # any of these is right
+      "lowest": 62, "highest": 84,   # optional: pitches outside are not scored
       "notes": [[64, 1, 1, "R"], ...] # pitch, beat, length in beats, staff
     }
 
 Staff means the staff the note is printed on, "R" for treble and "L" for
 bass -- which is what is being judged, rather than which hand plays it.
+
+``lowest`` and ``highest`` score only part of the texture: a melody read with
+confidence, say, above accompanying voices that could not be. Notes detected
+outside the bounds are neither found nor spurious.
 
 Copy the recording in beside its piece file and give ``video`` as a bare file
 name. Screen recorders keep their output in scratch folders: the Windows
@@ -81,6 +86,13 @@ class PrintedPiece:
     beats_per_bar: int | None
     keys: tuple[str, ...]
     notes: tuple[PrintedNote, ...]
+    lowest: int | None = None
+    highest: int | None = None
+
+    def covers(self, pitch: int) -> bool:
+        return (self.lowest is None or pitch >= self.lowest) and (
+            self.highest is None or pitch <= self.highest
+        )
 
     @property
     def name(self) -> str:
@@ -91,7 +103,7 @@ class PrintedPiece:
 
     def scored(self) -> list[PrintedNote]:
         low, high = self.window
-        return [n for n in self.notes if low <= n.beat <= high]
+        return [n for n in self.notes if low <= n.beat <= high and self.covers(n.pitch)]
 
     @property
     def baseline_path(self) -> Path:
@@ -118,6 +130,8 @@ def load(path: str | Path) -> PrintedPiece:
             PrintedNote(int(p), float(b), float(length), str(staff))
             for p, b, length, staff in data["notes"]
         ),
+        lowest=int(data["lowest"]) if data.get("lowest") is not None else None,
+        highest=int(data["highest"]) if data.get("highest") is not None else None,
     )
 
 
@@ -216,14 +230,30 @@ def score_sequence(
     piece: PrintedPiece, sequence: NoteSequence, config: Config = DEFAULT
 ) -> PrintedResult:
     """Score an already transcribed sequence against the printed music."""
-    from .score import beat_position, notate_durations, postprocess  # noqa: PLC0415
+    from .score import ScoreError, beat_position, notate_durations, postprocess  # noqa: PLC0415
 
-    handed, analysis = postprocess(sequence, config)
+    # A recording the transcriber can barely read yields too few notes to find
+    # a tempo in, and that raised out of eval entirely -- on a capture of neon
+    # outlines, whose two detected notes crashed the run. That is the failure
+    # this check exists to report, so it is reported as one.
+    try:
+        handed, analysis = postprocess(sequence, config)
+    except ScoreError as exc:
+        return PrintedResult(
+            name=piece.name,
+            title=piece.title,
+            printed=len(piece.scored()),
+            detected=len(sequence),
+            error=f"could not analyse {len(sequence)} note(s): {exc}",
+        )
     written = notate_durations(handed, analysis, config)
 
     low, high = piece.window
     start, end = piece.seconds(low), piece.seconds(high)
-    detected = [n for n in handed if start - ONSET_TOLERANCE <= n.onset <= end + ONSET_TOLERANCE]
+    detected = [
+        n for n in handed
+        if start - ONSET_TOLERANCE <= n.onset <= end + ONSET_TOLERANCE and piece.covers(n.pitch)
+    ]
     values = {(n.pitch, round(n.onset, 6)): n for n in written}
 
     result = PrintedResult(

@@ -807,6 +807,16 @@ def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeq
         reach = cfg.staff_boundary_reach
         split = min(max(split, MIDDLE_C - reach), MIDDLE_C + reach)
         hand: Hand = "R" if note.pitch >= split else "L"
+
+        # Everything around this note within one hand's reach is one part, and
+        # is not split between the staves at all. A melody moving through a
+        # sixth or so has no bass line in it to separate out, but a boundary
+        # held near middle C still cut through it: a real capture's tune dips
+        # to D4 with the bass silent, and those D4s went to the bass staff --
+        # and the notes before them, left with nothing following on their own
+        # staff for three beats, were written short as well.
+        if len(window) >= 4 and window.max() - window.min() <= cfg.one_hand_span:
+            hand = "R" if float(np.median(window)) >= MIDDLE_C else "L"
         assigned.append(Note(note.onset, note.pitch, note.duration, hand, note.velocity))
 
     return NoteSequence.of(
