@@ -18,7 +18,7 @@ Two deliberate choices:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterator
 
@@ -139,7 +139,7 @@ class VideoReader:
                 ...
     """
 
-    def __init__(self, path: str | Path, config: Config = DEFAULT) -> None:
+    def __init__(self, path: str | Path, config: Config = DEFAULT, end: float | None = None) -> None:
         self.path = Path(path)
         self.config = config
         self._open_iterators = 0
@@ -155,6 +155,17 @@ class VideoReader:
             )
 
         self.info = self._probe()
+
+        # Read nothing past ``end`` seconds. A screen recording rarely stops
+        # when the piece does: one ran on into a channel's end screen and an
+        # advert, and calibration, which samples across the whole file, took
+        # three of its four tile colours from them.
+        self._stop: int | None = None
+        if end is not None:
+            self._stop = max(1, int(round(end * self.info.fps)))
+            if self.info.frame_count:
+                self._stop = min(self._stop, self.info.frame_count)
+            self.info = replace(self.info, frame_count=self._stop)
 
     # ── lifecycle ────────────────────────────────────────────────────
 
@@ -247,6 +258,9 @@ class VideoReader:
                 self._open_iterators,
             )
         self._open_iterators += 1
+
+        if self._stop is not None:
+            stop = self._stop if stop is None else min(stop, self._stop)
 
         try:
             cap = self._capture

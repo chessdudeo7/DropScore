@@ -175,3 +175,15 @@ def test_does_not_warn_about_an_honest_frame_rate(
             assert reader.info.fps > 0
 
     assert "frame rate" not in caplog.text
+
+
+def test_nothing_past_the_end_is_read(clip: Path) -> None:
+    """A screen recording that ran on into an end screen and an advert: the
+    frames after the piece must reach neither calibration nor transcription."""
+    end = 1.5
+    last = int(round(end * CLIP_FPS))
+    with VideoReader(clip, end=end) as reader:
+        assert reader.info.frame_count == last
+        assert max(f.index for f in reader.sample(20)) < last
+        assert max(f.index for f in reader.frames()) == last - 1
+        assert max(f.index for f in reader.frames(stop=CLIP_FRAMES)) == last - 1
