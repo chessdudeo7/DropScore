@@ -1049,12 +1049,68 @@ def notate_durations(
                 Note(note.onset, note.pitch, duration, note.hand, note.velocity)
             )
 
+    written = _hold_under_figures(written, step, cfg)
+
     return NoteSequence.of(
         sorted(written),
         tempo=sequence.tempo,
         key=sequence.key,
         source=sequence.source,
     )
+
+
+def _hold_under_figures(notes: list[Note], step: float, cfg) -> list[Note]:
+    """Write a bass note held under a figure as lasting until the bass moves.
+
+    A player strikes a low octave, moves the hand up into an arpeggio and lets
+    the pedal hold the bass. The tile is as short as the key was down, and the
+    page writes what is heard: on a real recording, bass octaves the arpeggio
+    ran over for up to three and a half bars were printed as tied whole notes,
+    and written as sixteenths -- 3 of 14 bass values right.
+
+    Held until the next note that comes near it, and only across a figure: at
+    least ``hold_min_figure_onsets`` onsets in between, every one of them
+    ``hold_clear_interval`` semitones above or more. A figure close above is
+    the bass line itself moving -- Alberti's C-G-E-G, a fifth apart -- and a
+    single chord between two bass notes is oom-pah, written short.
+
+    Only ever lengthens.
+    """
+    if cfg.hold_min_figure_onsets <= 0:
+        return notes
+    ordered = sorted(notes, key=lambda n: n.onset)
+    result = []
+    for note in ordered:
+        # A bass octave moves together, so the lower note of one is measured
+        # from its upper note. From its own pitch, the lower D of a D octave
+        # took the B octave's lower note -- nine semitones up -- for figure, and
+        # was held twice as long as the page prints it. Only the lowest note
+        # struck, and only with its octave: a B struck with an arpeggio's B
+        # above it is the upper note of a bass octave, not the lower.
+        together = [
+            other.pitch for other in ordered if abs(other.onset - note.onset) < cfg.repeat_min_gap
+        ]
+        base = note.pitch
+        if note.pitch == min(together) and note.pitch + 12 in together:
+            base = note.pitch + 12
+        clear = base + cfg.hold_clear_interval
+        figure: set[float] = set()
+        until = None
+        for other in ordered:
+            if other.onset < note.onset + cfg.repeat_min_gap:
+                continue
+            if other.pitch < clear:
+                until = other.onset
+                break
+            figure.add(round(other.onset, 3))
+        if until is None or len(figure) < cfg.hold_min_figure_onsets:
+            result.append(note)
+            continue
+        reach = until - note.onset
+        if step > 0:
+            reach = round(reach / step) * step
+        result.append(Note(note.onset, note.pitch, max(note.duration, reach), note.hand, note.velocity))
+    return result
 
 
 def _snap(value: float, step: float, phase: float, tolerance: float) -> float | None:

@@ -466,6 +466,14 @@ class ScoreConfig:
     # values matched the printed music.
     articulation_gap: float = 1.0
 
+    # A bass note is written as held until the bass moves when a figure runs
+    # over it: at least this many onsets before the next note near it, all of
+    # them this many semitones above or more. A minor sixth leaves out
+    # Alberti basses, whose figure moves a fifth above the bass; four onsets
+    # leave out oom-pah and broken octaves. Zero switches it off.
+    hold_min_figure_onsets: int = 4
+    hold_clear_interval: int = 8
+
     # How many neighbouring notes in time set the local hand boundary. Counted
     # rather than timed: a window in seconds spans different amounts of music
     # across the tempo range, and accuracy fell off either side of whichever

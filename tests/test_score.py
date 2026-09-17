@@ -1036,3 +1036,77 @@ def test_a_sixteenth_stream_over_sparse_held_bass_keeps_its_beat() -> None:
 
     beat, _, _ = estimate_tempo(NoteSequence.of(notes))
     assert 60.0 / beat == pytest.approx(130, rel=0.03)
+
+
+def _held_bass_texture(bass: list[tuple[int, list[int]]], figure: list[int], beats: int):
+    """Bass octaves struck short at the given beats, a sixteenth figure over them."""
+    beat = 60.0 / 130
+    sixteenth = beat / 4
+    notes = [
+        Note(onset=i * sixteenth, pitch=figure[i % len(figure)], duration=sixteenth * 0.9, hand="R")
+        for i in range(beats * 4)
+    ]
+    for at, pitches in bass:
+        for pitch in pitches:
+            notes.append(Note(onset=at * beat, pitch=pitch, duration=beat * 0.5, hand="L"))
+    return NoteSequence.of(notes), _analysis(130.0)
+
+
+def _written_beats(sequence: NoteSequence, analysis, pitch: int, at: int) -> float:
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = analysis.beat
+    note = next(n for n in notate_durations(sequence, analysis) if n.pitch == pitch and abs(n.onset - at * beat) < 1e-6)
+    return note.duration / beat
+
+
+def test_a_bass_octave_under_an_arpeggio_is_written_until_the_bass_moves() -> None:
+    """Struck short and held by the pedal, printed as tied whole notes.
+
+    A real recording's D octave ran fourteen beats under an arpeggio before a
+    B octave came in, and was written as a sixteenth. Its lower note has to be
+    judged from the octave above it: from its own pitch, the B's lower note
+    sits far enough up to pass for figure, and the D ran on to the next bass
+    after that.
+    """
+    sequence, analysis = _held_bass_texture(
+        bass=[(0, [26, 38]), (14, [35, 47]), (16, [36, 48])],
+        figure=[62, 57, 65, 62, 69, 65, 74, 69],
+        beats=20,
+    )
+    for pitch in (26, 38):
+        assert _written_beats(sequence, analysis, pitch, 0) == pytest.approx(14)
+    for pitch in (35, 47):
+        assert _written_beats(sequence, analysis, pitch, 14) == pytest.approx(2)
+
+
+def test_a_broken_chord_rising_from_its_own_bass_is_not_held() -> None:
+    """C3 G3 C4 E4 C4 G3, then C3 again: six notes between the Cs, but the G a
+    fifth above is the figure starting from the bass, not a figure over it.
+    Each C is written as the eighth it is."""
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 60.0 / 130
+    eighth = beat / 2
+    figure = [48, 55, 60, 64, 60, 55]
+    notes = [Note(onset=i * eighth, pitch=figure[i % 6], duration=eighth * 0.9, hand="L") for i in range(36)]
+    written = notate_durations(NoteSequence.of(notes), _analysis(130.0))
+    lows = [n.duration / beat for n in written if n.pitch == 48][:-1]
+    assert all(v <= 0.5 + 1e-6 for v in lows), f"held the bass of a broken chord: {lows}"
+
+
+def test_an_oom_pah_bass_is_not_held() -> None:
+    """A bass note and one chord over it, then the bass again: one onset of
+    figure is not a figure, and the bass stays a quarter."""
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 60.0 / 130
+    notes = []
+    for bar in range(8):
+        for i, at in enumerate((0, 2)):
+            notes.append(Note(onset=(bar * 4 + at) * beat, pitch=36 if i == 0 else 43, duration=beat * 0.8, hand="L"))
+            for pitch in (60, 64, 67):
+                notes.append(Note(onset=(bar * 4 + at + 1) * beat, pitch=pitch, duration=beat * 0.8, hand="L"))
+    written = notate_durations(NoteSequence.of(notes), _analysis(130.0))
+    lows = [n.duration / beat for n in written if n.pitch in (36, 43)][:-1]
+    assert all(v <= 1.0 + 1e-6 for v in lows), f"held an oom-pah bass: {lows}"
