@@ -125,11 +125,14 @@ def test_regressions_name_what_got_worse() -> None:
     before = PrintedResult(
         name="p", printed=100, detected=100, matched=100, written_right=98, staff_right=100,
         tempo_found=100.0, tempo_expected=100.0, meter_found=3, meter_expected=3,
+        bar_found=1.8, bar_expected=1.8,
     )
     same = PrintedResult.from_dict(before.to_dict())
     assert regressions(before, same) == []
 
-    worse = PrintedResult.from_dict({**before.to_dict(), "written_right": 96, "meter_found": 4})
+    # Bars half the length the page prints: the bar lines now fall in the
+    # middle of the music's.
+    worse = PrintedResult.from_dict({**before.to_dict(), "written_right": 96, "bar_found": 0.9})
     found = regressions(before, worse)
     assert any("written values" in line for line in found)
     assert any("meter was right" in line for line in found)
@@ -150,3 +153,19 @@ def test_a_recording_read_as_almost_nothing_is_a_failure_not_a_crash(tmp_path: P
     result = score_sequence(piece, two)
     assert result.error and "could not analyse" in result.error
     assert regressions(PrintedResult(name="p", printed=10, detected=10, matched=10), result)
+
+
+def test_a_beat_map_places_beats_between_its_points(tmp_path: Path) -> None:
+    """A performance that slows: beat 3 comes a second after beat 0, beat 6
+    a second and a half after that."""
+    path = _write_piece(tmp_path, beat_times=[[0, 1.0], [3, 2.0], [6, 3.5]])
+    piece = load(path)
+    assert piece.seconds(0) == pytest.approx(1.0)
+    assert piece.seconds(1.5) == pytest.approx(1.5)
+    assert piece.seconds(4.5) == pytest.approx(2.75)
+    assert piece.seconds(7.0) == pytest.approx(4.0)  # carries on at the last stretch's pace
+
+
+def test_a_piece_can_stop_reading_its_recording_early(tmp_path: Path) -> None:
+    piece = load(_write_piece(tmp_path, end=145))
+    assert piece.end == pytest.approx(145.0)
