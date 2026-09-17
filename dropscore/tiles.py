@@ -137,6 +137,7 @@ def discover_palette(
         cfg.merge_distance,
         background,
         cfg.duplicate_distance,
+        cfg.source_near_tie,
     )
     colors, counts = _fold_blends(colors, counts, background, cfg)
 
@@ -284,6 +285,17 @@ def _distance_to(color: np.ndarray, other: np.ndarray, lightness_weight: float) 
     ))
 
 
+def _farther_from(
+    color: np.ndarray, other: np.ndarray, background: np.ndarray, lightness_weight: float, near_tie: float
+) -> bool:
+    """Is ``color`` the one farther from the background, with ties broken by lightness?"""
+    mine = _distance_to(color, background, lightness_weight)
+    theirs = _distance_to(other, background, lightness_weight)
+    if abs(mine - theirs) > near_tie * max(mine, theirs):
+        return mine > theirs
+    return abs(float(color[0] - background[0])) > abs(float(other[0] - background[0]))
+
+
 def _cluster(
     pixels: np.ndarray,
     k: int,
@@ -291,6 +303,7 @@ def _cluster(
     merge_distance: float,
     background: np.ndarray | None = None,
     duplicate_distance: float = 0.0,
+    near_tie: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """k-means in weighted Lab, then merge clusters of near-identical chroma."""
     weighted = np.ascontiguousarray(_weighted(pixels, lightness_weight), dtype=np.float32)
@@ -340,8 +353,18 @@ def _cluster(
                 # tiles do and neon outlines do not: a capture of them had 0.7%
                 # of its fall area in outline and 7.8% in green haze of the same
                 # hue, and the palette became the haze.
-                if background is not None and _distance_to(color, background, lightness_weight) > (
-                    _distance_to(existing, background, lightness_weight)
+                #
+                # When the two are too close to call, the brighter against a dark
+                # ground (the darker against a light one). Glow is the tile's
+                # light fading, so it never outshines its source, but it can be
+                # the more saturated: one style strokes its tiles near-white over
+                # a violet fill that glows violet, and the fill won 72.6 to 71.3.
+                # The fill's colour is the glow's, so the mask bridged every pair
+                # of neighbouring tiles and read a phantom note between them.
+                # Lightness alone is no rule, though: a vivid tile outweighs its
+                # own paler highlight, and chose that instead on two themes.
+                if background is not None and _farther_from(
+                    color, existing, background, lightness_weight, near_tie
                 ):
                     merged_colors[i] = color
                 merged_counts[i] += count
@@ -684,6 +707,13 @@ def _with_hidden_black_keys(
             continue
         left, right = layout.key_span(pitch)
         if right <= x0 or left >= x1:
+            continue
+        # A black tile spans its lane, so a blob holding one covers the lane.
+        # Judged only over the sliver of lane that falls inside the blob, the
+        # left-hand stroke of an outlined D4 -- four pixels of C#4's sixteen --
+        # was solid on every row where the D4's hollow middle was not, and a
+        # phantom C#4 was read under the second D4 of every bar.
+        if (min(right, x1) - max(left, x0)) / (right - left) < cfg.min_coverage:
             continue
 
         lane = filled_rows(left, right, cfg.min_solidity)

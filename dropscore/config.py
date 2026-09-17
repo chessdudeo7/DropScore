@@ -126,6 +126,14 @@ class TileConfig:
     # in grey sat 84 apart, so there is room between the two cases.
     duplicate_distance: float = 6.0
 
+    # Two members of one hue this close in distance from the background, as a
+    # fraction, are too close to say which is the tile and which its glow by
+    # distance; lightness decides instead. The case it exists for measured
+    # 72.6 against 71.3, under 2%, and another capture's outline 3.7%, where
+    # lightness agrees with distance. Across the corpus the nearest pair where
+    # only distance chooses right is 13.9% apart.
+    source_near_tie: float = 0.05
+
     # How far off the line between the background and a tile colour another
     # colour may sit and still be read as that tile's bloom or antialiasing
     # rather than a voice of its own. A glow halo measured 0.46.
@@ -245,7 +253,13 @@ class TrackingConfig:
 
     # Association. A tile can only be where the known speed puts it, so the gate
     # is a fraction of the distance it should have travelled since last seen.
-    min_match_px: float = 4.0
+    #
+    # Never less than min_match_px, which allows for a screen capture's timing:
+    # its dropped and repeated frames put an edge up to 5 pixels from where a
+    # steady scroll would, and at 4 every tile of such a capture fell apart
+    # into several tracks. Two tiles on one key are a tile's height apart at
+    # the least, so this cannot join them.
+    min_match_px: float = 8.0
     match_ratio: float = 0.60
     max_gap: float = 0.12  # seconds a track survives unmatched
 
@@ -335,6 +349,16 @@ class ScoreConfig:
     # among so few the spacing that recurs is as likely to be half the beat as
     # the beat.
     min_accented_onsets: int = 30
+
+    # A long note is held for at least this many tatums. Any shorter and it is
+    # one step of the grid, whose measured length says nothing about the beat.
+    accent_min_tatums: float = 1.5
+
+    # And they must typically fall within this many beats of one another to be
+    # asked about the beat at all. Measured, they sit 0.99 to 1.01 beats apart
+    # on every clip and page where they decide it correctly, and 2.95 apart on
+    # the page they misled.
+    accent_max_gap_beats: float = 2.0
 
     # Seconds per step when tracking where the beats fall, and how hard the
     # tracker is held to the tempo it started at. The inertia is deliberately

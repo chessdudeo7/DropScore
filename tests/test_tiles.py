@@ -6,6 +6,8 @@ detector report exactly the set of pitches the renderer drew?
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -659,3 +661,80 @@ def test_a_colour_and_a_near_copy_of_it_are_one_voice() -> None:
 
     assert len(colors) == 2, f"expected two voices, got {np.round(colors, 1).tolist()}"
     assert sorted(counts.tolist()) == [300, 500]
+
+
+def test_a_bright_stroke_is_kept_over_the_saturated_glow_of_its_own_hue() -> None:
+    """Tiles stroked near-white over a violet fill that glows violet.
+
+    The fill and the glow are one colour, so a mask of it bridges neighbouring
+    tiles through their glow. The stroke is the tile. Judged by weighted Lab
+    distance from the background the fill won, 72.6 to 71.3; the stroke is the
+    brighter, and glow is always the dimmer against a dark ground. These are
+    the clusters measured on that capture.
+    """
+    glow = np.full((822, 3), (36.1, 150.3, 93.0), dtype=np.float32)
+    fill = np.full((536, 3), (94.2, 168.3, 65.8), dtype=np.float32)
+    stroke = np.full((212, 3), (202.6, 138.1, 107.1), dtype=np.float32)
+
+    colors, _ = _cluster(
+        np.concatenate([glow, fill, stroke]),
+        DEFAULT.tiles.max_palettes,
+        DEFAULT.tiles.lightness_weight,
+        DEFAULT.tiles.merge_distance,
+        np.array([3.0, 132.0, 120.0]),
+        DEFAULT.tiles.duplicate_distance,
+        DEFAULT.tiles.source_near_tie,
+    )
+
+    assert len(colors) == 1
+    assert colors[0][0] > 150, f"kept {np.round(colors[0], 1).tolist()}, not the stroke"
+
+
+def test_a_vivid_tile_is_kept_over_its_own_brighter_highlight() -> None:
+    """Brighter is only the tiebreak. A vivid green tile and the paler, brighter
+    highlight on it are far apart in distance from the background, and choosing
+    the brighter kept the highlight, whose pixels spread 36 from it where the
+    tile's own spread 1.2. These are that theme's clusters."""
+    body = np.full((1138, 3), (136.7, 187.8, 62.2), dtype=np.float32)
+    highlight = np.full((137, 3), (164.3, 167.1, 89.8), dtype=np.float32)
+
+    colors, _ = _cluster(
+        np.concatenate([body, highlight]),
+        DEFAULT.tiles.max_palettes,
+        DEFAULT.tiles.lightness_weight,
+        DEFAULT.tiles.merge_distance,
+        np.array([2.0, 128.0, 126.0]),
+        DEFAULT.tiles.duplicate_distance,
+        DEFAULT.tiles.source_near_tie,
+    )
+
+    assert len(colors) == 1
+    assert colors[0][0] == pytest.approx(136.7, abs=1.0), f"kept {np.round(colors[0], 1).tolist()}"
+
+
+def test_an_outlined_white_tile_does_not_claim_the_black_key_its_stroke_touches() -> None:
+    """An outlined D4 drawn a pixel wider than its key.
+
+    Its left stroke lies in the few columns of C#4's lane that fall inside the
+    blob. Judged over only those columns, the lane was solid on every row where
+    the D4's hollow middle was empty, and a phantom C#4 was read.
+    """
+    from dropscore.keyboard import KeyboardLayout  # noqa: PLC0415
+    from dropscore.tiles import _with_hidden_black_keys  # noqa: PLC0415
+
+    layout = replace(KeyboardLayout(width=1274.0), black_offsets=(-0.13, 0.19, -0.23, 0.0, 0.23))
+    calibration = Calibration(
+        layout=layout, strike_y=366, keybed_bottom=500, white_width=layout.white_width, confidence=1.0
+    )
+    # As measured: the blob 27 pixels wide, starting 5 pixels inside C#4's
+    # lane, stroked 4 pixels thick.
+    _, sharp_right = layout.key_span(61)
+    x0 = int(round(sharp_right)) - 5
+    x1 = x0 + 27
+    y0, y1 = 100, 122
+    mask = np.zeros((366, 1274), dtype=np.uint8)
+    mask[y0:y1, x0:x1] = 1
+    mask[y0 + 4 : y1 - 4, x0 + 4 : x1 - 4] = 0
+
+    claimed = _with_hidden_black_keys(mask, (x0, y0, x1, y1), [62], calibration, DEFAULT)
+    assert claimed == [62]
