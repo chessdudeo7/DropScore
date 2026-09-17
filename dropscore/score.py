@@ -439,6 +439,14 @@ def _accented_onsets(sequence: NoteSequence, beat: float, cfg) -> np.ndarray:
     onsets = np.array(sorted(held))
     weights = np.array([held[t] for t in onsets])
     keep = weights >= np.quantile(weights, 1.0 - cfg.accent_share)
+
+    # And held longer than the grid itself. In an unbroken stream of sixteenths
+    # no note is long, and the longest share is only the ones that happened to
+    # measure long -- on one recording, whichever tiles of a repeating
+    # arpeggio were drawn tallest. Those recur with the figure, every half
+    # bar, and that spacing was read as the beat: 65 BPM for a piece marked
+    # 130. Left with too few, the question goes back to every onset.
+    keep &= weights >= cfg.accent_min_tatums / cfg.steps_per_beat
     return onsets[keep]
 
 
@@ -512,21 +520,37 @@ def _beat_from_tatum(
     # is uniform by design, and reading its single duration as "too fine"
     # argued for a beat a third too fast. Where one value accounts for
     # everything the term is switched off rather than trusted.
+    #
+    # Values are counted in steps of the grid, not in measured seconds. How
+    # long a key is held varies with how its tile is drawn, and to the nearest
+    # hundredth one recording's stream of sixteenths held five different
+    # lengths -- varied enough to switch the term back on, which then read the
+    # sixteenths as too fine and argued for a beat of three of them.
     modal, variety = 0.0, 0.0
     if len(durations):
         counts = Counter(round(float(d), 2) for d in durations)
-        modal, modal_count = counts.most_common(1)[0]
-        variety = 1.0 - modal_count / len(durations)
+        modal = counts.most_common(1)[0][0]
+        steps = Counter(max(1, round(float(d) / tatum)) for d in durations)
+        variety = 1.0 - steps.most_common(1)[0][1] / len(durations)
 
     # Too few long notes to measure repetition among, and the measure is
     # noise: a clip of slow held chords left 19 of them, scoring 0.111 at its
     # true beat against 0.222 at half, where every onset together scored 0.956
     # and 0.933. Sparse music is also the music that needs no help here.
-    chosen = (
-        accented
-        if accented is not None and len(accented) >= cfg.min_accented_onsets
-        else onsets
-    )
+    #
+    # Nor when they are too far apart to land on beats. Long notes a few beats
+    # apart only ever find partners a few beats away, so every shorter candidate
+    # scores nothing: a stream of sixteenths over bass notes held for bars left
+    # long notes a median 2.95 beats apart, supported only the slowest beat on
+    # offer, and was read at half its tempo. Everywhere they are evidence they
+    # sit about a beat apart.
+    chosen = onsets
+    if accented is not None and len(accented) >= cfg.min_accented_onsets:
+        spacing = np.diff(np.unique(np.round(accented, 2)))
+        spacing = spacing[spacing > tatum / 2]
+        conventional_beat = tatum * cfg.steps_per_beat
+        if len(spacing) and np.median(spacing) <= cfg.accent_max_gap_beats * conventional_beat:
+            chosen = accented
 
     best: tuple[float, float] | None = None
     for multiple in BEAT_MULTIPLES:

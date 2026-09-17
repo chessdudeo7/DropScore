@@ -1011,3 +1011,28 @@ def test_a_note_struck_again_stays_on_its_staff() -> None:
     split = assign_hands(NoteSequence.of(notes), config)
     repeated = [n.hand for n in split if n.pitch == 62]
     assert repeated.count(repeated[0]) == len(repeated), f"a repeated D4 was split: {repeated}"
+
+
+def test_a_sixteenth_stream_over_sparse_held_bass_keeps_its_beat() -> None:
+    """An arpeggio in sixteenths at 130, over bass octaves a few beats apart.
+
+    Read at 65 two ways. The longest share of a stream of equal notes is only
+    the tiles that measured long -- these lengths are the ones one recording's
+    arpeggio measured, slot by slot -- and they recur with the figure every
+    half bar. And the bass notes, truly long but a median three beats apart,
+    find partners at no beat shorter than two.
+    """
+    sixteenth = 60.0 / 130 / 4
+    measured = {62: 0.108, 57: 0.057, 65: 0.136, 69: 0.117, 74: 0.129}
+    figure = [62, 57, 65, 62, 69, 65, 74, 69]
+    notes = [
+        Note(onset=step * sixteenth, pitch=figure[step % 8], duration=measured[figure[step % 8]], hand="R")
+        for step in range(8 * 48)
+    ]
+    for cycle in range(0, 96, 6):
+        for beat in (0, 2):
+            for pitch in (38, 26):
+                notes.append(Note(onset=(cycle + beat) * 4 * sixteenth, pitch=pitch, duration=0.6, hand="L"))
+
+    beat, _, _ = estimate_tempo(NoteSequence.of(notes))
+    assert 60.0 / beat == pytest.approx(130, rel=0.03)
