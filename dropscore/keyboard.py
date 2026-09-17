@@ -150,6 +150,12 @@ class KeyboardLayout:
         half = self.black_width / 2
         return center - half, center + half
 
+    def nearest_key(self, x: float) -> int | None:
+        """The key whose centre is closest to column ``x``, if ``x`` lies on it."""
+        pitch = min(self.pitches, key=lambda p: abs(self.key_center(p) - x))
+        left, right = self.key_span(pitch)
+        return pitch if left <= x <= right else None
+
     def key_width(self, pitch: int) -> float:
         return self.black_width if is_black(pitch) else self.white_width
 

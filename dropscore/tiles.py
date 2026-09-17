@@ -567,10 +567,31 @@ def detect_in_frame(
             if h < cfg.min_tile_height or w < calibration.white_width * cfg.min_tile_width_ratio:
                 continue
 
-            pitches = calibration.layout.keys_covered(x, x + w, cfg.min_coverage)
+            # A blob no wider than a white key is one tile, and belongs to the
+            # key it is centred on. Coverage is for telling merged tiles apart,
+            # and it assumed a black key's tile is as narrow as the key: one
+            # style draws them 21px wide over 15.5px keys, and centred on B-flat
+            # such a tile still covered 62% of the B beside it. Hovering either
+            # side of the 60% bar, it flickered between the two keys and left a
+            # phantom B under every B-flat.
+            # It must still cover most of that key: a spark's wisp is centred on
+            # some key too, and coverage was what kept it from being a note.
+            if w <= calibration.white_width:
+                nearest = calibration.layout.nearest_key(x + w / 2)
+                pitches = []
+                if nearest is not None:
+                    left, right = calibration.layout.key_span(nearest)
+                    covered = (min(x + w, right) - max(x, left)) / (right - left)
+                    if covered >= cfg.min_coverage:
+                        pitches = [nearest]
+            else:
+                pitches = calibration.layout.keys_covered(x, x + w, cfg.min_coverage)
+                if pitches:
+                    pitches = _with_hidden_black_keys(
+                        mask, (x, y, x + w, y + h), pitches, calibration, config
+                    )
             if not pitches:
                 continue
-            pitches = _with_hidden_black_keys(mask, (x, y, x + w, y + h), pitches, calibration, config)
 
             # Split each key over its *own* columns. Measuring row fill across
             # the whole blob and sharing the result gets adjacent keys of

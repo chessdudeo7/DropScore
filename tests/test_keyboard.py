@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from dropscore.keyboard import (
@@ -113,3 +115,20 @@ def test_narrow_range_has_wider_keys() -> None:
     full = KeyboardLayout(*COMMON_RANGES["88"], width=1280.0)
     cropped = KeyboardLayout(*COMMON_RANGES["49"], width=1280.0)
     assert cropped.white_width > full.white_width
+
+
+def test_a_wide_black_key_tile_is_still_that_black_key() -> None:
+    """A B-flat tile drawn wider than its key, as one style draws them.
+
+    Offset right as a real A-sharp is, and 0.84 of a white key wide, it covers
+    more than 60% of the B beside it -- enough that coverage alone hands it to
+    the B. Centred on the B-flat, it is the B-flat.
+    """
+    offsets = (0.0, 0.0, 0.0, 0.0, 0.23)
+    layout = replace(KeyboardLayout(width=1280.0), black_offsets=offsets)
+    centre = layout.key_center(70)
+    half = layout.white_width * 0.84 / 2
+    x0, x1 = centre + 1.5 - half, centre + 1.5 + half
+
+    assert layout.keys_covered(x0, x1) == [71]
+    assert layout.nearest_key((x0 + x1) / 2) == 70
