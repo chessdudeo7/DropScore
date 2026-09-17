@@ -74,6 +74,28 @@ class TileTrack:
     def last_bottom(self) -> float:
         return self.bottoms[-1]
 
+    def predicted_bottom(self, time: float, speed: float, strike_y: float, recent: int = 8) -> float:
+        """Where the bottom edge should be at ``time``.
+
+        Judged from the recent observations together, not the last one alone.
+        A screen capture of a video drops and repeats its frames, so a tile's
+        edge can advance 0, 3 or 10 pixels between frames where 5.7 is due, and
+        a prediction from one frame carries that frame's error into the next
+        match. Measured on such a capture, every tile broke into two or three
+        tracks, each timing the note differently, and the notes they merged
+        back into were up to 50ms out of place.
+
+        Only the recent ones, because a small error in the scroll speed grows
+        with the time it is multiplied by.
+        """
+        falling = [
+            (t, b) for t, b in zip(self.times[-recent:], self.bottoms[-recent:]) if b < strike_y - 1
+        ]
+        if not falling:
+            return min(self.last_bottom + speed * (time - self.last_time), strike_y)
+        intercept = float(np.median([b - speed * t for t, b in falling]))
+        return min(intercept + speed * time, strike_y)
+
 
 def _robust_mean(values: np.ndarray) -> float:
     """Mean of the measurements that are not obvious outliers.
@@ -460,8 +482,8 @@ def build_tracks(
                     if dt <= 0:
                         continue
                     # The bottom edge stops at the strike line while the tile passes.
-                    predicted = min(
-                        candidate.last_bottom + speed * dt, calibration.strike_y
+                    predicted = candidate.predicted_bottom(
+                        frame.time, speed, calibration.strike_y
                     )
                     error = abs(tile.bottom - predicted)
                     tolerance = max(cfg.min_match_px, cfg.match_ratio * speed * dt)

@@ -750,3 +750,24 @@ def test_a_note_is_not_stretched_by_the_next_tile_joining_its_track() -> None:
     note = track_to_note(track, speed, calibration)
     assert note is not None
     assert note.duration == pytest.approx(0.3, abs=0.08), f"stretched to {note.duration:.2f}s"
+
+
+def test_a_screen_capture_that_drops_frames_keeps_each_tile_in_one_track() -> None:
+    """A capture of a video repeats and skips its frames, so an edge due to
+    advance 5.7 pixels a frame advances 0, 3 or 10 instead. Predicted from the
+    previous frame alone, every such step missed the match and the tile broke
+    into several tracks, each timing the note differently. These offsets are
+    the ones measured on one tile of such a capture."""
+    from dropscore.tracking import build_tracks  # noqa: PLC0415
+
+    speed, fps = 170.0, 30.0
+    calibration = _plain_calibration(strike_y=400)
+    jitter = [2, -4, 0, 1, 2, 0, 2, -1, 0, 5, 5, 3, 1, 5, -1, -1, 1, -2, -1, -3, -2, 2, 4, 2, 2, -3]
+    detections = []
+    for index, offset in enumerate(jitter):
+        time = index / fps
+        bottom = 60.0 + speed * time + offset
+        detections.append((Frame(index, time, np.zeros((1, 1, 3), np.uint8), 1.0), [_tile(62, bottom, time)]))
+
+    tracks = build_tracks(detections, speed, calibration)
+    assert len(tracks) == 1, f"one tile became {len(tracks)} tracks: {[t.length for t in tracks]}"
