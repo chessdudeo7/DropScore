@@ -376,6 +376,17 @@ class ScoreConfig:
     # which barred every piece in three as though it were in four.
     beats_per_bar: int | None = None
 
+    # The note value a beat is written as, when the metre is given rather than
+    # inferred: 4 for a quarter, 8 for an eighth. Ignored unless
+    # ``beats_per_bar`` is set, so that a page known to be in 3/8 can be asked
+    # for rather than argued about.
+    beat_type: int | None = None
+
+    # Which share of the pitches counts as the bass when looking for the bar.
+    # The low notes alone say where a bar begins; long notes do not, since a
+    # tune's long notes fall where its phrase wants them.
+    bass_share: float = 35.0
+
     # Which multiple of the tatum is the beat cannot be read off the onsets
     # alone: a stream of quarters at 100 BPM and one of eighths at 50 produce
     # identical onset times. The choice is made from three things.

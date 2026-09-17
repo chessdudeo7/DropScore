@@ -470,7 +470,7 @@ def _summarize(sequence: NoteSequence, analysis, calibration, speed) -> dict[str
         "duration": round(sequence.duration, 2),
         "tempo": round(analysis.tempo, 1) if analysis else None,
         "key": analysis.key if analysis else None,
-        "meter": f"{analysis.beats_per_bar}/4" if analysis else None,
+        "meter": f"{analysis.beats_per_bar}/{analysis.beat_type}" if analysis else None,
         "lowest": min(pitches) if pitches else None,
         "highest": max(pitches) if pitches else None,
         "confidence": round(

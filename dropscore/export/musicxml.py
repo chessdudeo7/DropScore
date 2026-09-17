@@ -84,7 +84,7 @@ class _Event:
 VOICES_PER_STAFF = 2
 
 
-def _lay_out(notes: list[Note], beat: float, voices: int = 1) -> list[list[_Event]]:
+def _lay_out(notes: list[Note], quarter: float, voices: int = 1) -> list[list[_Event]]:
     """Group one staff's notes into up to ``voices`` timelines.
 
     A single voice cannot hold a note and start another at the same time, so
@@ -100,7 +100,7 @@ def _lay_out(notes: list[Note], beat: float, voices: int = 1) -> list[list[_Even
     moving above it.
     """
     def to_divisions(seconds: float) -> int:
-        return int(round(seconds / beat * DIVISIONS))
+        return int(round(seconds / quarter * DIVISIONS))
 
     grouped: dict[int, list[Note]] = {}
     for note in notes:
@@ -283,13 +283,18 @@ def _from_the_downbeat(sequence: NoteSequence, analysis: Analysis) -> NoteSequen
 def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.ElementTree:
     """Build a two-staff piano score."""
     tempo = (analysis.tempo if analysis else sequence.tempo) or 120.0
-    beat = 60.0 / tempo
+    # The counted beat, which the tempo describes only when it is a quarter.
+    beat = analysis.beat if analysis else 60.0 / tempo
     beats_per_bar = analysis.beats_per_bar if analysis else 4
+    beat_type = analysis.beat_type if analysis else 4
     key = (analysis.key if analysis else sequence.key) or None
     fifths, mode = key_signature(key)
     flats = fifths < 0
 
-    per_measure = beats_per_bar * DIVISIONS
+    # Durations are written in divisions of a quarter note, so a beat counted
+    # as an eighth is half a quarter: everything below measures in quarters.
+    quarter = beat * beat_type / 4.0
+    per_measure = int(round(beats_per_bar * DIVISIONS * 4 / beat_type))
 
     # Written values, not held-key times — see notate_durations. Only done
     # here: the MIDI and the JSON stay faithful to what the video showed.
@@ -306,11 +311,11 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
     staves = {
         1: [
             _split_at_barlines(lane, per_measure)
-            for lane in _lay_out(sequence.hand("R"), beat, VOICES_PER_STAFF)
+            for lane in _lay_out(sequence.hand("R"), quarter, VOICES_PER_STAFF)
         ],
         2: [
             _split_at_barlines(lane, per_measure)
-            for lane in _lay_out(sequence.hand("L"), beat, VOICES_PER_STAFF)
+            for lane in _lay_out(sequence.hand("L"), quarter, VOICES_PER_STAFF)
         ],
     }
     last_measure = max(
@@ -335,7 +340,7 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
             ET.SubElement(key_element, "mode").text = "minor" if mode else "major"
             time_element = ET.SubElement(attributes, "time")
             ET.SubElement(time_element, "beats").text = str(beats_per_bar)
-            ET.SubElement(time_element, "beat-type").text = "4"
+            ET.SubElement(time_element, "beat-type").text = str(beat_type)
             ET.SubElement(attributes, "staves").text = "2"
             for staff, sign, line in ((1, "G", 2), (2, "F", 4)):
                 clef = ET.SubElement(attributes, "clef", number=str(staff))

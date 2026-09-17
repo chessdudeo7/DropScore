@@ -70,9 +70,14 @@ class Analysis:
     beat_phase: float  # seconds; where the beat grid starts
     downbeat_phase: float  # seconds; where bar one starts
     beats_per_bar: int
+    # The note value one beat is written as: 4 for a quarter, 8 for an eighth.
+    # A compound beat is a dotted note and its metre is counted in eighths --
+    # two dotted quarters a bar is 6/8, not 2/4 -- so the unit cannot be
+    # assumed. Quarters unless said otherwise.
     key: str
     tempo_confidence: float  # 0-1, onset alignment to the beat grid
     key_confidence: float  # 0-1, correlation margin over the runner-up
+    beat_type: int = 4
 
     # Where each beat falls, for playing that does not hold one tempo. Empty
     # when the beats were not tracked, and everything then falls back to the
@@ -83,7 +88,7 @@ class Analysis:
         return (
             f"{self.tempo:.1f} BPM ({self.tempo_confidence:.2f}), "
             f"{self.key} ({self.key_confidence:.2f}), "
-            f"{self.beats_per_bar}/4"
+            f"{self.beats_per_bar}/{self.beat_type}"
         )
 
 
@@ -100,7 +105,19 @@ def _coherence(onsets: np.ndarray, period: float) -> complex:
 
 
 def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[float, float, float]:
-    """Return (beat seconds, phase seconds, confidence).
+    """Return (beat seconds, phase seconds, confidence)."""
+    beat, phase, confidence, _ = estimate_beat(sequence, config)
+    return beat, phase, confidence
+
+
+def estimate_beat(
+    sequence: NoteSequence, config: Config = DEFAULT
+) -> tuple[float, float, float, float]:
+    """Return (beat seconds, phase seconds, confidence, tatum seconds).
+
+    The tatum comes back with the beat because how many tatums the beat holds
+    is what says whether it is a simple beat or a compound one, and that
+    decides the metre it must be written in.
 
     Coherence is maximal for the finest grid that explains the onsets, and is
     just as high for any divisor of it. The coarsest period within a whisker of
@@ -152,7 +169,7 @@ def estimate_tempo(sequence: NoteSequence, config: Config = DEFAULT) -> tuple[fl
 
     confidence = float(min(1.0, best))
     log.debug("tatum %.4fs -> beat %.4fs (%.1f BPM), phase %.4fs", tatum, beat, 60 / beat, phase)
-    return beat, phase, confidence
+    return beat, phase, confidence, tatum
 
 
 def _accents(sequence: NoteSequence, beat: float) -> list[float]:
@@ -382,6 +399,68 @@ def estimate_meter(
         return float(np.dot(centred[:-lag], centred[lag:])) / energy
 
     return 3 if match(3) > match(4) else 4
+
+
+def _meter(
+    sequence: NoteSequence, beat: float, tatum: float, phase: float, config: Config
+) -> tuple[int, int, float]:
+    """The time signature, and the seconds of the unit it counts.
+
+    A beat holding three tatums is a compound beat -- a dotted note -- and a
+    dotted beat's metre is counted in eighths: two of them a bar is 6/8, three
+    9/8, four 12/8. Called four-four instead, as it was, the bars came out
+    twice the length of the music's: a real Fur Elise, whose bars are a second
+    each, was laid out in bars of two seconds with the bar lines through the
+    middle of every other one.
+
+    Everything else counts in quarters, where the beat is the quarter itself.
+    """
+    cfg = config.score
+    if cfg.beats_per_bar:
+        return cfg.beats_per_bar, cfg.beat_type or 4, beat
+
+    steps = round(beat / tatum) if tatum > 0 else 0
+    if steps in (3, 6) and not cfg.fixed_tempo:
+        eighth = beat / 3.0
+        return _eighths_in_a_bar(sequence, eighth, phase, cfg), 8, eighth
+
+    return estimate_meter(sequence, beat, phase, config), 4, beat
+
+
+def _eighths_in_a_bar(sequence: NoteSequence, eighth: float, phase: float, cfg) -> int:
+    """Six, nine or twelve: how far apart the bass comes round.
+
+    Asked of the low notes alone. Long notes are no guide to where a bar
+    begins in music that carries a tune over an accompaniment -- the tune's
+    long notes fall where the phrase wants them -- and mixing the two put the
+    bar of a piece whose bass moves every six eighths at eight.
+    """
+    notes = list(sequence)
+    if len(notes) < cfg.min_onsets_for_tempo or eighth <= 0:
+        return 6
+
+    cut = float(np.percentile([n.pitch for n in notes], cfg.bass_share))
+    positions = [(n.onset - phase) / eighth for n in notes if n.pitch <= cut]
+    if len(positions) < cfg.min_onsets_for_tempo:
+        return 6
+
+    first, last = int(round(min(positions))), int(round(max(positions)))
+    series = np.zeros(last - first + 1)
+    for position in positions:
+        if abs(position - round(position)) < 0.25:
+            series[int(round(position)) - first] += 1.0
+
+    centred = series - series.mean()
+    energy = float(centred @ centred)
+    if energy <= 0:
+        return 6
+
+    scores = {
+        lag: float(centred[:-lag] @ centred[lag:]) / energy
+        for lag in (6, 9, 12)
+        if lag < len(centred)
+    }
+    return max(scores, key=scores.get) if scores else 6
 
 
 def _repeats_at(onsets: np.ndarray, lag: float, tolerance: float) -> float:
@@ -830,7 +909,13 @@ def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeq
         # the printed music keeps it in the treble throughout.
         reach = cfg.staff_boundary_reach
         split = min(max(split, MIDDLE_C - reach), MIDDLE_C + reach)
-        hand: Hand = "R" if note.pitch >= split else "L"
+        # A note exactly on the boundary goes by middle C. Clamped, the
+        # boundary lands on a whole pitch, and counting that pitch as upper put
+        # a left hand's E2-E3-G#3 on two staves: the G#3 sat on a boundary held
+        # at the lower limit, and went to the treble all four times it came.
+        hand: Hand = (
+            "R" if note.pitch > split or (note.pitch == split and note.pitch >= MIDDLE_C) else "L"
+        )
 
         # Everything around this note within one hand's reach is one part, and
         # is not split between the staves at all. A melody moving through a
@@ -1125,7 +1210,7 @@ def _snap(value: float, step: float, phase: float, tolerance: float) -> float | 
 def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
     """Infer tempo, downbeat and key, honouring any overrides in the config."""
     cfg = config.score
-    beat, phase, tempo_confidence = estimate_tempo(sequence, config)
+    beat, phase, tempo_confidence, tatum = estimate_beat(sequence, config)
 
     if cfg.fixed_tempo:
         # The grid is still anchored on the measured phase; only its spacing is
@@ -1139,12 +1224,15 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
     # given an unbroken stream of equal notes there is no weight anywhere to
     # follow, and the tracker wanders -- on such a stream at 120 BPM it laid
     # beats from 0.37s to 0.62s apart where every one of them is 0.5.
+    # The metre first: it settles what a beat is counted as, and the beats are
+    # tracked in that unit. Tracked in one and reported in another, every
+    # written value came out a third of what it should be.
+    beats_per_bar, beat_type, beat = _meter(sequence, beat, tatum, phase, config)
     beat_times = (
         track_beats(sequence, beat, phase, config)
         if tempo_confidence < cfg.steady_tempo
         else ()
     )
-    beats_per_bar = cfg.beats_per_bar or estimate_meter(sequence, beat, phase, config)
     downbeat = find_downbeat(sequence, beat, phase, config, beats_per_bar)
 
     if cfg.fixed_key:
@@ -1152,8 +1240,10 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
     else:
         key, key_confidence = estimate_key(sequence, config)
 
+    # Reported per quarter note, whatever the beat is written as, so that a
+    # piece counted in eighths does not read as 356 BPM.
     return Analysis(
-        tempo=60.0 / beat,
+        tempo=60.0 / (beat * beat_type / 4.0),
         beat=beat,
         beat_phase=phase,
         downbeat_phase=downbeat,
@@ -1161,6 +1251,7 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
         key=key,
         tempo_confidence=tempo_confidence,
         key_confidence=key_confidence,
+        beat_type=beat_type,
         beat_times=beat_times,
     )
 

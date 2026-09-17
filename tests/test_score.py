@@ -1110,3 +1110,82 @@ def test_an_oom_pah_bass_is_not_held() -> None:
     written = notate_durations(NoteSequence.of(notes), _analysis(130.0))
     lows = [n.duration / beat for n in written if n.pitch in (36, 43)][:-1]
     assert all(v <= 1.0 + 1e-6 for v in lows), f"held an oom-pah bass: {lows}"
+
+
+def test_a_note_on_a_boundary_at_its_limit_goes_by_middle_c() -> None:
+    """Für Elise's third bar: E2 E3 G#3 in the left hand, E4 G#4 B4 in the right.
+
+    The boundary between the two, held no lower than G#3, landed exactly on it,
+    and counting a note on the boundary as upper sent the left hand's G#3 to
+    the treble staff every time the bar came round.
+    """
+    sixteenth = 0.167
+    figure = [(40, "L"), (52, "L"), (56, "L"), (64, "R"), (68, "R"), (71, "R")]
+    notes = [
+        Note(onset=(bar * 6 + i) * sixteenth, pitch=pitch, duration=sixteenth * 0.9, hand=hand)
+        for bar in range(8)
+        for i, (pitch, hand) in enumerate(figure)
+    ]
+    config = replace(DEFAULT, score=replace(DEFAULT.score, hand_mode="pitch"))
+    split = assign_hands(NoteSequence.of(notes), config)
+    assert {n.hand for n in split if n.pitch == 56} == {"L"}
+
+
+def _six_sixteenth_bars(sixteenth: float, bars: int = 12) -> NoteSequence:
+    """Fur Elise's opening: six sixteenths a bar, the bass on the downbeat."""
+    pattern = [
+        [(76, 0), (75, 1), (76, 2), (71, 3), (74, 4), (72, 5)],
+        [(69, 0), (45, 0), (52, 1), (57, 2), (60, 3), (64, 4), (69, 5)],
+        [(71, 0), (40, 0), (52, 1), (56, 2), (64, 3), (68, 4), (71, 5)],
+        [(72, 0), (45, 0), (52, 1), (57, 2), (64, 3), (76, 4), (75, 5)],
+    ]
+    notes = []
+    for bar in range(bars):
+        start = bar * 6 * sixteenth
+        for pitch, step in pattern[bar % 4]:
+            notes.append(
+                Note(onset=start + step * sixteenth, pitch=pitch, duration=sixteenth * 0.6,
+                     hand="L" if pitch < 60 else "R")
+            )
+    return NoteSequence.of(notes)
+
+
+def test_a_compound_beat_is_written_in_eighths() -> None:
+    """A beat of three sixteenths is a dotted beat, and a dotted beat's metre is
+    counted in eighths: six of them a bar, not four quarters. Called 4/4, as it
+    was, a real Für Elise came out in bars of two seconds where the music's are
+    one, with the bar lines through the middle of every other bar."""
+    from dropscore.score import _meter  # noqa: PLC0415
+
+    sixteenth = 60.0 / 178 / 2
+    sequence = _six_sixteenth_bars(sixteenth)
+
+    beats_per_bar, beat_type, beat = _meter(sequence, 3 * sixteenth, sixteenth, 0.0, DEFAULT)
+
+    assert beat_type == 8
+    assert beats_per_bar == 6
+    assert beat * beats_per_bar == pytest.approx(6 * sixteenth, rel=0.01)
+
+
+def test_a_simple_beat_stays_in_quarters() -> None:
+    from dropscore.score import _meter  # noqa: PLC0415
+
+    sixteenth = 60.0 / 96 / 4
+    sequence = _six_sixteenth_bars(sixteenth)
+
+    beats_per_bar, beat_type, beat = _meter(sequence, 4 * sixteenth, sixteenth, 0.0, DEFAULT)
+
+    assert beat_type == 4
+    assert beat == pytest.approx(4 * sixteenth)
+
+
+def test_a_given_metre_is_used_as_given() -> None:
+    """A page known to be in 3/8 can be asked for rather than argued about."""
+    from dropscore.score import _meter  # noqa: PLC0415
+
+    sixteenth = 60.0 / 178 / 2
+    config = replace(DEFAULT, score=replace(DEFAULT.score, beats_per_bar=3, beat_type=8))
+    beats_per_bar, beat_type, _ = _meter(
+        _six_sixteenth_bars(sixteenth), 3 * sixteenth, sixteenth, 0.0, config
+    )
+    assert (beats_per_bar, beat_type) == (3, 8)

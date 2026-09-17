@@ -95,16 +95,21 @@ def write(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     tempo = (analysis.tempo if analysis else sequence.tempo) or DEFAULT_TEMPO
-    beat = 60.0 / tempo
+    beat = analysis.beat if analysis else 60.0 / tempo
     beats_per_bar = analysis.beats_per_bar if analysis else 4
+    beat_type = analysis.beat_type if analysis else 4
     key = (analysis.key if analysis else sequence.key) or None
 
+    # MIDI counts in quarter notes, whatever the beat is written as.
+    quarter = beat * beat_type / 4.0
+    denominator = 2 if beat_type == 4 else 3  # 2^2 = 4, 2^3 = 8
+
     def ticks(seconds: float) -> int:
-        return max(0, int(round(seconds / beat * TICKS_PER_BEAT)))
+        return max(0, int(round(seconds / quarter * TICKS_PER_BEAT)))
 
     conductor: list[tuple[int, bytes]] = [
-        (0, _meta(0x51, struct.pack(">I", int(round(60_000_000 / tempo)))[1:])),
-        (0, _meta(0x58, bytes([beats_per_bar, 2, 24, 8]))),  # denominator 2^2 = 4
+        (0, _meta(0x51, struct.pack(">I", int(round(1_000_000 * quarter)))[1:])),
+        (0, _meta(0x58, bytes([beats_per_bar, denominator, 24, 8]))),
         (0, _meta(0x59, bytes([key_signature(key)[0] & 0xFF, key_signature(key)[1]]))),
     ]
 
