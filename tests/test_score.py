@@ -7,6 +7,8 @@ exactly.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from dropscore.config import DEFAULT, Config, ScoreConfig
@@ -988,3 +990,24 @@ def test_midi_keeps_what_was_played() -> None:
     # quietly rewriting durations of its own accord.
     assert all(n.duration == pytest.approx(0.45) for n in sequence)
     assert midi is not None
+
+
+def test_a_note_struck_again_stays_on_its_staff() -> None:
+    """A tune dipping to a repeated D4, a held bass C4 arriving later.
+
+    Each D4 was judged by its own neighbours: the first saw only the tune and
+    went to the treble staff, the second saw the C4 as well and went to the
+    bass. Struck twice with nothing between, it is one hand both times.
+    """
+    tune = [72, 72, 72, 74, 72, 72, 70, 70, 67, 67, 67, 70, 62, 62, 67, 67] * 2
+    beat = 0.6
+    notes = [
+        Note(onset=i * beat, pitch=pitch, duration=beat * 0.5, hand="R")
+        for i, pitch in enumerate(tune)
+    ]
+    notes += [Note(onset=16 * beat, pitch=60, duration=8 * beat * 0.9, hand="L")]
+
+    config = replace(DEFAULT, score=replace(DEFAULT.score, hand_mode="pitch"))
+    split = assign_hands(NoteSequence.of(notes), config)
+    repeated = [n.hand for n in split if n.pitch == 62]
+    assert repeated.count(repeated[0]) == len(repeated), f"a repeated D4 was split: {repeated}"

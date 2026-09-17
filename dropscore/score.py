@@ -819,6 +819,26 @@ def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeq
             hand = "R" if float(np.median(window)) >= MIDDLE_C else "L"
         assigned.append(Note(note.onset, note.pitch, note.duration, hand, note.velocity))
 
+    # A note struck again, with nothing struck between, is played by the hand
+    # that struck it the first time. Each is judged by its own neighbours, and
+    # a boundary lying across a repeated D4 put the first on the treble staff
+    # and the second on the bass -- where a bass note three beats later had
+    # pulled the boundary above it. Neither was then followed on its own staff
+    # by anything close, and both were written short.
+    order = sorted(range(len(assigned)), key=lambda i: assigned[i].onset)
+    for position in range(1, len(order)):
+        first, again = assigned[order[position - 1]], assigned[order[position]]
+        if again.pitch != first.pitch or again.hand == first.hand:
+            continue
+        struck_together = [
+            n for n in assigned if abs(n.onset - first.onset) < cfg.repeat_min_gap and n is not first
+        ]
+        if struck_together or again.onset - first.onset < cfg.repeat_min_gap:
+            continue
+        assigned[order[position]] = Note(
+            again.onset, again.pitch, again.duration, first.hand, again.velocity
+        )
+
     return NoteSequence.of(
         assigned, tempo=sequence.tempo, key=sequence.key, source=sequence.source
     )

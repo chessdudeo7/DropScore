@@ -465,6 +465,10 @@ class ScoreConfig:
     # notes to the treble staff for every one the other gained.
     one_hand_span: int = 10
 
+    # Onsets closer than this are struck together, not one after the other. A
+    # key cannot be struck, released and struck again inside it.
+    repeat_min_gap: float = 0.05
+
     # How much better than chance a single pitch boundary must sort the two
     # colour groups before they are believed to be hands, as the gain over
     # putting every note on the larger side: 0 is no better than that, 1 is a
