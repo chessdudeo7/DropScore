@@ -743,18 +743,24 @@ def _exposed_span(
     whole column, its lower edge never seemed to fall, no onset could be read,
     and the note vanished, twice in each of two clips.
 
-    Only black keys in the same blob are set aside, so a white key standing
-    alone keeps every column it has, and a black key keeps its own span.
+    Only keys of the other colour in the same blob are set aside, so a key
+    standing alone keeps every column it has.
+
+    A black key sets aside its white neighbour's columns in turn. Its lane lies
+    over a third of each neighbour, and a renderer drawing black tiles as wide
+    as the lane puts two thirds of it on the white tile's columns: judged over
+    them, a D#5 zigzagging with E5 -- E D# E D# E, the turn Fur Elise is made of
+    -- read as filled from the top E to the bottom one, one D#5 in place of two,
+    timed by the last E's lower edge and so a sixteenth early.
     """
     from .keyboard import is_black  # noqa: PLC0415
 
     left, right = calibration.layout.key_span(pitch)
-    if is_black(pitch):
-        return left, right
+    black = is_black(pitch)
 
     lo, hi = left, right
     for other in together:
-        if other == pitch or not is_black(other):
+        if other == pitch or is_black(other) == black:
             continue
         other_left, other_right = calibration.layout.key_span(other)
         if other_right <= left or other_left >= right:
@@ -765,7 +771,10 @@ def _exposed_span(
             hi = min(hi, other_left)
 
     # Too little left to judge by, and the full width is the better evidence.
-    if hi - lo < calibration.white_width * 0.25:
+    # A black key has less to begin with: the D#5 above kept 0.21 of a white
+    # key's width, and a black key between two claimed neighbours keeps none.
+    floor = 0.15 if black else 0.25
+    if hi - lo < calibration.white_width * floor:
         return left, right
     return lo, hi
 

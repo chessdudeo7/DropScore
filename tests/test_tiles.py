@@ -738,3 +738,32 @@ def test_an_outlined_white_tile_does_not_claim_the_black_key_its_stroke_touches(
 
     claimed = _with_hidden_black_keys(mask, (x0, y0, x1, y1), [62], calibration, DEFAULT)
     assert claimed == [62]
+
+
+def test_a_black_key_zigzagging_with_its_white_neighbour_keeps_each_of_its_tiles() -> None:
+    """E D# E D# E, drawn with black tiles as wide as their lane.
+
+    Each D# touches the Es above and below it, so the five tiles are one blob.
+    The D#'s lane lies two thirds over the E's columns, and judged over all of
+    it the lane was full from the top E to the bottom one: one D# in place of
+    two, timed by the last E's lower edge.
+    """
+    from dropscore.keyboard import KeyboardLayout  # noqa: PLC0415
+    from dropscore.tiles import _exposed_span, _split_vertically  # noqa: PLC0415
+
+    layout = replace(KeyboardLayout(width=1272.0), black_offsets=(-0.13, 0.19, -0.23, 0.0, 0.23))
+    calibration = Calibration(
+        layout=layout, strike_y=354, keybed_bottom=500, white_width=layout.white_width, confidence=1.0
+    )
+    mask = np.zeros((354, 1272), dtype=np.uint8)
+    e_left, e_right = layout.key_span(76)
+    sharp_left, sharp_right = layout.key_span(75)
+    for top in (40, 85, 130):
+        mask[top : top + 24, int(e_left) + 1 : int(e_right)] = 1
+    for top in (63, 108):
+        mask[top : top + 24, int(sharp_left) : int(sharp_right) + 1] = 1
+
+    lo, hi = _exposed_span(75, [75, 76], calibration)
+    x0, x1 = int(round(lo)), int(round(hi))
+    spans = _split_vertically(mask, (x0, 40, x1, 154), DEFAULT)
+    assert len(spans) == 2, f"D#5 read as {spans}"
