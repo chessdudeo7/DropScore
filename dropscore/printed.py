@@ -25,6 +25,7 @@ A piece file looks like this::
       "lowest": 62, "highest": 84,   # optional: pitches outside are not scored
       "end": 145,                    # optional: seconds of recording to read
       "beat_times": [[0, 0.97], [3, 1.97], ...]  # optional, replaces first_beat and beat
+      "sections": [24.385],          # optional: seconds where the tempo changes
       "notes": [[64, 1, 1, "R"], ...] # pitch, beat, length in beats, staff
     }
 
@@ -53,7 +54,7 @@ from __future__ import annotations
 import bisect
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from .config import DEFAULT, Config
@@ -101,6 +102,7 @@ class PrintedPiece:
     highest: int | None = None
     end: float | None = None
     beat_times: tuple[tuple[float, float], ...] = ()
+    sections: tuple[float, ...] = ()
 
     def covers(self, pitch: int) -> bool:
         return (self.lowest is None or pitch >= self.lowest) and (
@@ -160,6 +162,7 @@ def load(path: str | Path) -> PrintedPiece:
         highest=int(data["highest"]) if data.get("highest") is not None else None,
         end=float(data["end"]) if data.get("end") is not None else None,
         beat_times=tuple(sorted((float(b), float(t)) for b, t in data.get("beat_times", ()))),
+        sections=tuple(sorted(float(t) for t in data.get("sections", ()))),
     )
 
 
@@ -271,6 +274,11 @@ def score_sequence(
     """Score an already transcribed sequence against the printed music."""
     from .score import ScoreError, beat_position, notate_durations, postprocess  # noqa: PLC0415
 
+    # A page covers one stretch of the music, and where the recording changes
+    # tempo the stretch it covers is the one it must be read against.
+    if piece.sections:
+        config = replace(config, score=replace(config.score, sections=piece.sections))
+
     # A recording the transcriber can barely read yields too few notes to find
     # a tempo in, and that raised out of eval entirely -- on a capture of neon
     # outlines, whose two detected notes crashed the run. That is the failure
@@ -295,15 +303,16 @@ def score_sequence(
     ]
     values = {(n.pitch, round(n.onset, 6)): n for n in written}
 
+    here = analysis.at(piece.seconds(low))
     result = PrintedResult(
         name=piece.name,
         title=piece.title,
         printed=len(piece.scored()),
         detected=len(detected),
-        tempo_found=analysis.tempo,
-        meter_found=analysis.beats_per_bar,
-        beat_type_found=analysis.beat_type,
-        bar_found=analysis.beat * analysis.beats_per_bar,
+        tempo_found=here.tempo,
+        meter_found=here.beats_per_bar,
+        beat_type_found=here.beat_type,
+        bar_found=here.beat * here.beats_per_bar,
         bar_expected=piece.bar_seconds(),
         key_found=analysis.key,
         tempo_expected=piece.tempo,
@@ -338,7 +347,7 @@ def score_sequence(
             # twice as long, and every one of them fills the same part of the
             # same bar; comparing the numbers alone called all 104 of them
             # wrong on music read note for note.
-            written = length / analysis.beats_per_bar
+            written = length / here.beats_per_bar
             wanted = printed.length / piece.beats_per_bar if piece.beats_per_bar else printed.length
             result.written_right += abs(written - wanted) / wanted < VALUE_TOLERANCE
 

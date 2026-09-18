@@ -1189,3 +1189,80 @@ def test_a_given_metre_is_used_as_given() -> None:
         _six_sixteenth_bars(sixteenth), 3 * sixteenth, sixteenth, 0.0, config
     )
     assert (beats_per_bar, beat_type) == (3, 8)
+
+
+def _two_tempo_sequence() -> NoteSequence:
+    """Eight bars at 60, then eight bars at 100, each with a bass on the bar."""
+    notes = []
+    slow = 60.0 / 60
+    for bar in range(8):
+        start = bar * 4 * slow
+        notes.append(Note(onset=start, pitch=48, duration=slow * 3.5, hand="L"))
+        for i, length in enumerate((1, 1, 2)):
+            at = start + (0, 1, 2)[i] * slow
+            notes.append(Note(onset=at, pitch=60 + i * 2, duration=slow * length * 0.8, hand="R"))
+    start = 8 * 4 * slow
+    fast = 60.0 / 100
+    for bar in range(8):
+        bar_start = start + bar * 4 * fast
+        notes.append(Note(onset=bar_start, pitch=48, duration=fast * 3.5, hand="L"))
+        for i, step in enumerate((0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 2.75, 3, 3.5)):
+            notes.append(
+                Note(onset=bar_start + step * fast, pitch=72 + (i % 3) * 3,
+                     duration=fast * 0.4, hand="R")
+            )
+    return NoteSequence.of(notes)
+
+
+def test_a_declared_section_is_analysed_on_its_own() -> None:
+    """Seven bars at one tempo and then another is two pieces of music for this
+    purpose: read as one, a real page running 80 and then 130 came back at 65,
+    which is neither. Each stretch must read as it reads alone.
+    """
+    boundary = 32.0
+    sequence = _two_tempo_sequence()
+    config = replace(DEFAULT, score=replace(DEFAULT.score, sections=(boundary,)))
+
+    both = analyze(sequence, config)
+    assert not analyze(sequence).sections
+    assert len(both.sections) == 2
+    assert [section.start for section in both.sections] == [0.0, boundary]
+
+    for section in both.sections:
+        end = boundary if section.start == 0.0 else 1e9
+        alone = analyze(NoteSequence.of([n for n in sequence if section.start <= n.onset < end]))
+        assert section.beat == pytest.approx(alone.beat), (
+            f"section at {section.start}s read {section.tempo:.1f} BPM, "
+            f"{alone.tempo:.1f} BPM on its own"
+        )
+    assert both.at(1.0) is both.sections[0]
+    assert both.at(boundary + 5) is both.sections[1]
+    assert both.sections[0].beat != pytest.approx(both.sections[1].beat)
+
+
+def test_beats_keep_counting_across_a_section() -> None:
+    """Positions carry on rising over a change of tempo, so that everything
+    measured in beats -- bar lines, note values -- still lines up."""
+    from dropscore.score import beat_position, beat_time  # noqa: PLC0415
+
+    boundary = 32.0
+    config = replace(DEFAULT, score=replace(DEFAULT.score, sections=(boundary,)))
+    analysis = analyze(_two_tempo_sequence(), config)
+    second = analysis.sections[1]
+
+    before = beat_position(boundary - 0.01, analysis)
+    after = beat_position(boundary + 0.01, analysis)
+    assert after > before
+    # Four beats of the second section's own beat are four beats along.
+    assert beat_position(boundary + 4 * second.beat, analysis) - after == pytest.approx(4, abs=0.2)
+    assert beat_time(beat_position(boundary + 1.0, analysis), analysis) == pytest.approx(
+        boundary + 1.0, abs=0.05
+    )
+
+
+def test_a_key_is_the_piece_s_not_the_section_s() -> None:
+    """Read from one section alone, a page in D flat major came back as G sharp
+    minor: eight bars are not enough to tell a key from its neighbours."""
+    config = replace(DEFAULT, score=replace(DEFAULT.score, sections=(32.0,)))
+    analysis = analyze(_two_tempo_sequence(), config)
+    assert {section.key for section in analysis.sections} == {analysis.key}

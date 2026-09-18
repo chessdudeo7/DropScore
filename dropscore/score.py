@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 
 import numpy as np
@@ -50,6 +50,13 @@ MINOR_PROFILE = np.array(
 
 PITCH_CLASS_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
+# What each key is called on a page, which is whichever spelling takes fewer
+# accidentals: D flat major is written with five flats, C sharp major with
+# seven sharps, and nobody writes the second. Where the two are equal -- F
+# sharp against G flat major, six apiece -- the commoner name is kept.
+MAJOR_KEY_NAMES = ("C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B")
+MINOR_KEY_NAMES = ("C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B")
+
 # Semitones above the tonic that belong to each scale. The profiles above say
 # how *typical* each degree is; these say which are in the key at all, which is
 # a different question and the one a correlation cannot answer on its own.
@@ -70,19 +77,47 @@ class Analysis:
     beat_phase: float  # seconds; where the beat grid starts
     downbeat_phase: float  # seconds; where bar one starts
     beats_per_bar: int
+    key: str
+    tempo_confidence: float  # 0-1, onset alignment to the beat grid
+    key_confidence: float  # 0-1, correlation margin over the runner-up
+
     # The note value one beat is written as: 4 for a quarter, 8 for an eighth.
     # A compound beat is a dotted note and its metre is counted in eighths --
     # two dotted quarters a bar is 6/8, not 2/4 -- so the unit cannot be
     # assumed. Quarters unless said otherwise.
-    key: str
-    tempo_confidence: float  # 0-1, onset alignment to the beat grid
-    key_confidence: float  # 0-1, correlation margin over the runner-up
     beat_type: int = 4
 
     # Where each beat falls, for playing that does not hold one tempo. Empty
     # when the beats were not tracked, and everything then falls back to the
     # steady grid that ``beat`` and ``beat_phase`` describe.
     beat_times: tuple[float, ...] = ()
+
+    # Where this stretch of music begins, and the stretches the piece is made
+    # of. An arrangement changes tempo and metre part way through -- one page
+    # here runs seven bars at 80 and then goes to 130 -- and one tempo cannot
+    # describe both: measured on such a recording, the beat came back at 65,
+    # which is neither. Each section is analysed on its own and carries its own
+    # tempo, metre and grid. Empty for a piece that holds one tempo throughout,
+    # where this analysis describes all of it.
+    start: float = 0.0
+    sections: tuple["Analysis", ...] = ()
+
+    def at(self, when: float) -> "Analysis":
+        """The section covering this moment, or the whole analysis."""
+        chosen = self
+        for section in self.sections:
+            if when >= section.start - 1e-9:
+                chosen = section
+        return chosen
+
+    def beats_before(self, section: "Analysis") -> float:
+        """Beats counted before a section starts, so positions keep rising."""
+        total = 0.0
+        for earlier, following in zip(self.sections, self.sections[1:]):
+            if earlier.start >= section.start - 1e-9:
+                break
+            total += (following.start - earlier.start) / earlier.beat
+        return total
 
     def __str__(self) -> str:
         return (
@@ -329,6 +364,9 @@ def track_beats(
 
 def beat_position(when: float, analysis: Analysis) -> float:
     """Where a moment falls, counted in beats from the first tracked one."""
+    if analysis.sections:
+        section = analysis.at(when)
+        return analysis.beats_before(section) + beat_position(when, replace(section, sections=()))
     times = analysis.beat_times
     if not times:
         return (when - analysis.beat_phase) / analysis.beat
@@ -344,6 +382,13 @@ def beat_position(when: float, analysis: Analysis) -> float:
 
 def beat_time(position: float, analysis: Analysis) -> float:
     """The moment a beat position falls at: ``beat_position`` reversed."""
+    if analysis.sections:
+        section = analysis.sections[0]
+        for candidate in analysis.sections:
+            if position >= analysis.beats_before(candidate) - 1e-9:
+                section = candidate
+        local = position - analysis.beats_before(section)
+        return beat_time(local, replace(section, sections=()))
     times = analysis.beat_times
     if not times:
         return analysis.beat_phase + position * analysis.beat
@@ -768,7 +813,8 @@ def estimate_key(
                 - cfg.out_of_scale_penalty * outside
                 - cfg.unfounded_accidental * unfounded
             )
-            results.append((score, f"{PITCH_CLASS_NAMES[tonic]} {quality}"))
+            names = MINOR_KEY_NAMES if quality == "minor" else MAJOR_KEY_NAMES
+            results.append((score, f"{names[tonic]} {quality}"))
 
     results.sort(reverse=True)
     best, key = results[0]
@@ -1080,6 +1126,10 @@ def notate_durations(
         voice = sorted(sequence.hand(hand), key=lambda n: n.onset)
         onsets = [n.onset for n in voice]
         for index, note in enumerate(voice):
+            # In the beat of the stretch this note falls in, which is not the
+            # first stretch's where the piece changes tempo.
+            here = analysis.at(note.onset)
+            step = here.beat / cfg.steps_per_beat if cfg.steps_per_beat > 0 else 0.0
             duration = note.duration
             # The next *different* onset. Notes struck together are one event,
             # and measuring to the nearest of them gives a gap of nothing, so
@@ -1124,7 +1174,7 @@ def notate_durations(
                     )
                     if (
                         after is not None
-                        and after - end <= cfg.articulation_gap * analysis.beat + step / 2
+                        and after - end <= cfg.articulation_gap * here.beat + step / 2
                     ):
                         reach = after - note.onset
                         if step > 0:
@@ -1210,6 +1260,16 @@ def _snap(value: float, step: float, phase: float, tolerance: float) -> float | 
 def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
     """Infer tempo, downbeat and key, honouring any overrides in the config."""
     cfg = config.score
+
+    # An arrangement that changes tempo part way through is two pieces of music
+    # for this purpose, and one beat cannot describe both: a page running seven
+    # bars at 80 and then going to 130 came back at 65, which is neither, and
+    # every written value in it was wrong. Told where the changes fall, each
+    # stretch is analysed on its own. Where they fall is not inferred -- the
+    # grid of a rubato performance wanders as far as a real change does, and
+    # every rule that caught the change also cut a Fur Elise into ten pieces.
+    if cfg.sections:
+        return _analyze_sections(sequence, config)
     beat, phase, tempo_confidence, tatum = estimate_beat(sequence, config)
 
     if cfg.fixed_tempo:
@@ -1254,6 +1314,46 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
         beat_type=beat_type,
         beat_times=beat_times,
     )
+
+
+def _analyze_sections(sequence: NoteSequence, config: Config) -> Analysis:
+    """Analyse each declared stretch on its own, and hold them together."""
+    cfg = config.score
+    starts = [0.0] + [t for t in sorted(cfg.sections) if t > 0.0]
+    plain = replace(config, score=replace(cfg, sections=()))
+
+    parts: list[Analysis] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else math.inf
+        inside = [n for n in sequence if start - 1e-9 <= n.onset < end]
+        if not inside:
+            continue
+        part = NoteSequence.of(inside, tempo=sequence.tempo, key=sequence.key,
+                               source=sequence.source)
+        try:
+            analysis = analyze(part, plain)
+        except ScoreError:
+            # Too little music to read a tempo from; the stretch before it
+            # describes this one too.
+            continue
+        parts.append(replace(analysis, start=start))
+
+    if not parts:
+        return analyze(sequence, plain)
+
+    # The key is the piece's, not the stretch's. Read from one section alone, a
+    # page in D flat major came back as G sharp minor: the fast half of it
+    # dwells on the dominant, and eight bars are not enough to tell a key from
+    # its neighbours.
+    if cfg.fixed_key:
+        key, key_confidence = cfg.fixed_key, 1.0
+    else:
+        key, key_confidence = estimate_key(sequence, config)
+    parts = [replace(part, key=key, key_confidence=key_confidence) for part in parts]
+
+    if len(parts) == 1:
+        return replace(parts[0], start=0.0)
+    return replace(parts[0], sections=tuple(parts))
 
 
 def postprocess(

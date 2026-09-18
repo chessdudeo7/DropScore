@@ -169,3 +169,10 @@ def test_a_beat_map_places_beats_between_its_points(tmp_path: Path) -> None:
 def test_a_piece_can_stop_reading_its_recording_early(tmp_path: Path) -> None:
     piece = load(_write_piece(tmp_path, end=145))
     assert piece.end == pytest.approx(145.0)
+
+
+def test_a_piece_is_read_against_the_section_it_covers(tmp_path: Path) -> None:
+    """A page covering the fast half of a recording is checked against that
+    half: read against the whole, its tempo came back at half the mark."""
+    piece = load(_write_piece(tmp_path, sections=[0.0]))
+    assert piece.sections == (0.0,)

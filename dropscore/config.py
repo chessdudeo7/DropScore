@@ -387,6 +387,13 @@ class ScoreConfig:
     # tune's long notes fall where its phrase wants them.
     bass_share: float = 35.0
 
+    # Seconds at which a new stretch of music begins, for an arrangement that
+    # changes tempo or metre part way through. Each is analysed on its own.
+    # Declared rather than found: a rubato performance's grid wanders as far as
+    # a real change does, and every rule that caught one page's change at 130
+    # also cut a Fur Elise into ten pieces.
+    sections: tuple[float, ...] = ()
+
     # Which multiple of the tatum is the beat cannot be read off the onsets
     # alone: a stream of quarters at 100 BPM and one of eighths at 50 produce
     # identical onset times. The choice is made from three things.

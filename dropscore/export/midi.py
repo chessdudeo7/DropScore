@@ -26,12 +26,14 @@ DEFAULT_TEMPO = 120.0
 
 # Sharps (positive) or flats (negative) in each key signature, by tonic pitch
 # class. Minor keys take their relative major's signature.
-_MAJOR_SIGNATURE = {0: 0, 7: 1, 2: 2, 9: 3, 4: 4, 11: 5, 6: 6, 1: 7, 5: -1, 10: -2, 3: -3, 8: -4}
-_MINOR_SIGNATURE = {9: 0, 4: 1, 11: 2, 6: 3, 1: 4, 8: 5, 3: 6, 10: 7, 2: -1, 7: -2, 0: -3, 5: -4}
+# Five flats, not seven sharps, for D flat major and B flat minor: the
+# signature follows the name a page would carry.
+_MAJOR_SIGNATURE = {0: 0, 7: 1, 2: 2, 9: 3, 4: 4, 11: 5, 6: 6, 1: -5, 5: -1, 10: -2, 3: -3, 8: -4}
+_MINOR_SIGNATURE = {9: 0, 4: 1, 11: 2, 6: 3, 1: 4, 8: 5, 3: -6, 10: -5, 2: -1, 7: -2, 0: -3, 5: -4}
 
 _PITCH_CLASSES = {
-    "C": 0, "C#": 1, "D": 2, "D#": 3, "E": 4, "F": 5,
-    "F#": 6, "G": 7, "G#": 8, "A": 9, "A#": 10, "B": 11,
+    "C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5,
+    "F#": 6, "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11,
 }
 
 
