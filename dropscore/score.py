@@ -1184,7 +1184,7 @@ def notate_durations(
                 Note(note.onset, note.pitch, duration, note.hand, note.velocity)
             )
 
-    written = _hold_under_figures(written, step, cfg)
+    written = _hold_under_figures(written, step, cfg, analysis.beat)
 
     return NoteSequence.of(
         sorted(written),
@@ -1194,7 +1194,7 @@ def notate_durations(
     )
 
 
-def _hold_under_figures(notes: list[Note], step: float, cfg) -> list[Note]:
+def _hold_under_figures(notes: list[Note], step: float, cfg, beat: float = 0.0) -> list[Note]:
     """Write a bass note held under a figure as lasting until the bass moves.
 
     A player strikes a low octave, moves the hand up into an arpeggio and lets
@@ -1228,16 +1228,34 @@ def _hold_under_figures(notes: list[Note], step: float, cfg) -> list[Note]:
         base = note.pitch
         if note.pitch == min(together) and note.pitch + 12 in together:
             base = note.pitch + 12
+
+        # Only a doubled bass is held. A sustained bass is written as an octave
+        # -- every one on the page this was measured against is -- while a
+        # single low note is as likely to be the first note of the hand's own
+        # figure: Fur Elise's E2 is followed by its E3 and G#3, and holding it
+        # turned a sixteenth into a whole bar, seven times over.
+        if note.pitch + 12 not in together and note.pitch - 12 not in together:
+            result.append(note)
+            continue
+
         clear = base + cfg.hold_clear_interval
         figure: set[float] = set()
         until = None
+        last = note.onset
         for other in ordered:
             if other.onset < note.onset + cfg.repeat_min_gap:
                 continue
+            # The figure has to keep going. Where it stops, so does the note:
+            # nothing is holding under silence, and one bass note ran 55 beats
+            # to the next one that far below it.
+            if other.onset - last > cfg.hold_max_gap * beat:
+                until = last
+                break
             if other.pitch < clear:
                 until = other.onset
                 break
             figure.add(round(other.onset, 3))
+            last = other.onset
         if until is None or len(figure) < cfg.hold_min_figure_onsets:
             result.append(note)
             continue

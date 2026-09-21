@@ -1266,3 +1266,26 @@ def test_a_key_is_the_piece_s_not_the_section_s() -> None:
     config = replace(DEFAULT, score=replace(DEFAULT.score, sections=(32.0,)))
     analysis = analyze(_two_tempo_sequence(), config)
     assert {section.key for section in analysis.sections} == {analysis.key}
+
+
+def test_only_a_doubled_bass_is_held_under_a_figure() -> None:
+    """A sustained bass is written as an octave; a single low note is as likely
+    to be the first note of the hand's own figure. Fur Elise's bass E2 is
+    followed by its E3 and G#3 -- the arpeggio continuing -- and holding it
+    turned a sixteenth into a whole bar, seven times over.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.5
+    notes = []
+    for bar in range(8):
+        start = bar * 6 * beat
+        # a single low note, then its own hand's arpeggio, then a figure above
+        for step, pitch in ((0, 40), (1, 52), (2, 56)):
+            notes.append(Note(onset=start + step * beat, pitch=pitch, duration=beat * 0.6, hand="L"))
+        for step, pitch in ((3, 64), (4, 68), (5, 71)):
+            notes.append(Note(onset=start + step * beat, pitch=pitch, duration=beat * 0.6, hand="R"))
+
+    written = notate_durations(NoteSequence.of(notes), _analysis(60.0 / beat))
+    lows = [n.duration / beat for n in written if n.pitch == 40][:-1]
+    assert all(v <= 1.5 for v in lows), f"held a single low note for {lows}"

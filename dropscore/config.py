@@ -492,6 +492,11 @@ class ScoreConfig:
     hold_min_figure_onsets: int = 4
     hold_clear_interval: int = 8
 
+    # And the figure must keep going: where it stops for this many beats, so
+    # does the note held under it.
+    hold_max_gap: float = 2.0
+
+
     # How many neighbouring notes in time set the local hand boundary. Counted
     # rather than timed: a window in seconds spans different amounts of music
     # across the tempo range, and accuracy fell off either side of whichever
