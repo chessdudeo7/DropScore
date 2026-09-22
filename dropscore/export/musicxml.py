@@ -10,10 +10,13 @@ only:
   a second voice. Real piano writing needs voices, and that is where engraving
   quality is won or lost.
 * Notes crossing a barline are split and tied, which is required for the file to
-  be valid at all.
+  be valid at all. So is any length that is not a single note value: it is
+  written as the values that make it up, tied, and a rest likewise.
+* Positions and lengths are rounded to the thirty-second grid, the finest value
+  written, so anything stage 7 declined to quantize gets rounded here
+  regardless.
+* A tempo mark opens the piece, and a new one opens each declared section.
 * No beaming, dynamics, articulation, slurs or pedal.
-* Durations are rounded to the divisions grid, so anything stage 7 declined to
-  quantize gets rounded here regardless.
 
 The consequence, stated plainly: **the MIDI is accurate and the notation is
 approximate.** When they disagree, the MIDI is right.
@@ -64,6 +67,37 @@ def spell(pitch: int, flats: bool) -> tuple[str, int, int]:
     return step, alter, pitch // 12 - 1
 
 
+# Lengths a single note or rest can be written as, longest first, in divisions.
+_WRITABLE = tuple(
+    sorted(
+        {value for base, _ in _TYPES for value in (base, base * 3 // 2) if base * 3 % 2 == 0 or value == base},
+        reverse=True,
+    )
+)
+
+# The finest value written: a thirty-second. Anything finer is timing noise.
+GRID = DIVISIONS // 8
+
+
+def _parts(duration: int) -> list[int]:
+    """A length as the note values it is written with, tied together.
+
+    A single note carries a single written value, and a length that is not one
+    was given the nearest value's name while keeping its own length: a note of
+    fifteen divisions drawn as an eighth, which is twelve. A notation program
+    draws what the name says, so the rhythm on the page was wrong for 44% of
+    the symbols on one transcription. Split into values that each exist, the
+    page and the timing agree.
+    """
+    parts = []
+    remaining = duration
+    while remaining >= GRID:
+        value = next(v for v in _WRITABLE if v <= remaining)
+        parts.append(value)
+        remaining -= value
+    return parts
+
+
 def note_type(duration: int) -> tuple[str, bool]:
     """Closest written note value, and whether it needs a dot."""
     for base, name in _TYPES:
@@ -100,15 +134,19 @@ def _lay_out(notes: list[Note], quarter: float, voices: int = 1) -> list[list[_E
     moving above it.
     """
     def to_divisions(seconds: float) -> int:
-        return int(round(seconds / quarter * DIVISIONS))
+        # On the thirty-second grid, the finest value written. Timings a
+        # division or two off it made rests of one twenty-fourth of a beat.
+        return int(round(seconds / quarter * DIVISIONS / GRID)) * GRID
 
     grouped: dict[int, list[Note]] = {}
     for note in notes:
         grouped.setdefault(to_divisions(note.onset), []).append(note)
 
     # (start, natural end, pitches) per chord, in time order.
+    # At least a thirty-second long: a note that was played is written, and one
+    # held for a hair under the grid snapped to nothing and vanished.
     chords = [
-        (start, max(to_divisions(n.offset) for n in grouped[start]),
+        (start, max(start + GRID, max(to_divisions(n.offset) for n in grouped[start])),
          sorted(n.pitch for n in grouped[start]))
         for start in sorted(grouped)
     ]
@@ -137,17 +175,46 @@ def _lay_out(notes: list[Note], quarter: float, voices: int = 1) -> list[list[_E
     return out
 
 
-def _split_at_barlines(events: list[_Event], per_measure: int) -> dict[int, list[tuple[_Event, bool, bool]]]:
+def _bar_starts(per_measure: int, changes: list[tuple[int, int]], end: int) -> list[int]:
+    """Where every bar begins, in divisions, through any changes of bar length.
+
+    ``changes`` pairs the division a section begins at with its bar length. A
+    section begins on a bar line: one declared part way through a bar starts at
+    the nearest bar line to it.
+    """
+    starts = [0]
+    length = per_measure
+    pending = sorted(changes)
+    while starts[-1] < end:
+        here = starts[-1]
+        while pending and pending[0][0] <= here + length // 2:
+            length = pending.pop(0)[1]
+        starts.append(here + length)
+    return starts
+
+
+def _split_at_barlines(
+    events: list[_Event], per_measure: int | list[int]
+) -> dict[int, list[tuple[_Event, bool, bool]]]:
     """Distribute events into measures, tying anything that crosses a barline."""
+    import bisect  # noqa: PLC0415
+
+    starts = per_measure if isinstance(per_measure, list) else None
     measures: dict[int, list[tuple[_Event, bool, bool]]] = {}
 
     for event in events:
         start, remaining = event.start, event.duration
         first = True
         while remaining > 0:
-            measure = start // per_measure
-            offset = start % per_measure
-            length = min(remaining, per_measure - offset)
+            if starts is None:
+                measure = start // per_measure
+                offset = start % per_measure
+                room = per_measure - offset
+            else:
+                measure = min(bisect.bisect_right(starts, start) - 1, len(starts) - 2)
+                offset = start - starts[measure]
+                room = starts[measure + 1] - start
+            length = min(remaining, room)
             last = length == remaining
             measures.setdefault(measure, []).append(
                 (_Event(offset, length, event.pitches), not first, not last)
@@ -206,7 +273,7 @@ def _add_note(
 
 def _in_uniform_time(
     sequence: NoteSequence, analysis: Analysis
-) -> tuple[NoteSequence, Analysis]:
+) -> tuple[NoteSequence, Analysis, float]:
     """Rewrite the playing against a steady beat, where it was not played to one.
 
     A page carries one tempo mark. Pushing and slowing is performance, not
@@ -219,17 +286,24 @@ def _in_uniform_time(
     """
     from ..score import beat_position  # noqa: PLC0415
 
-    if not analysis.beat_times:
-        return sequence, analysis
+    # Sections too: a piece that changes tempo is laid out in one steady
+    # stream of beats, with the change carried by a tempo mark, not by bars of
+    # a different length on the page.
+    if not analysis.beat_times and not analysis.sections:
+        return sequence, analysis, 0.0
 
     notes = list(sequence)
     if not notes:
-        return sequence, analysis
+        return sequence, analysis, 0.0
 
     beat = analysis.beat
+    # Beats are counted from the first tracked one, so a note before it has a
+    # negative position -- and a note cannot start before zero. The steady
+    # timeline starts at the earliest note instead.
+    shift = max(0.0, -min(beat_position(n.onset, analysis) for n in notes)) * beat
     rewritten = [
         Note(
-            beat_position(n.onset, analysis) * beat,
+            beat_position(n.onset, analysis) * beat + shift,
             n.pitch,
             max(
                 (beat_position(n.onset + n.duration, analysis)
@@ -244,7 +318,7 @@ def _in_uniform_time(
     steady = replace(
         analysis,
         beat_phase=0.0,
-        downbeat_phase=(beat_position(analysis.downbeat_phase, analysis) * beat)
+        downbeat_phase=(beat_position(analysis.downbeat_phase, analysis) * beat + shift)
         % (beat * analysis.beats_per_bar),
         beat_times=(),
     )
@@ -252,10 +326,15 @@ def _in_uniform_time(
         NoteSequence.of(rewritten, tempo=sequence.tempo, key=sequence.key,
                         source=sequence.source),
         steady,
+        shift,
     )
 
 
 def _from_the_downbeat(sequence: NoteSequence, analysis: Analysis) -> NoteSequence:
+    return _downbeat_origin(sequence, analysis)[0]
+
+
+def _downbeat_origin(sequence: NoteSequence, analysis: Analysis) -> tuple[NoteSequence, float]:
     """Measure time from a bar line rather than from the start of the video.
 
     Notes were placed by their seconds from zero, so the first bar began when
@@ -268,15 +347,18 @@ def _from_the_downbeat(sequence: NoteSequence, analysis: Analysis) -> NoteSequen
     """
     notes = list(sequence)
     if not notes or analysis.beat <= 0:
-        return sequence
+        return sequence, 0.0
     bar = analysis.beat * analysis.beats_per_bar
     first = min(n.onset for n in notes)
     origin = analysis.downbeat_phase + math.floor((first - analysis.downbeat_phase) / bar) * bar
-    return NoteSequence.of(
-        [Note(n.onset - origin, n.pitch, n.duration, n.hand, n.velocity) for n in notes],
-        tempo=sequence.tempo,
-        key=sequence.key,
-        source=sequence.source,
+    return (
+        NoteSequence.of(
+            [Note(n.onset - origin, n.pitch, n.duration, n.hand, n.velocity) for n in notes],
+            tempo=sequence.tempo,
+            key=sequence.key,
+            source=sequence.source,
+        ),
+        origin,
     )
 
 
@@ -298,30 +380,51 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
 
     # Written values, not held-key times — see notate_durations. Only done
     # here: the MIDI and the JSON stay faithful to what the video showed.
+    # Where each section begins on the page, and what it changes to.
+    changes: list[tuple[int, int, int, float]] = []  # division, bar length, beats, tempo
     if analysis is not None:
-        from ..score import notate_durations  # noqa: PLC0415
+        from ..score import beat_position, notate_durations  # noqa: PLC0415
 
-        sequence, analysis = _in_uniform_time(sequence, analysis)
+        original = analysis
+        sequence, analysis, shift = _in_uniform_time(sequence, analysis)
         sequence = notate_durations(sequence, analysis)
-        sequence = _from_the_downbeat(sequence, analysis)
+        sequence, origin = _downbeat_origin(sequence, analysis)
+
+        for section in original.sections[1:]:
+            at = beat_position(section.start, original) * beat + shift - origin
+            changes.append((
+                int(round(at / quarter * DIVISIONS / GRID)) * GRID,
+                int(round(section.beats_per_bar * DIVISIONS * 4 / beat_type)),
+                section.beats_per_bar,
+                section.tempo,
+            ))
 
     # Two voices per staff. MusicXML voice numbers are unique across the part,
     # so the staves take 1-2 and 5-6, which is the convention notation editors
     # expect and keeps a voice's identity obvious when reading the file.
+    laid = {
+        staff: _lay_out(sequence.hand(hand), quarter, VOICES_PER_STAFF)
+        for staff, hand in ((1, "R"), (2, "L"))
+    }
+    end = max(
+        (e.start + e.duration for lanes in laid.values() for lane in lanes for e in lane),
+        default=per_measure,
+    )
+    bar_lines = _bar_starts(per_measure, [(at, length) for at, length, _, _ in changes], end)
     staves = {
-        1: [
-            _split_at_barlines(lane, per_measure)
-            for lane in _lay_out(sequence.hand("R"), quarter, VOICES_PER_STAFF)
-        ],
-        2: [
-            _split_at_barlines(lane, per_measure)
-            for lane in _lay_out(sequence.hand("L"), quarter, VOICES_PER_STAFF)
-        ],
+        staff: [_split_at_barlines(lane, bar_lines) for lane in lanes]
+        for staff, lanes in laid.items()
     }
     last_measure = max(
         (m for lanes in staves.values() for lane in lanes for m in lane),
         default=0,
     )
+
+    # The first bar of each section, and what it announces.
+    announce: dict[int, tuple[int, float]] = {}
+    for at, _, beats, section_tempo in changes:
+        bar = min(range(len(bar_lines) - 1), key=lambda i: abs(bar_lines[i] - at))
+        announce[bar] = (beats, section_tempo)
 
     root = ET.Element("score-partwise", version="4.0")
     part_list = ET.SubElement(root, "part-list")
@@ -346,6 +449,19 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
                 clef = ET.SubElement(attributes, "clef", number=str(staff))
                 ET.SubElement(clef, "sign").text = sign
                 ET.SubElement(clef, "line").text = str(line)
+
+        per_measure = bar_lines[index + 1] - bar_lines[index]
+        if index == 0:
+            _add_tempo(measure, tempo)
+        elif index in announce:
+            beats, section_tempo = announce[index]
+            if beats != beats_per_bar:
+                attributes = ET.SubElement(measure, "attributes")
+                time_element = ET.SubElement(attributes, "time")
+                ET.SubElement(time_element, "beats").text = str(beats)
+                ET.SubElement(time_element, "beat-type").text = str(beat_type)
+                beats_per_bar = beats
+            _add_tempo(measure, section_tempo)
 
         written = False
         for staff in (1, 2):
@@ -372,25 +488,39 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
                 position = 0
                 for event, tied_from, tied_to in events:
                     if event.start > position:
-                        _add_note(
-                            measure, None, event.start - position, staff, flats,
-                            voice=voice,
-                        )
-                    for order, pitch in enumerate(event.pitches):
-                        _add_note(
-                            measure, pitch, event.duration, staff, flats,
-                            chord=order > 0, tied_from=tied_from, tied_to=tied_to,
-                            voice=voice,
-                        )
-                    position = event.start + event.duration
+                        _add_rests(measure, event.start - position, staff, flats, voice)
+                    values = _parts(event.duration)
+                    for part_index, value in enumerate(values):
+                        for order, pitch in enumerate(event.pitches):
+                            _add_note(
+                                measure, pitch, value, staff, flats,
+                                chord=order > 0,
+                                tied_from=tied_from if part_index == 0 else True,
+                                tied_to=tied_to if part_index == len(values) - 1 else True,
+                                voice=voice,
+                            )
+                    position = event.start + sum(values)
 
                 if position < per_measure:
-                    _add_note(
-                        measure, None, per_measure - position, staff, flats,
-                        voice=voice,
-                    )
+                    _add_rests(measure, per_measure - position, staff, flats, voice)
 
     return ET.ElementTree(root)
+
+
+def _add_tempo(measure: ET.Element, tempo: float) -> None:
+    """A metronome mark, and the playback tempo that goes with it."""
+    direction = ET.SubElement(measure, "direction", placement="above")
+    kind = ET.SubElement(direction, "direction-type")
+    metronome = ET.SubElement(kind, "metronome")
+    ET.SubElement(metronome, "beat-unit").text = "quarter"
+    ET.SubElement(metronome, "per-minute").text = str(int(round(tempo)))
+    ET.SubElement(direction, "sound", tempo=f"{tempo:.1f}")
+
+
+def _add_rests(parent: ET.Element, duration: int, staff: int, flats: bool, voice: int) -> None:
+    """Rests filling a span, each a value that exists."""
+    for part in _parts(duration):
+        _add_note(parent, None, part, staff, flats, voice=voice)
 
 
 def _text(tag: str, value: int) -> ET.Element:

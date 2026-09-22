@@ -411,3 +411,71 @@ def test_bar_lines_fall_on_the_measured_downbeat_not_the_start_of_the_video() ->
     bar = analysis.beat * analysis.beats_per_bar
     downbeats = [n.onset for n in anchored if n.pitch == 57]
     assert all(abs(t / bar - round(t / bar)) < 0.05 for t in downbeats), "bars do not start on the bass"
+
+
+_TYPE_DIVISIONS = {"whole": 4.0, "half": 2.0, "quarter": 1.0, "eighth": 0.5, "16th": 0.25, "32nd": 0.125}
+
+
+def _struck(root: ET.Element) -> int:
+    """Notes that begin in the file: not rests, and not the far end of a tie."""
+    return sum(
+        1
+        for note in root.iter("note")
+        if note.find("pitch") is not None
+        and not any(tie.get("type") == "stop" for tie in note.findall("tie"))
+    )
+
+
+def test_musicxml_writes_every_note(tmp_path: Path) -> None:
+    """Counted, not merely looked for by pitch. Checking only that each pitch
+    appears somewhere passed while a change to the writer dropped 69 of one
+    page's 161 notes -- every voice after the first was read from the wrong
+    bar, and the pitches all still turned up elsewhere."""
+    sequence = generate(seed=8, bars=8, tempo=110.0)
+    analysis = analyze(sequence)
+    root = ET.parse(musicxml.write(sequence, tmp_path / "a.musicxml", analysis)).getroot()
+    assert _struck(root) == len(sequence)
+
+
+def test_musicxml_writes_every_value_as_one_that_exists(tmp_path: Path) -> None:
+    """A note's written type must be its length. A note of five sixteenths was
+    written as a quarter with the duration of five sixteenths, and a notation
+    program draws the quarter: 44% of the symbols on one transcription."""
+    beat = 0.5
+    notes = [
+        Note(onset=i * 2 * beat, pitch=60 + i, duration=beat * length, hand="R")
+        for i, length in enumerate((1.25, 0.75, 1.75, 0.25, 1.5, 1.125))
+    ]
+    sequence = NoteSequence.of(notes)
+    root = ET.parse(musicxml.write(sequence, tmp_path / "a.musicxml")).getroot()
+
+    for note in root.iter("note"):
+        written = _TYPE_DIVISIONS[note.findtext("type")] * DIVISIONS
+        if note.find("dot") is not None:
+            written *= 1.5
+        assert int(note.findtext("duration")) == written, (
+            f"a {note.findtext('type')} lasting {note.findtext('duration')} divisions"
+        )
+    assert _struck(root) == len(sequence)
+
+
+def test_musicxml_marks_the_tempo_and_where_it_changes(tmp_path: Path) -> None:
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.config import DEFAULT  # noqa: PLC0415
+
+    slow, fast = generate(seed=3, bars=8, tempo=70.0), generate(seed=4, bars=8, tempo=120.0)
+    boundary = max(n.onset + n.duration for n in slow) + 0.1
+    sequence = NoteSequence.of(
+        list(slow) + [Note(n.onset + boundary, n.pitch, n.duration, n.hand, n.velocity) for n in fast]
+    )
+    config = replace(DEFAULT, score=replace(DEFAULT.score, sections=(boundary,)))
+    analysis = analyze(sequence, config)
+    root = ET.parse(musicxml.write(sequence, tmp_path / "a.musicxml", analysis)).getroot()
+
+    tempos = [float(sound.get("tempo")) for sound in root.iter("sound") if sound.get("tempo")]
+    assert len(tempos) == 2, f"tempo marks {tempos}"
+    assert tempos[0] == pytest.approx(analysis.sections[0].tempo, rel=0.01)
+    assert tempos[1] == pytest.approx(analysis.sections[1].tempo, rel=0.01)
+    assert root.find(".//measure[@number='1']/direction/direction-type/metronome") is not None
+    assert _struck(root) == len(sequence)
