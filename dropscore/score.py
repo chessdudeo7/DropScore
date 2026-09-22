@@ -111,13 +111,26 @@ class Analysis:
         return chosen
 
     def beats_before(self, section: "Analysis") -> float:
-        """Beats counted before a section starts, so positions keep rising."""
-        total = 0.0
-        for earlier, following in zip(self.sections, self.sections[1:]):
-            if earlier.start >= section.start - 1e-9:
-                break
-            total += (following.start - earlier.start) / earlier.beat
-        return total
+        """The beat a section begins on, counted on through every section before.
+
+        Each section is counted on its own grid from where it begins, so the
+        count carries straight on across the join. Counted from time zero
+        instead, a section's own phase put its first beat dozens of beats past
+        where the one before left off: on a real page, beat 11 at ten seconds
+        and beat 58 at seventeen.
+        """
+        if not self.sections or section is self.sections[0]:
+            return 0.0
+        position = 0.0
+        for index, (earlier, following) in enumerate(zip(self.sections, self.sections[1:])):
+            grid = replace(earlier, sections=())
+            if index == 0:
+                position = beat_position(following.start, grid)
+            else:
+                position += beat_position(following.start, grid) - beat_position(earlier.start, grid)
+            if following is section:
+                return position
+        return position
 
     def __str__(self) -> str:
         return (
@@ -366,7 +379,14 @@ def beat_position(when: float, analysis: Analysis) -> float:
     """Where a moment falls, counted in beats from the first tracked one."""
     if analysis.sections:
         section = analysis.at(when)
-        return analysis.beats_before(section) + beat_position(when, replace(section, sections=()))
+        grid = replace(section, sections=())
+        if section is analysis.sections[0]:
+            return beat_position(when, grid)
+        return (
+            analysis.beats_before(section)
+            + beat_position(when, grid)
+            - beat_position(section.start, grid)
+        )
     times = analysis.beat_times
     if not times:
         return (when - analysis.beat_phase) / analysis.beat
@@ -384,11 +404,14 @@ def beat_time(position: float, analysis: Analysis) -> float:
     """The moment a beat position falls at: ``beat_position`` reversed."""
     if analysis.sections:
         section = analysis.sections[0]
-        for candidate in analysis.sections:
+        for candidate in analysis.sections[1:]:
             if position >= analysis.beats_before(candidate) - 1e-9:
                 section = candidate
-        local = position - analysis.beats_before(section)
-        return beat_time(local, replace(section, sections=()))
+        grid = replace(section, sections=())
+        if section is analysis.sections[0]:
+            return beat_time(position, grid)
+        local = position - analysis.beats_before(section) + beat_position(section.start, grid)
+        return beat_time(local, grid)
     times = analysis.beat_times
     if not times:
         return analysis.beat_phase + position * analysis.beat

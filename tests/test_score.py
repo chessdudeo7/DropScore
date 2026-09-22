@@ -1252,7 +1252,9 @@ def test_beats_keep_counting_across_a_section() -> None:
 
     before = beat_position(boundary - 0.01, analysis)
     after = beat_position(boundary + 0.01, analysis)
-    assert after > before
+    # Straight on, not a leap. Counted from time zero, each section's own phase
+    # put its first beat dozens of beats past where the last left off.
+    assert 0 < after - before < 0.1, f"jumped from beat {before:.2f} to {after:.2f}"
     # Four beats of the second section's own beat are four beats along.
     assert beat_position(boundary + 4 * second.beat, analysis) - after == pytest.approx(4, abs=0.2)
     assert beat_time(beat_position(boundary + 1.0, analysis), analysis) == pytest.approx(
