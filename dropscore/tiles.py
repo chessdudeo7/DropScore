@@ -428,7 +428,7 @@ def _track_masks(
     # Widening is bounded by the other colours. A colour may reach out as far
     # as it likes into empty space, but not so far that it starts claiming
     # pixels belonging to another voice — so the bound is half the distance to
-    # the nearest one, which is the point where the two would meet.
+    # where the two would meet.
     #
     # That bound is what makes the widening safe to apply generally. On a video
     # whose palette is three shades of one colour, discovered from particle
@@ -437,25 +437,45 @@ def _track_masks(
     # 22 to 31, taking the detected blobs from 63 a frame to 91. Those colours
     # sit 22 apart where a real pair of hands sat 76, and the cap tells them
     # apart without needing to know which is which.
+    #
+    # Which neighbour bounds it has to be the one the pixel is actually near.
+    # Taken as the nearest neighbour in any direction, a colour with company on
+    # one side was hemmed in on the other as well, where there was nothing for
+    # twice the distance. Three colours sampled from a ramp did exactly that:
+    # the middle one sat 43 from the colour above and 82 from the one below, so
+    # half of 43 held it to 22 and the stretch between it and the colour below
+    # belonged to nobody. Tiles coloured from there matched no colour at all --
+    # a whole band of the keyboard, read only in the frames its glow happened
+    # to stray far enough. On the Liszt one key in that band was found in 935
+    # frames of a passage where it should hold for 1560.
     radius = np.full(len(distances), cfg.color_tolerance, dtype=np.float32)
+    gaps = None
     if palette.spreads is not None and len(palette.spreads) == len(distances):
         wanted = palette.spreads * cfg.spread_multiple
+        flat = targets.reshape(len(targets), -1)
         if len(targets) > 1:
-            flat = targets.reshape(len(targets), -1)
             gaps = np.linalg.norm(flat[:, None, :] - flat[None, :, :], axis=2)
             np.fill_diagonal(gaps, np.inf)
-            wanted = np.minimum(wanted, gaps.min(axis=1) / 2.0)
         # Nor so far that it takes in the background. The other colours bound
         # it, but a palette of one colour had nothing to bound it at all: on a
         # capture of neon outlines its radius grew to 57, the black background
         # sat 41 away, and every pixel of the fall area matched -- one blob, a
         # "tile" on every key, every frame.
         ground = _weighted(palette.background[None, :], cfg.lightness_weight)[0]
-        to_ground = np.linalg.norm(targets.reshape(len(targets), -1) - ground[None, :], axis=1)
+        to_ground = np.linalg.norm(flat - ground[None, :], axis=1)
         wanted = np.minimum(wanted, to_ground / 2.0)
         radius = np.maximum(radius, wanted)
 
-    solid = closest < radius[nearest]
+    if gaps is None:
+        solid = closest < radius[nearest]
+    else:
+        # The neighbour in the pixel's own direction is the colour second
+        # nearest to it.
+        runner_up = distances.copy()
+        np.put_along_axis(runner_up, nearest[None], np.inf, axis=0)
+        second = runner_up.argmin(axis=0)
+        meeting = np.maximum(cfg.color_tolerance, gaps[nearest, second] / 2.0)
+        solid = closest < np.minimum(radius[nearest], meeting)
 
     # No morphological opening. A 3x3 open erodes a pixel in every direction,
     # which removes speckle but also annihilates any stroke thinner than three

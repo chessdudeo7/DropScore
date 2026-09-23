@@ -616,6 +616,42 @@ def test_widening_stops_short_of_a_neighbouring_colour() -> None:
     )
 
 
+def test_a_colour_may_widen_away_from_the_neighbour_crowding_it() -> None:
+    """Only the neighbour a pixel lies toward should bound the reach to it.
+
+    Bounded by its nearest neighbour in any direction, a colour with company
+    on one side was held just as close on the other, where there was nothing
+    for twice the distance. Three colours sampled from a ramp did that: the
+    middle sat 43 from one side and 86 from the other, half of 43 held it to
+    22, and the stretch below it belonged to no colour at all. Tiles coloured
+    from there matched nothing -- on a Liszt etude a whole band of the
+    keyboard, one of its keys found in 935 frames where it should hold 1560.
+    """
+    from dropscore.tiles import Palette, _to_lab, _track_masks
+
+    calibration = _plain_calibration(strike_y=60, width=40)
+    image = np.zeros((90, 40, 3), dtype=np.uint8)
+    image[:60, :] = (255, 255, 255)
+
+    pixel = _to_lab(image[:60])[0, 0].astype(np.float64)
+    middle = pixel + [0.0, 36.0, 0.0]          # the pixel is 36 from this one
+    crowding = middle + [0.0, 43.0, 0.0]       # 43 away, on the far side
+    distant = pixel - [0.0, 50.0, 0.0]         # 86 from the middle, past the pixel
+
+    palette = Palette(
+        background=np.array([0.0, 128.0, 128.0], dtype=np.float32),
+        colors=np.array([middle, crowding, distant], dtype=np.float32),
+        counts=np.array([1000, 1000, 1000]),
+        spreads=np.array([17.0, 17.0, 17.0]),  # loose enough to want ~42
+    )
+
+    matched = int(_track_masks(image, palette, calibration, DEFAULT)[0].sum())
+    assert matched > 0, (
+        "a pixel 36 from its colour, with 86 of empty space in that direction, "
+        "was refused because another colour sat 43 away on the other side"
+    )
+
+
 def test_two_filled_tiles_with_a_gap_are_not_read_as_one_outline() -> None:
     """A box holding two tiles of one key, one above the other.
 
