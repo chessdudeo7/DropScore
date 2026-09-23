@@ -1240,6 +1240,24 @@ def notate_durations(
                         if step > 0:
                             reach = round(reach / step) * step
                         duration = max(duration, reach)
+
+            # A note starting on a beat fills at least that beat. Released
+            # early and engraved as played it becomes a short value followed
+            # by a rest that runs over the beat line -- which the page would
+            # not write, because a rest is written from a boundary, not across
+            # one. So the value is taken out to the end of the beat it starts
+            # on, and what is left over becomes the rest.
+            if cfg.fill_to_beat > 0:
+                position = beat_position(note.onset, analysis)
+                onto = abs(position - round(position))
+                to_beat = (round(position) + 1 - position) * here.beat
+                if (
+                    following is not None
+                    and onto < cfg.fill_to_beat
+                    and duration < to_beat
+                    and note.onset + to_beat <= following + step / 2
+                ):
+                    duration = to_beat
             written.append(
                 Note(note.onset, note.pitch, duration, note.hand, note.velocity)
             )

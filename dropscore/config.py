@@ -502,6 +502,12 @@ class ScoreConfig:
     # moving one and is left alone.
     overlap_is_legato: bool = True
 
+    # How near a beat line a note must start, in beats, before its value is
+    # taken out to the end of that beat. A note on a beat, released early and
+    # engraved as played, leaves a rest running across the next beat line,
+    # which is not how a rest is written. Zero turns this off.
+    fill_to_beat: float = 0.1
+
     # A bass note is written as held until the bass moves when a figure runs
     # over it: at least this many onsets before the next note near it, all of
     # them this many semitones above or more. A minor sixth leaves out

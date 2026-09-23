@@ -991,6 +991,42 @@ def test_a_note_overlapping_only_its_neighbour_is_written_as_ending_there() -> N
     )
 
 
+def test_a_note_on_a_beat_is_written_as_filling_that_beat() -> None:
+    """A rest is written from a boundary, not across one.
+
+    A note on a beat, released early and engraved as played, leaves a rest
+    running over the next beat line -- which no page prints. The value takes
+    the beat and the leftover becomes the rest.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = [Note(onset=i * 2 * beat, pitch=64, duration=beat * 0.5) for i in range(8)]
+
+    written = notate_durations(NoteSequence.of(notes), _analysis())
+    values = [n.duration / beat for n in sorted(written)][:-1]
+
+    assert all(abs(v - 1.0) < 0.05 for v in values), (
+        f"a note on a beat was left short of it: {values[:4]}"
+    )
+
+
+def test_a_note_off_the_beat_is_not_stretched_onto_the_next_one() -> None:
+    """Only a note that begins on a beat fills one. A sixteenth on an
+    off-beat is a sixteenth, however long the silence after it."""
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    sixteenth = beat / 4
+    notes = [Note(onset=i * 2 * beat + sixteenth, pitch=64, duration=sixteenth * 0.8)
+             for i in range(8)]
+
+    written = notate_durations(NoteSequence.of(notes), _analysis())
+    values = [n.duration / beat for n in sorted(written)][:-1]
+
+    assert all(v < 0.6 for v in values), f"stretched an off-beat note: {values[:4]}"
+
+
 def test_notation_never_shortens_a_sustained_note() -> None:
     """A note running past the note after it is a voice held under a moving
     one, and cutting it deletes a real sustain."""
