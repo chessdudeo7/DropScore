@@ -217,6 +217,23 @@ def _fold_blends(
     chromatic parents are considered, so two greys on a dark ground -- a pair of
     voices told apart by lightness alone, and every grey lies on the line from
     black to white -- are still left apart as ``_same_hue`` intends.
+
+    Which of a pair is the blend was once read off their counts, on the
+    reasoning that a glow is rarer than the tile it surrounds. It is not: a
+    glow surrounds *every* tile, so it is pooled where the tile colours are
+    split. A theme that tints its tiles by pitch rather than by hand splits
+    them across the whole spectrum, and there the single pooled halo was the
+    most common colour in the palette -- 48% of sampled pixels against 22% for
+    the largest real colour. Being the most common, it was never offered as a
+    child, and it survived as a voice of its own: a second, wider blob around
+    every tile, 28 to 38 pixels across where a black key is 15. Those blobs
+    resolved onto whichever neighbour they were centred on, and a Liszt etude
+    in five flats came back with D, E, G, A and B naturals making up 27% of
+    the notes -- the white keys either side of the black ones it actually uses.
+    Counts say nothing about which is the blend. The geometry already does:
+    a blend lies between the background and its parent, so it is always the
+    nearer of the two. Colours are offered as children nearest the background
+    first, and may only fold outwards.
     """
     if len(colors) < 2:
         return colors, counts
@@ -226,11 +243,12 @@ def _fold_blends(
     origin = _weighted(background[None, :], cfg.lightness_weight)[0]
     keep = np.ones(len(colors), dtype=bool)
 
-    # Children are visited from least common up and may only fold into a more
-    # common colour, but the palette keeps the order it arrived in.
-    order = [int(i) for i in np.argsort(-counts, kind="stable")]
-    for rank, index in enumerate(order[1:], start=1):
-        for parent in order[:rank]:
+    # Children are visited nearest the background first and may only fold into
+    # a colour farther out, but the palette keeps the order it arrived in.
+    reach = np.linalg.norm(points - origin, axis=1)
+    order = [int(i) for i in np.argsort(reach, kind="stable")]
+    for rank, index in enumerate(order):
+        for parent in order[rank + 1:]:
             if not keep[parent]:
                 continue
             chroma = float(np.hypot(colors[parent][1] - 128.0, colors[parent][2] - 128.0))

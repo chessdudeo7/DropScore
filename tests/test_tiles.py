@@ -251,6 +251,26 @@ def test_a_glow_halo_is_folded_into_its_tile_colour() -> None:
     assert kept_counts[0] == 17532 + 2706
 
 
+def test_a_halo_is_folded_even_when_it_is_the_commonest_colour() -> None:
+    """A glow surrounds every tile, so where the tile colours are split the
+    pooled halo outnumbers each of them. Deciding which of a pair was the
+    blend by their counts never offered that halo as a child, and it survived
+    as a voice: on a theme tinting tiles by pitch it took 48% of the sampled
+    pixels and drew a second, wider blob around every tile."""
+    from dropscore.tiles import _fold_blends  # noqa: PLC0415
+
+    background = np.array([0.0, 128.0, 128.0])
+    tile = np.array([198.0, 94.0, 121.0])
+    halo = background + 0.32 * (tile - background)
+    colors = np.stack([halo, tile])
+    counts = np.array([104374, 47085])
+
+    kept, kept_counts = _fold_blends(colors, counts, background, DEFAULT.tiles)
+    assert len(kept) == 1
+    assert kept[0] == pytest.approx(tile)
+    assert kept_counts[0] == 104374 + 47085
+
+
 def test_two_grey_voices_are_not_folded_together() -> None:
     """Every grey lies on the line from black to white, so the blend test on
     its own would merge two voices told apart only by lightness."""
