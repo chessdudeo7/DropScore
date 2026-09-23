@@ -484,6 +484,24 @@ class ScoreConfig:
     # values matched the printed music.
     articulation_gap: float = 1.0
 
+    # How far a note may be written as reaching, as a multiple of how far apart
+    # that hand's notes usually fall. A silence is articulation only up to the
+    # hand's own pulse: past that it is a rest, whatever its length in beats.
+    # Judged in beats alone, a sixteenth and a sixteenth rest look exactly like
+    # a quarter played staccato -- both a note held half the way to the next --
+    # and one threshold cannot want both. The pulse separates them: the rest
+    # opens a gap of twice what the hand has been doing, the staccato quarter
+    # opens one of exactly what it has been doing. Zero lifts the cap.
+    fill_pulses: float = 1.25
+
+    # Whether a note overlapping only its immediate neighbour is written as
+    # ending where that neighbour begins. Holding into the next note is how a
+    # hand plays legato, and the page writes it with a slur, not with a longer
+    # value; taken literally every such note is engraved a step too long.
+    # A note running past the note after it is a voice genuinely held under a
+    # moving one and is left alone.
+    overlap_is_legato: bool = True
+
     # A bass note is written as held until the bass moves when a figure runs
     # over it: at least this many onsets before the next note near it, all of
     # them this many semitones above or more. A minor sixth leaves out

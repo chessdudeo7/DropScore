@@ -943,8 +943,57 @@ def test_a_real_rest_is_left_alone() -> None:
     assert all(n.duration == pytest.approx(beat, abs=1e-6) for n in written)
 
 
-def test_notation_never_shortens_a_note() -> None:
-    """Overlap is two voices, and cutting one deletes a real sustain."""
+def test_a_sixteenth_before_a_sixteenth_rest_stays_a_sixteenth() -> None:
+    """A silence is articulation only up to the hand's own pulse.
+
+    In beats alone a sixteenth and a sixteenth rest look exactly like a
+    quarter played staccato -- a note held half the way to the next one -- and
+    the gap threshold that has to fill the second filled the first as well. On
+    a page of sixteenths that wrote 26 of 64 as eighths.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    sixteenth = beat / 4
+    onsets, when = [], 0.0
+    for bar in range(6):  # three sixteenths, then one sixteenth of silence
+        for _ in range(3):
+            onsets.append(when)
+            when += sixteenth
+        when += sixteenth
+    notes = [Note(onset=t, pitch=64, duration=sixteenth * 0.8) for t in onsets]
+
+    written = notate_durations(NoteSequence.of(notes), _analysis())
+    values = [n.duration / beat for n in sorted(written)][:-1]
+
+    assert all(v < 0.4 for v in values), (
+        f"a sixteenth before a rest was written as an eighth: {values[:6]}"
+    )
+
+
+def test_a_note_overlapping_only_its_neighbour_is_written_as_ending_there() -> None:
+    """Holding into the next note is legato, which the page slurs.
+
+    Written literally the value runs past where the next note starts, and on a
+    real recording that engraved eighths as a quarter tied to a sixteenth --
+    a fifth of one page's values.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = [Note(onset=i * beat, pitch=64, duration=beat * 1.25) for i in range(8)]
+
+    written = notate_durations(NoteSequence.of(notes), _analysis())
+    values = [n.duration / beat for n in sorted(written)][:-1]
+
+    assert all(abs(v - 1.0) < 0.05 for v in values), (
+        f"an overlapping note kept its overlap as written value: {values[:4]}"
+    )
+
+
+def test_notation_never_shortens_a_sustained_note() -> None:
+    """A note running past the note after it is a voice held under a moving
+    one, and cutting it deletes a real sustain."""
     from dropscore.score import notate_durations
 
     notes = [

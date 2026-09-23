@@ -1135,8 +1135,11 @@ def notate_durations(
     staccato dot, so a note covering enough of the way to the next onset in
     its own hand is written as reaching it.
 
-    Only ever lengthens. A note already outstripping the next onset is two
-    voices overlapping, and shortening it would delete a real sustain.
+    Shortens only where a note overlaps its immediate neighbour and nothing
+    past it: that is one hand playing legato, which the page writes as a slur
+    over two notes rather than as a note and a half. A note running on past the
+    note after it is a voice genuinely held under a moving one, and cutting it
+    would delete a real sustain.
     """
     cfg = config.score
     if cfg.legato_ratio <= 0:
@@ -1148,6 +1151,14 @@ def notate_durations(
     for hand in ("L", "R"):
         voice = sorted(sequence.hand(hand), key=lambda n: n.onset)
         onsets = [n.onset for n in voice]
+        # How far apart this hand's notes usually fall, in beats. A silence
+        # counts as articulation only up to this; beyond it a rest is written.
+        spacings = sorted(
+            beat_position(later, analysis) - beat_position(earlier, analysis)
+            for earlier, later in zip(onsets, onsets[1:])
+            if later - earlier > 1e-6
+        )
+        pulse = spacings[len(spacings) // 2] if spacings else 0.0
         for index, note in enumerate(voice):
             # In the beat of the stretch this note falls in, which is not the
             # first stretch's where the piece changes tempo.
@@ -1170,11 +1181,21 @@ def notate_durations(
                 # a real capture wrote 5 quarters as 0.58 of a beat, 5 as
                 # 0.38, 5 as 0.33 and so on: 32% of its written values
                 # matched the printed music.
+                #
+                # Whether the note is written as reaching is judged on the way
+                # to the next onset, but how far it reaches is capped at the
+                # hand's own pulse: past that the silence is a rest. Judging
+                # the ratio against the capped figure instead sounds tidier and
+                # is worse -- it lets a sixteenth held a fifth of the way to a
+                # distant onset count as reaching, and cost Pietschmann 3 six
+                # values and Fur Elise two.
                 if gap > 0 and (
                     cfg.legato_ratio <= held < 1.0
                     or gap <= cfg.articulation_gap * analysis.beat + step / 2
                 ):
                     filled = gap
+                    if cfg.fill_pulses > 0 and pulse > 0:
+                        filled = min(filled, pulse * cfg.fill_pulses * here.beat)
                     if step > 0:
                         filled = round(filled / step) * step
                     # Enforce the invariant after rounding, not before it: a
@@ -1191,7 +1212,23 @@ def notate_durations(
                 # page. From its end, the next onset is most of a beat away
                 # and inside the articulation gap, like any other.
                 end = note.onset + note.duration
-                if duration <= note.duration + 1e-9 and following <= end:
+                # Overlapping its neighbour and nothing beyond it is legato,
+                # not a sustain: the hand has not left the note before taking
+                # the next, which the page writes as a slur and not as a
+                # longer value. Only ever shortens to where the next note
+                # begins, so a held voice -- which runs past a whole figure,
+                # and is what the branch below exists for -- is untouched.
+                beyond = next(
+                    (t for t in onsets[index + 1 :] if t > following + 1e-6), None
+                )
+                if (
+                    cfg.overlap_is_legato
+                    and duration <= note.duration + 1e-9
+                    and following <= end
+                    and (beyond is None or end < beyond - step / 2)
+                ):
+                    duration = gap
+                elif duration <= note.duration + 1e-9 and following <= end:
                     after = next(
                         (t for t in onsets[index + 1 :] if t >= end - step / 2), None
                     )
