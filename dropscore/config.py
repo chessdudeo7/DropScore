@@ -544,6 +544,20 @@ class ScoreConfig:
     # notes to the treble staff for every one the other gained.
     one_hand_span: int = 10
 
+    # How far a single line may range and still be kept on one staff. Wider
+    # than one hand covers at once, because a line is played one note at a
+    # time, but far short of what two hands reach between them: a left hand
+    # rising to meet a right, as Fur Elise's third bar does, covers thirty-one
+    # semitones in one unbroken ascent and is printed on two staves.
+    one_line_span: int = 24
+
+    # Seconds two notes either side of the register's middle must sound
+    # together before the texture counts as two parts rather than one line.
+    # Short: what is being asked is whether they are ever heard at once, and a
+    # hand lifting a shade late on a single line overlaps the next note by a
+    # little however cleanly it is played.
+    one_voice_overlap: float = 0.055
+
     # Onsets closer than this are struck together, not one after the other. A
     # key cannot be struck, released and struck again inside it.
     repeat_min_gap: float = 0.05

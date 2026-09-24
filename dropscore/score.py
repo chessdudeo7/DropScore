@@ -963,6 +963,23 @@ def _relabel(sequence: NoteSequence, hand_of) -> NoteSequence:
     )
 
 
+def _sounds_across(onsets: np.ndarray, ends: np.ndarray, pitches: np.ndarray, least: float) -> bool:
+    """Is a note above the register's middle ever heard under one below it?
+
+    What two hands do and one does not. The middle is taken from the window
+    itself rather than from middle C, so the test asks about the texture in
+    play and not about where it sits on the keyboard.
+    """
+    middle = (float(pitches.min()) + float(pitches.max())) / 2.0
+    above, below = pitches > middle, pitches <= middle
+    if not above.any() or not below.any():
+        return False
+    overlap = np.minimum(ends[above][:, None], ends[below][None, :]) - np.maximum(
+        onsets[above][:, None], onsets[below][None, :]
+    )
+    return bool((overlap > least).any())
+
+
 def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequence:
     """Split one colour into two hands with a boundary that follows the music.
 
@@ -982,6 +999,7 @@ def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeq
     cfg = config.score
     notes = list(sequence)
     onsets = np.array([n.onset for n in notes], dtype=float)
+    ends = np.array([n.onset + n.duration for n in notes], dtype=float)
     pitches = np.array([n.pitch for n in notes], dtype=float)
 
     global_split = (pitches.min() + pitches.max()) / 2.0
@@ -1018,7 +1036,24 @@ def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeq
         # to D4 with the bass silent, and those D4s went to the bass staff --
         # and the notes before them, left with nothing following on their own
         # staff for three beats, were written short as well.
-        if len(window) >= 4 and window.max() - window.min() <= cfg.one_hand_span:
+        #
+        # Reach alone cannot say how wide one part may be. A right hand running
+        # through a seventeenth is still one part, and widening the span until
+        # it fitted cost more elsewhere than it won: at eighteen semitones one
+        # page went from 40 of 64 to all 64 and two others gave up 27 between
+        # them. What tells them apart is not how far the notes reach but
+        # whether they are ever heard at once. Two hands sound together; a line
+        # running up and down through the same register does not, however far
+        # it goes. Measured over the printed pages, the wide windows of the
+        # single-line one hold no overlapping pair at all, where every page
+        # that really uses both staves holds four or more.
+        alone = len(window) >= 4 and window.max() - window.min() <= cfg.one_line_span and not _sounds_across(
+            onsets[nearest[: cfg.hand_neighbours]],
+            ends[nearest[: cfg.hand_neighbours]],
+            window,
+            cfg.one_voice_overlap,
+        )
+        if len(window) >= 4 and (window.max() - window.min() <= cfg.one_hand_span or alone):
             hand = "R" if float(np.median(window)) >= MIDDLE_C else "L"
         assigned.append(Note(note.onset, note.pitch, note.duration, hand, note.velocity))
 

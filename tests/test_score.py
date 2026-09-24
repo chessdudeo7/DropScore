@@ -1425,3 +1425,52 @@ def test_only_a_doubled_bass_is_held_under_a_figure() -> None:
     written = notate_durations(NoteSequence.of(notes), _analysis(60.0 / beat))
     lows = [n.duration / beat for n in written if n.pitch == 40][:-1]
     assert all(v <= 1.5 for v in lows), f"held a single low note for {lows}"
+
+
+def test_one_line_running_wide_is_kept_on_one_staff() -> None:
+    """A hand running up and down through more than it can span at once is
+    still one part, and the boundary must not cut it in two.
+
+    Reach alone cannot say how wide one part may be: widening the span until a
+    real page's seventeenth fitted took that page from 40 of 64 to all 64 and
+    cost two others 27 between them. What parts them is whether the notes are
+    ever heard at once. A line is not.
+    """
+    from dropscore.score import _split_by_pitch  # noqa: PLC0415
+
+    beat = 0.5
+    line = [57, 62, 65, 69, 74, 69, 65, 62]  # A3 up to D5 and back, seventeen
+    notes = [
+        Note(onset=i * beat, pitch=line[i % len(line)], duration=beat * 0.8, hand="R")
+        for i in range(32)
+    ]
+
+    split = _split_by_pitch(NoteSequence.of(notes), DEFAULT)
+
+    assert len({n.hand for n in split}) == 1, (
+        "a single line was divided between the staves: "
+        f"{sorted({(n.pitch, n.hand) for n in split})}"
+    )
+
+
+def test_two_hands_in_the_same_reach_are_still_two_staves() -> None:
+    """The test is being heard at once, not the distance covered. A bass under
+    a melody within the same seventeenth is two parts and two staves."""
+    from dropscore.score import _split_by_pitch  # noqa: PLC0415
+
+    beat = 0.5
+    notes = []
+    for bar in range(8):
+        notes.append(Note(onset=bar * 2 * beat, pitch=57, duration=beat * 1.9, hand="R"))
+        for step, pitch in enumerate((72, 74, 72, 71)):
+            notes.append(
+                Note(onset=bar * 2 * beat + step * beat / 2, pitch=pitch,
+                     duration=beat * 0.4, hand="R")
+            )
+
+    split = _split_by_pitch(NoteSequence.of(notes), DEFAULT)
+    low = {n.hand for n in split if n.pitch == 57}
+    high = {n.hand for n in split if n.pitch > 60}
+
+    assert low == {"L"}, f"the held bass went to the treble staff: {low}"
+    assert high == {"R"}, f"the melody went to the bass staff: {high}"
