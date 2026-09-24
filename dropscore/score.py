@@ -490,7 +490,32 @@ def _meter(
     steps = round(beat / tatum) if tatum > 0 else 0
     if steps in (3, 6) and not cfg.fixed_tempo:
         eighth = beat / 3.0
-        return _eighths_in_a_bar(sequence, eighth, phase, cfg), 8, eighth
+        count = _eighths_in_a_bar(sequence, eighth, phase, cfg)
+
+        # A beat of three tatums is a dotted note only if the music groups in
+        # threes. A beat is chosen partly for sitting near a walking tempo, and
+        # on a piece whose tatum is a sixteenth that prefers three of them --
+        # 119 to the minute -- over the two the music actually moves in, at
+        # 178. Fur Elise came back that way: its onsets repeat at two tatums
+        # 0.63 of the time against 0.56 at three, and its bar of six tatums was
+        # read as six eighths where the page prints three. The bar was the
+        # right length, so the metre passed; but every value in it was counted
+        # against a unit half the size the page writes, and the eighths the
+        # melody holds could not be written at all -- no run of whole units
+        # came to one, so they were engraved as sixteenths, 10 of the 11 on the
+        # page wrong.
+        #
+        # Asked directly, the grouping settles it: where two tatums repeat more
+        # than three, the tatum is a sixteenth and the unit is two of them.
+        if steps == 3 and count % 2 == 0:
+            onsets = np.array(sorted({float(n.onset) for n in sequence}))
+            tolerance = tatum * cfg.repeat_tolerance
+            if _repeats_at(onsets, 2.0 * tatum, tolerance) > _repeats_at(
+                onsets, 3.0 * tatum, tolerance
+            ):
+                eighth, count = 2.0 * tatum, count // 2
+
+        return count, 8, eighth
 
     return estimate_meter(sequence, beat, phase, config), 4, beat
 
@@ -1251,11 +1276,19 @@ def notate_durations(
                 position = beat_position(note.onset, analysis)
                 onto = abs(position - round(position))
                 to_beat = (round(position) + 1 - position) * here.beat
+                # Only where the beat is nearly all the silence there is. A
+                # note is stretched onto the beat line so the rest after it can
+                # start there; if a whole beat or more of rest is left over
+                # anyway, the silence stands on its own and the note keeps what
+                # it was played at. Without that, the left hand's sixteenths --
+                # on a beat, then two beats of rest -- were each written as a
+                # whole beat.
                 if (
                     following is not None
                     and onto < cfg.fill_to_beat
                     and duration < to_beat
                     and note.onset + to_beat <= following + step / 2
+                    and following - (note.onset + to_beat) < here.beat - step / 2
                 ):
                     duration = to_beat
             written.append(

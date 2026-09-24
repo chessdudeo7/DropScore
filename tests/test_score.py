@@ -1001,13 +1001,33 @@ def test_a_note_on_a_beat_is_written_as_filling_that_beat() -> None:
     from dropscore.score import notate_durations  # noqa: PLC0415
 
     beat = 0.6
-    notes = [Note(onset=i * 2 * beat, pitch=64, duration=beat * 0.5) for i in range(8)]
+    # On the beat, then again half a beat before the next one: filling the
+    # beat leaves half a beat of rest, which is written from the beat line.
+    notes = [Note(onset=i * 1.5 * beat, pitch=64, duration=beat * 0.5) for i in range(12)]
+
+    written = sorted(notate_durations(NoteSequence.of(notes), _analysis()))[:-1]
+    on_beat = [n.duration / beat for n in written if round(n.onset / beat, 3) % 1 == 0]
+
+    assert on_beat and all(abs(v - 1.0) < 0.05 for v in on_beat), (
+        f"a note on a beat was left short of it: {on_beat[:4]}"
+    )
+
+
+def test_a_note_with_a_whole_beat_of_rest_after_it_is_left_as_played() -> None:
+    """The beat is taken so the rest can start on the line, not to eat into a
+    rest that stands on its own. Fur Elise's left hand -- a sixteenth on the
+    beat, then two beats of silence -- had each one written as a whole beat.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = [Note(onset=i * 3 * beat, pitch=64, duration=beat * 0.5) for i in range(8)]
 
     written = notate_durations(NoteSequence.of(notes), _analysis())
     values = [n.duration / beat for n in sorted(written)][:-1]
 
-    assert all(abs(v - 1.0) < 0.05 for v in values), (
-        f"a note on a beat was left short of it: {values[:4]}"
+    assert all(v < 0.9 for v in values), (
+        f"stretched a note into a rest of its own: {values[:4]}"
     )
 
 
@@ -1249,6 +1269,35 @@ def test_a_compound_beat_is_written_in_eighths() -> None:
 
     assert beat_type == 8
     assert beats_per_bar == 6
+    assert beat * beats_per_bar == pytest.approx(6 * sixteenth, rel=0.01)
+
+
+def test_a_beat_of_three_tatums_that_groups_in_twos_is_counted_in_twos() -> None:
+    """Three tatums to a beat only makes a dotted beat if the music moves in
+    threes. A beat is chosen partly for sitting near a walking tempo, which on
+    a piece whose tatum is a sixteenth prefers three of them to two; a real Fur
+    Elise came back with six eighths to the bar where the page prints three.
+    The bar was the right length either way, so the metre looked right, but
+    every value was counted against a unit half the size the page writes.
+    """
+    from dropscore.score import _meter  # noqa: PLC0415
+
+    sixteenth = 60.0 / 178 / 2
+    notes = []
+    for bar in range(24):  # onsets every two sixteenths, bass on the downbeat
+        start = bar * 6 * sixteenth
+        for step in (0, 2, 4):
+            notes.append(
+                Note(onset=start + step * sixteenth, pitch=45 if step == 0 else 76,
+                     duration=sixteenth * 0.6, hand="L" if step == 0 else "R")
+            )
+    sequence = NoteSequence.of(notes)
+
+    beats_per_bar, beat_type, beat = _meter(sequence, 3 * sixteenth, sixteenth, 0.0, DEFAULT)
+
+    assert beat_type == 8
+    assert beats_per_bar == 3
+    assert beat == pytest.approx(2 * sixteenth, rel=0.01)
     assert beat * beats_per_bar == pytest.approx(6 * sixteenth, rel=0.01)
 
 
