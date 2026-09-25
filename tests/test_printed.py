@@ -176,3 +176,94 @@ def test_a_piece_is_read_against_the_section_it_covers(tmp_path: Path) -> None:
     half: read against the whole, its tempo came back at half the mark."""
     piece = load(_write_piece(tmp_path, sections=[0.0]))
     assert piece.sections == (0.0,)
+
+
+# ── scored by order rather than by beat ──────────────────────────────
+
+
+def _line() -> list[list]:
+    """An arpeggio rising and falling, as a figuration does, with the lower
+    half of each wave printed on the bass staff."""
+    wave = [37, 44, 49, 53, 56, 61, 65, 68, 65, 61, 56, 53, 49, 44]
+    return [
+        [pitch, index, 0, "R" if pitch >= 56 else "L"]
+        for index, pitch in enumerate(wave * 4)
+    ]
+
+
+def _order_piece(directory: Path, notes: list[list], **overrides) -> Path:
+    data = {
+        "title": "an arpeggio played freely",
+        "video": "recording.mp4",
+        "window": [0, len(notes) - 1],
+        "scored_by": "order",
+        "keys": [],
+        "notes": notes,
+    }
+    data.update(overrides)
+    path = directory / "figure.printed.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _freely(notes: list[list], lead: list[int] = (), tail: list[int] = ()) -> NoteSequence:
+    """The notes played with the beat wandering, so no grid describes them."""
+    played, when, gap = [], 0.0, 0.14
+    for pitch in list(lead) + [n[0] for n in notes] + list(tail):
+        played.append(Note(onset=when, pitch=pitch, duration=gap * 0.9))
+        when += gap
+        gap = 0.10 if gap > 0.13 else 0.17  # push and drag, bar by bar
+    return NoteSequence.of(played)
+
+
+def test_a_piece_scored_by_order_ignores_where_the_notes_fell(tmp_path: Path) -> None:
+    """Rubato that no grid describes must not cost the transcription anything
+    when every note came back in its turn."""
+    notes = _line()
+    piece = load(_order_piece(tmp_path, notes))
+
+    result = score_sequence(piece, _freely(notes))
+
+    assert result.by_order
+    assert result.matched == len(notes)
+    assert result.f1 == pytest.approx(1.0)
+
+
+def test_order_scoring_finds_the_passage_inside_a_longer_recording(tmp_path: Path) -> None:
+    """A page covers eight bars of a recording that runs for a hundred, and
+    only the stretch it covers may be counted against its precision."""
+    notes = _line()
+    piece = load(_order_piece(tmp_path, notes))
+
+    result = score_sequence(piece, _freely(notes, lead=[72, 74, 76], tail=[79] * 40))
+
+    assert result.matched == len(notes)
+    assert result.f1 == pytest.approx(1.0), (
+        f"the rest of the performance was counted as spurious: {result.detected} detected"
+    )
+
+
+def test_order_scoring_counts_a_dropped_note_and_a_wrong_one(tmp_path: Path) -> None:
+    notes = _line()
+    piece = load(_order_piece(tmp_path, notes))
+    played = [n[0] for n in notes]
+    del played[20]
+    played[30] = played[30] + 1
+
+    result = score_sequence(piece, _freely([[p, i, 0, "R"] for i, p in enumerate(played)]))
+
+    assert result.matched == len(notes) - 2
+    assert result.f1 < 1.0
+
+
+def test_order_scoring_reports_no_written_values(tmp_path: Path) -> None:
+    """There is no grid to judge a value against, and reporting one anyway
+    would read as a transcription failure rather than a question not asked."""
+    notes = _line()
+    piece = load(_order_piece(tmp_path, notes))
+
+    result = score_sequence(piece, _freely(notes))
+
+    assert result.written_right == 0
+    assert "written" not in str(result)
+    assert "in order" in str(result)

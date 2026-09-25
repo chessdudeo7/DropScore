@@ -26,8 +26,19 @@ A piece file looks like this::
       "end": 145,                    # optional: seconds of recording to read
       "beat_times": [[0, 0.97], [3, 1.97], ...]  # optional, replaces first_beat and beat
       "sections": [24.385],          # optional: seconds where the tempo changes
+      "scored_by": "order",          # optional: see below. "beat" by default
       "notes": [[64, 1, 1, "R"], ...] # pitch, beat, length in beats, staff
     }
+
+``scored_by`` is ``"order"`` for music that cannot be checked against a beat.
+A Liszt etude played with real rubato, its figuration written seven notes to
+the beat, has its printed onsets within half a gap of each other however
+carefully the beats are read off the recording, and the tolerance rather than
+the transcriber would decide the score. Such a piece is asked only that every
+note it prints comes back, once, in its turn: the two pitch streams are
+aligned and what lines up is counted. Its notes carry their position in the
+stream where a beat would go, its window bounds that position, and no written
+value is judged -- there is no grid to judge one against.
 
 ``beat_times`` is for a performance that does not hold one tempo: seconds at
 chosen beats, a bar line apiece say, read off the recording. Beats between them
@@ -104,6 +115,10 @@ class PrintedPiece:
     beat_times: tuple[tuple[float, float], ...] = ()
     sections: tuple[float, ...] = ()
 
+    #: "beat" to match each note where the page puts it, "order" to ask only
+    #: that the notes come back in the right order. See ``_score_by_order``.
+    scored_by: str = "beat"
+
     def covers(self, pitch: int) -> bool:
         return (self.lowest is None or pitch >= self.lowest) and (
             self.highest is None or pitch <= self.highest
@@ -163,6 +178,7 @@ def load(path: str | Path) -> PrintedPiece:
         end=float(data["end"]) if data.get("end") is not None else None,
         beat_times=tuple(sorted((float(b), float(t)) for b, t in data.get("beat_times", ()))),
         sections=tuple(sorted(float(t) for t in data.get("sections", ()))),
+        scored_by=str(data.get("scored_by", "beat")),
     )
 
 
@@ -193,6 +209,10 @@ class PrintedResult:
     meter_expected: int | None = None
     keys_expected: list[str] = field(default_factory=list)
     error: str | None = None
+
+    #: Set when the piece was matched by order rather than by beat, where no
+    #: written value can be judged and none is reported.
+    by_order: bool = False
 
     @property
     def precision(self) -> float:
@@ -247,9 +267,12 @@ class PrintedResult:
         facts = [
             f"F1 {self.f1:.3f} ({self.matched}/{self.printed} found, "
             f"{self.detected - self.matched} spurious)",
-            f"written {self.written_right}/{self.matched}",
-            f"staff {self.staff_right}/{self.matched}",
         ]
+        if not self.by_order:
+            facts.append(f"written {self.written_right}/{self.matched}")
+        facts.append(f"staff {self.staff_right}/{self.matched}")
+        if self.by_order:
+            facts.append("in order")
         for label, right, found in (
             ("tempo", self.tempo_right, f"{self.tempo_found:.1f}" if self.tempo_found else "-"),
             ("meter", self.meter_right, f"{self.meter_found}/{self.beat_type_found or 4}" if self.meter_found else "-"),
@@ -268,11 +291,119 @@ class PrintedResult:
         return cls(**known)
 
 
+def _score_by_order(
+    piece: PrintedPiece, handed: NoteSequence, detected: int
+) -> PrintedResult:
+    """Score a piece on the order its notes come in, not on where they fall.
+
+    Some music cannot be checked against a beat. A Liszt etude is played with
+    real rubato and its figuration is written seven notes to the beat, so
+    beats read off the recording would put the printed onsets within half a
+    gap of each other and the tolerance would decide the score. Inventing
+    positions for them would measure nothing but the invention.
+
+    What can be asked without inventing anything is that every note the page
+    prints comes back, once, in its turn. The two pitch streams are aligned
+    and what lines up is counted -- the same question a beat match asks, with
+    the timing left out of it.
+
+    Only the stretch of recording the page covers is judged: the alignment
+    says which played notes those are, and precision is measured over them
+    rather than over a whole performance the page describes eight bars of.
+    """
+    printed = [n.pitch for n in piece.scored()]
+    staves = [n.staff for n in piece.scored()]
+    played = sorted(handed, key=lambda n: (n.onset, n.pitch))
+    played = [n for n in played if piece.covers(n.pitch)]
+    pitches = [n.pitch for n in played]
+
+    # Where in the recording the printed passage starts. Lining the two up is
+    # cheap to guess at and dear to do properly, so most offsets are ruled out
+    # by counting how many pitches fall in the same place, and only the best
+    # few are aligned in full.
+    reach = int(len(printed) * 1.6) + 16
+    # The guess is made on the opening of the passage, and by alignment rather
+    # than by asking how many pitches fall in the same place: a stream with
+    # notes missing or over-detected drifts out of step within a bar or two,
+    # and counting positions then ranks the right offset below the wrong one.
+    head, ahead = printed[:40], 80
+    guesses = sorted(
+        (
+            (len(_longest_in_common(head, pitches[offset : offset + ahead])), -offset)
+            for offset in range(max(1, len(pitches) - len(printed) // 2))
+            if pitches[offset] == printed[0]
+        ),
+        reverse=True,
+    )[:8]
+    guesses = [(size, -back) for size, back in guesses]
+
+    best: tuple[list[tuple[int, int]], int] | None = None
+    for _, offset in guesses:
+        pairs = _longest_in_common(printed, pitches[offset : offset + reach])
+        if best is None or len(pairs) > len(best[0]):
+            best = (pairs, offset)
+
+    if best is None or not best[0]:
+        return PrintedResult(
+            name=piece.name, title=piece.title, printed=len(printed), detected=detected,
+            by_order=True, error="the printed passage was not found in the recording",
+        )
+
+    pairs, offset = best
+    staff_right = sum(played[offset + there].hand == staves[here] for here, there in pairs)
+    return PrintedResult(
+        name=piece.name,
+        title=piece.title,
+        printed=len(printed),
+        # The played notes the page covers, not the whole performance: a page
+        # of eight bars must not be charged for the hundred that follow it.
+        detected=pairs[-1][1] - pairs[0][1] + 1,
+        matched=len(pairs),
+        staff_right=staff_right,
+        by_order=True,
+    )
+
+
+def _longest_in_common(printed: list[int], played: list[int]) -> list[tuple[int, int]]:
+    """Pair up as many notes as the two streams have in common, in order.
+
+    The longest common subsequence, which is the most notes that can be lined
+    up without either stream going backwards. ``difflib`` is the obvious tool
+    and is the wrong one: it takes the longest matching block first and
+    recurses either side of it, which on a figuration that repeats the same
+    wave is not the best it could do -- given an arpeggio of fifty-six notes
+    with two wrong, it paired up twenty-eight of them.
+    """
+    rows, columns = len(printed), len(played)
+    table = [[0] * (columns + 1) for _ in range(rows + 1)]
+    for here in range(rows - 1, -1, -1):
+        row, below, pitch = table[here], table[here + 1], printed[here]
+        for there in range(columns - 1, -1, -1):
+            row[there] = (
+                below[there + 1] + 1 if pitch == played[there]
+                else max(below[there], row[there + 1])
+            )
+
+    pairs: list[tuple[int, int]] = []
+    here = there = 0
+    while here < rows and there < columns:
+        if printed[here] == played[there]:
+            pairs.append((here, there))
+            here, there = here + 1, there + 1
+        elif table[here + 1][there] >= table[here][there + 1]:
+            here += 1
+        else:
+            there += 1
+    return pairs
+
+
 def score_sequence(
     piece: PrintedPiece, sequence: NoteSequence, config: Config = DEFAULT
 ) -> PrintedResult:
     """Score an already transcribed sequence against the printed music."""
-    from .score import ScoreError, beat_position, notate_durations, postprocess  # noqa: PLC0415
+    from .score import (  # noqa: PLC0415
+        ScoreError, assign_hands, beat_position, notate_durations, postprocess,
+    )
 
     # A page covers one stretch of the music, and where the recording changes
     # tempo the stretch it covers is the one it must be read against.
@@ -293,6 +424,15 @@ def score_sequence(
             detected=len(sequence),
             error=f"could not analyse {len(sequence)} note(s): {exc}",
         )
+    if piece.scored_by == "order":
+        # Read as played, not as snapped to a grid. Quantising a figuration
+        # this fast puts several notes on one gridline -- 1755 of 2713 on the
+        # etude this exists for -- and the order within a gridline is then
+        # whatever the sort falls back on, which scrambled every wave: an
+        # arpeggio printed 61 65 68 65 61 came back 61 65 61 65 68. The hands
+        # are still wanted, and assigning them moves nothing.
+        return _score_by_order(piece, assign_hands(sequence, config), len(sequence))
+
     written = notate_durations(handed, analysis, config)
 
     low, high = piece.window
