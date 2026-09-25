@@ -479,3 +479,14 @@ def test_musicxml_marks_the_tempo_and_where_it_changes(tmp_path: Path) -> None:
     assert tempos[1] == pytest.approx(analysis.sections[1].tempo, rel=0.01)
     assert root.find(".//measure[@number='1']/direction/direction-type/metronome") is not None
     assert _struck(root) == len(sequence)
+
+
+def test_musicxml_writes_the_staff_a_note_reads_on_not_the_hand_that_played_it() -> None:
+    """A hand crossing over the other still prints where it reads. The
+    sequence carries the hand; the staff is decided as the score is written."""
+    notes = [Note(onset=i * 0.5, pitch=74 + (i % 3), duration=0.4, hand="L") for i in range(16)]
+    root = musicxml.build(NoteSequence.of(notes, tempo=120.0)).getroot()
+
+    # Rests are <note> elements too, and the empty staff is full of them.
+    staves = {n.findtext("staff") for n in root.findall(".//note") if n.find("pitch") is not None}
+    assert staves == {"1"}, f"a passage well above middle C was written on staff {staves}"

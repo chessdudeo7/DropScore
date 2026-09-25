@@ -17,6 +17,7 @@ from dropscore.score import (
     ScoreError,
     analyze,
     assign_hands,
+    assign_staves,
     estimate_key,
     estimate_tempo,
     find_downbeat,
@@ -340,7 +341,7 @@ def test_the_split_follows_the_music_but_only_so_far() -> None:
         notes.append(Note(onset=i * 0.25, pitch=base, duration=0.2, hand="R"))
         notes.append(Note(onset=i * 0.25, pitch=base + 14, duration=0.2, hand="R"))
 
-    split = assign_hands(NoteSequence.of(notes))
+    split = assign_staves(NoteSequence.of(notes))
     pairs: dict[float, list[Note]] = {}
     for note in split:
         pairs.setdefault(round(note.onset, 3), []).append(note)
@@ -357,7 +358,7 @@ def test_a_passage_far_above_middle_c_is_written_on_one_staff() -> None:
         notes.append(Note(onset=i * 0.25, pitch=76 + (i % 3), duration=0.2, hand="R"))
         notes.append(Note(onset=i * 0.25, pitch=88 + (i % 3), duration=0.2, hand="R"))
 
-    split = assign_hands(NoteSequence.of(notes))
+    split = assign_staves(NoteSequence.of(notes))
     assert all(n.hand == "R" for n in split), "a high passage was split across the staves"
 
 
@@ -1231,8 +1232,7 @@ def test_a_note_on_a_boundary_at_its_limit_goes_by_middle_c() -> None:
         for bar in range(8)
         for i, (pitch, hand) in enumerate(figure)
     ]
-    config = replace(DEFAULT, score=replace(DEFAULT.score, hand_mode="pitch"))
-    split = assign_hands(NoteSequence.of(notes), config)
+    split = assign_staves(NoteSequence.of(notes))
     assert {n.hand for n in split if n.pitch == 56} == {"L"}
 
 
@@ -1474,3 +1474,31 @@ def test_two_hands_in_the_same_reach_are_still_two_staves() -> None:
 
     assert low == {"L"}, f"the held bass went to the treble staff: {low}"
     assert high == {"R"}, f"the melody went to the bass staff: {high}"
+
+
+def test_a_hand_above_middle_c_is_a_hand_but_not_a_second_staff() -> None:
+    """The two questions, asked of the same music, with different answers.
+
+    A hand goes where the music sends it; a staff is chosen by register. Music
+    written with both hands above middle C has two hands and one staff, and one
+    label cannot say so. Held to one answer, the boundary that reads real
+    engraving correctly caps how well a hand can be followed -- 346 of 356
+    printed notes on the right staff against 2200 of 2637 synthetic notes in
+    the right hand, and letting it loose trades those for 291 and 2379.
+    """
+    notes = []
+    for i in range(24):
+        notes.append(Note(onset=i * 0.25, pitch=66 + (i % 3), duration=0.2, hand="R"))
+        notes.append(Note(onset=i * 0.25, pitch=79 + (i % 3), duration=0.2, hand="R"))
+    sequence = NoteSequence.of(notes)
+    config = replace(DEFAULT, score=replace(DEFAULT.score, hand_mode="pitch"))
+
+    hands = assign_hands(sequence, config)
+    staves = assign_staves(sequence)
+
+    assert {n.hand for n in hands if n.pitch < 72} == {"L"}, (
+        "the lower of two hands above middle C was not told from the upper"
+    )
+    assert all(n.hand == "R" for n in staves), (
+        "music entirely above middle C was written across both staves"
+    )

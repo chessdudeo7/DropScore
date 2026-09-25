@@ -402,7 +402,7 @@ def score_sequence(
 ) -> PrintedResult:
     """Score an already transcribed sequence against the printed music."""
     from .score import (  # noqa: PLC0415
-        ScoreError, assign_hands, beat_position, notate_durations, postprocess,
+        ScoreError, assign_staves, beat_position, notate_durations, postprocess, quantize,
     )
 
     # A page covers one stretch of the music, and where the recording changes
@@ -429,10 +429,19 @@ def score_sequence(
         # this fast puts several notes on one gridline -- 1755 of 2713 on the
         # etude this exists for -- and the order within a gridline is then
         # whatever the sort falls back on, which scrambled every wave: an
-        # arpeggio printed 61 65 68 65 61 came back 61 65 61 65 68. The hands
-        # are still wanted, and assigning them moves nothing.
-        return _score_by_order(piece, assign_hands(sequence, config), len(sequence))
+        # arpeggio printed 61 65 68 65 61 came back 61 65 61 65 68. The staves
+        # are still wanted, and deciding them moves nothing.
+        return _score_by_order(piece, assign_staves(sequence, config), len(sequence))
 
+    # What a page prints is staves, so that is what it is read against. The
+    # hand that played a note is a different question and is not asked here.
+    #
+    # Decided on the recording's own timing and then snapped, which is the
+    # footing the staff has always been decided on: a note's staff comes from
+    # the register around it, and which notes are around it is read from where
+    # they were played. Deciding it after the snap instead moved one note of
+    # one page onto the other staff.
+    handed, _ = quantize(assign_staves(sequence, config), analysis, config)
     written = notate_durations(handed, analysis, config)
 
     low, high = piece.window

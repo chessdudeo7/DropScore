@@ -399,6 +399,14 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
                 section.tempo,
             ))
 
+    # A note goes on the staff its register belongs to, which is not always the
+    # hand that played it: in cross-hand writing a hand crosses the other and
+    # the page still prints each note where it reads. The sequence carries the
+    # hand, so the staves are decided here.
+    from ..score import assign_staves  # noqa: PLC0415
+
+    sequence = assign_staves(sequence)
+
     # Two voices per staff. MusicXML voice numbers are unique across the part,
     # so the staves take 1-2 and 5-6, which is the convention notation editors
     # expect and keeps a voice's identity obvious when reading the file.

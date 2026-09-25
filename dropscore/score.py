@@ -883,6 +883,11 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
     only one colour was found, hands are split by a *moving* pitch boundary
     rather than a fixed middle C, so the split follows the music up and down the
     keyboard instead of cutting through it.
+
+    This is the hand, not the staff -- see ``assign_staves``. A hand goes where
+    the music sends it, so its boundary is not held anywhere near middle C: on
+    music written with both hands in one register, holding it there put 437 of
+    2637 notes in the wrong hand where letting it follow the music leaves 258.
     """
     if not len(sequence):
         return sequence
@@ -893,7 +898,7 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
     if mode == "split":
         return _relabel(sequence, lambda note: "R" if note.pitch >= 60 else "L")
     if mode == "pitch":
-        return _split_by_pitch(sequence, config)
+        return _split_by_pitch(sequence, config, clamp=False)
 
     left = sequence.hand("L")
     right = sequence.hand("R")
@@ -908,7 +913,7 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
                                    source=sequence.source)
         return sequence
 
-    return _split_by_pitch(sequence, config)
+    return _split_by_pitch(sequence, config, clamp=False)
 
 
 def _looks_like_hands(sequence: NoteSequence, config: Config = DEFAULT) -> bool:
@@ -980,7 +985,34 @@ def _sounds_across(onsets: np.ndarray, ends: np.ndarray, pitches: np.ndarray, le
     return bool((overlap > least).any())
 
 
-def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequence:
+def assign_staves(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequence:
+    """Relabel a sequence with the staff each note is printed on.
+
+    Which hand played a note and which staff it is printed on are different
+    questions, and only one of them can live in one label. A staff is chosen by
+    register -- the boundary is middle C, give or take -- while a hand goes
+    where the music sends it, which in cross-hand writing is well over that
+    line. Kept as one answer, the boundary that reads real engraving correctly
+    is the same one that caps how well a hand can be followed: held near middle
+    C it puts 346 of 356 printed notes on the staff the page prints them on and
+    2200 of 2637 synthetic notes in the hand that played them, and let loose it
+    trades those for 291 and 2379.
+
+    So the two are answered separately. This is the staff: the register split,
+    held near middle C. ``assign_hands`` is the hand.
+
+    Colour is not consulted. Where a video does colour its hands, the two
+    agree; where it does not, colour was never the answer to this question
+    anyway. Measured over the printed pages, deciding the staff by register
+    alone gives exactly what deciding it by colour gave -- 346 of 356, every
+    page identical.
+    """
+    return _split_by_pitch(sequence, config, clamp=True)
+
+
+def _split_by_pitch(
+    sequence: NoteSequence, config: Config = DEFAULT, clamp: bool = True
+) -> NoteSequence:
     """Split one colour into two hands with a boundary that follows the music.
 
     The boundary is the midpoint of the register in play around each note --
@@ -1019,8 +1051,9 @@ def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeq
         # music -- on a real capture with a pedal note repeating under a high
         # melody it rose above the pedal and sent it to the bass staff, where
         # the printed music keeps it in the treble throughout.
-        reach = cfg.staff_boundary_reach
-        split = min(max(split, MIDDLE_C - reach), MIDDLE_C + reach)
+        if clamp:
+            reach = cfg.staff_boundary_reach
+            split = min(max(split, MIDDLE_C - reach), MIDDLE_C + reach)
         # A note exactly on the boundary goes by middle C. Clamped, the
         # boundary lands on a whole pitch, and counting that pitch as upper put
         # a left hand's E2-E3-G#3 on two staves: the G#3 sat on a boundary held
@@ -1053,7 +1086,11 @@ def _split_by_pitch(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeq
             window,
             cfg.one_voice_overlap,
         )
-        if len(window) >= 4 and (window.max() - window.min() <= cfg.one_hand_span or alone):
+        # No minimum of neighbours for the reach test. Too few to judge a
+        # register from is not a reason to cut through them: a chord of
+        # three notes on its own has no window at all, fell back to the
+        # midpoint of the whole piece, and was written across both staves.
+        if window.max() - window.min() <= cfg.one_hand_span or alone:
             hand = "R" if float(np.median(window)) >= MIDDLE_C else "L"
         assigned.append(Note(note.onset, note.pitch, note.duration, hand, note.velocity))
 
