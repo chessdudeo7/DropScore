@@ -267,3 +267,36 @@ def test_order_scoring_reports_no_written_values(tmp_path: Path) -> None:
     assert result.written_right == 0
     assert "written" not in str(result)
     assert "in order" in str(result)
+
+
+def test_lining_up_will_not_step_over_the_performance_to_find_a_match() -> None:
+    """Pairing off the page's tail with a much later repeat still counts as
+    in order, and everything stepped over is then reported as notes nobody
+    asked for. On the etude this was written for, fourteen of the page's last
+    notes matched thirteen seconds late, stretching the passage from
+    twenty-three seconds to thirty-seven and sweeping up 112 real notes.
+    """
+    from dropscore.printed import _longest_in_common  # noqa: PLC0415
+
+    printed = list(range(60, 70))
+    played = list(range(60, 67)) + [90] * 40 + [67, 68, 69]
+
+    free = _longest_in_common(printed, played, penalty=0.0)
+    charged = _longest_in_common(printed, played)
+
+    assert len(free) == 10, "the free match should take the late notes"
+    assert len(charged) == 7, (
+        f"stepped over 40 notes to gain 3, pairing off {len(charged)}"
+    )
+    assert [there for _, there in charged] == list(range(7))
+
+
+def test_lining_up_tolerates_a_few_notes_too_many() -> None:
+    """Only a match that steps over a stretch of the performance is refused.
+    A transcription reading a handful of extra notes must still line up."""
+    from dropscore.printed import _longest_in_common  # noqa: PLC0415
+
+    printed = list(range(60, 70))
+    played = [60, 61, 90, 62, 63, 64, 91, 65, 66, 67, 68, 92, 69]
+
+    assert len(_longest_in_common(printed, played)) == 10

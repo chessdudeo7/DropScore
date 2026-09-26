@@ -88,6 +88,12 @@ TEMPO_TOLERANCE = 0.03
 #: How far a bar's length may sit from the printed one and still be that bar.
 BAR_TOLERANCE = 0.05
 
+#: What stepping over a played note costs when a passage is lined up by order,
+#: against 1.0 for pairing one off. Small: a transcription that reads a few
+#: notes too many should still line up, and only a match that steps over a
+#: whole stretch of the performance should be refused.
+SKIP_PENALTY = 0.25
+
 
 @dataclass(frozen=True)
 class PrintedNote:
@@ -364,24 +370,39 @@ def _score_by_order(
     )
 
 
-def _longest_in_common(printed: list[int], played: list[int]) -> list[tuple[int, int]]:
+def _longest_in_common(
+    printed: list[int], played: list[int], penalty: float | None = None
+) -> list[tuple[int, int]]:
     """Pair up as many notes as the two streams have in common, in order.
 
-    The longest common subsequence, which is the most notes that can be lined
+    Close to a longest common subsequence -- the most notes that can be lined
     up without either stream going backwards. ``difflib`` is the obvious tool
     and is the wrong one: it takes the longest matching block first and
     recurses either side of it, which on a figuration that repeats the same
     wave is not the best it could do -- given an arpeggio of fifty-six notes
     with two wrong, it paired up twenty-eight of them.
+
+    Skipping over a played note costs something, which a plain subsequence
+    does not charge for. Free, the match wanders: a figuration that repeats
+    the same wave lets the tail of the page pair off with a wave much later
+    and still count as in order, and the music in between is then reported as
+    notes nobody asked for. On the etude, fourteen of the page's last notes
+    matched thirteen seconds late, stretching the passage from twenty-three
+    seconds to thirty-seven and sweeping 112 real notes up as spurious.
+
+    Notes of the page left unmatched are free -- failing to find one is
+    already counted by not matching it. Nothing is charged before the first
+    pair or after the last, so the rest of the performance costs nothing.
     """
+    penalty = SKIP_PENALTY if penalty is None else penalty
     rows, columns = len(printed), len(played)
-    table = [[0] * (columns + 1) for _ in range(rows + 1)]
+    table = [[0.0] * (columns + 1) for _ in range(rows + 1)]
     for here in range(rows - 1, -1, -1):
         row, below, pitch = table[here], table[here + 1], printed[here]
         for there in range(columns - 1, -1, -1):
             row[there] = (
-                below[there + 1] + 1 if pitch == played[there]
-                else max(below[there], row[there + 1])
+                below[there + 1] + 1.0 if pitch == played[there]
+                else max(below[there], row[there + 1] - penalty)
             )
 
     pairs: list[tuple[int, int]] = []
@@ -390,7 +411,7 @@ def _longest_in_common(printed: list[int], played: list[int]) -> list[tuple[int,
         if printed[here] == played[there]:
             pairs.append((here, there))
             here, there = here + 1, there + 1
-        elif table[here + 1][there] >= table[here][there + 1]:
+        elif table[here + 1][there] >= table[here][there + 1] - penalty:
             here += 1
         else:
             there += 1
