@@ -544,6 +544,18 @@ class ScoreConfig:
     # notes to the treble staff for every one the other gained.
     one_hand_span: int = 10
 
+    # Neighbours consulted when deciding a staff. More than a hand uses: a
+    # page keeps one boundary for a passage, and a short window follows the
+    # music instead -- through the upper half of an arpeggio it holds only
+    # high notes, and puts a boundary in the middle of the right hand. On
+    # the Liszt that cost 43 of 223 notes. Which hand played a note is a
+    # different question and still asks eight, since a hand really does move.
+    staff_neighbours: int = 17
+
+    # How far below middle C the boundary may go. Anything from 4.5 to 7
+    # measures the same; outside that it falls away either side.
+    staff_reach_below: float = 6.0
+
     # How far a single line may range and still be kept on one staff. Wider
     # than one hand covers at once, because a line is played one note at a
     # time, but far short of what two hands reach between them: a left hand

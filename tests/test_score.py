@@ -1218,22 +1218,30 @@ def test_an_oom_pah_bass_is_not_held() -> None:
     assert all(v <= 1.0 + 1e-6 for v in lows), f"held an oom-pah bass: {lows}"
 
 
-def test_a_note_on_a_boundary_at_its_limit_goes_by_middle_c() -> None:
-    """Für Elise's third bar: E2 E3 G#3 in the left hand, E4 G#4 B4 in the right.
+def test_a_note_landing_exactly_on_the_boundary_goes_by_middle_c() -> None:
+    """A boundary lands on a whole pitch as often as between two, and counting
+    that pitch as the upper one sent a left hand's G#3 to the treble staff
+    every time Fur Elise's third bar came round.
 
-    The boundary between the two, held no lower than G#3, landed exactly on it,
-    and counting a note on the boundary as upper sent the left hand's G#3 to
-    the treble staff every time the bar came round.
+    Written against the middle of a window rather than against that bar, whose
+    six pitches on their own are not the register the page was read in.
     """
-    sixteenth = 0.167
-    figure = [(40, "L"), (52, "L"), (56, "L"), (64, "R"), (68, "R"), (71, "R")]
+    from dropscore.score import assign_staves  # noqa: PLC0415
+
+    # A window from D3 to D4 puts the middle on G#3 exactly, below middle C.
+    step = 0.2
+    figure = (50, 56, 62)
     notes = [
-        Note(onset=(bar * 6 + i) * sixteenth, pitch=pitch, duration=sixteenth * 0.9, hand=hand)
-        for bar in range(8)
-        for i, (pitch, hand) in enumerate(figure)
+        Note(onset=i * step, pitch=figure[i % 3], duration=step * 1.4, hand="R")
+        for i in range(36)
     ]
+
     split = assign_staves(NoteSequence.of(notes))
-    assert {n.hand for n in split if n.pitch == 56} == {"L"}
+
+    assert {n.hand for n in split if n.pitch == 56} == {"L"}, (
+        "a note sitting on the boundary was counted as the upper one"
+    )
+    assert {n.hand for n in split if n.pitch == 62} == {"R"}
 
 
 def _six_sixteenth_bars(sixteenth: float, bars: int = 12) -> NoteSequence:

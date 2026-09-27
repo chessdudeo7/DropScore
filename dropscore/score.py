@@ -1007,11 +1007,13 @@ def assign_staves(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeque
     alone gives exactly what deciding it by colour gave -- 346 of 356, every
     page identical.
     """
-    return _split_by_pitch(sequence, config, clamp=True)
+    return _split_by_pitch(sequence, config, clamp=True,
+                           neighbours=config.score.staff_neighbours)
 
 
 def _split_by_pitch(
-    sequence: NoteSequence, config: Config = DEFAULT, clamp: bool = True
+    sequence: NoteSequence, config: Config = DEFAULT, clamp: bool = True,
+    neighbours: int = 0,
 ) -> NoteSequence:
     """Split one colour into two hands with a boundary that follows the music.
 
@@ -1034,12 +1036,13 @@ def _split_by_pitch(
     ends = np.array([n.onset + n.duration for n in notes], dtype=float)
     pitches = np.array([n.pitch for n in notes], dtype=float)
 
+    near = neighbours or cfg.hand_neighbours
     global_split = (pitches.min() + pitches.max()) / 2.0
     assigned: list[Note] = []
 
     for index, note in enumerate(notes):
         nearest = np.argsort(np.abs(onsets - note.onset), kind="stable")
-        window = pitches[nearest[: cfg.hand_neighbours]]
+        window = pitches[nearest[:near]]
         split = (
             (window.min() + window.max()) / 2.0
             if len(window) >= 4
@@ -1051,9 +1054,17 @@ def _split_by_pitch(
         # music -- on a real capture with a pedal note repeating under a high
         # melody it rose above the pedal and sent it to the bass staff, where
         # the printed music keeps it in the treble throughout.
+        # Further below middle C than above it. What holds the boundary down
+        # is a window whose top is a melody's high note and whose bottom is a
+        # single bass note, which reads too high; nothing measured pushes it
+        # too low. A page can want it low: the Liszt prints its bass staff up
+        # to F sharp 3 and starts its treble at G sharp 3, a boundary of 55,
+        # which a reach of four either way cannot come down to.
         if clamp:
-            reach = cfg.staff_boundary_reach
-            split = min(max(split, MIDDLE_C - reach), MIDDLE_C + reach)
+            split = min(
+                max(split, MIDDLE_C - cfg.staff_reach_below),
+                MIDDLE_C + cfg.staff_boundary_reach,
+            )
         # A note exactly on the boundary goes by middle C. Clamped, the
         # boundary lands on a whole pitch, and counting that pitch as upper put
         # a left hand's E2-E3-G#3 on two staves: the G#3 sat on a boundary held
@@ -1081,8 +1092,8 @@ def _split_by_pitch(
         # single-line one hold no overlapping pair at all, where every page
         # that really uses both staves holds four or more.
         alone = len(window) >= 4 and window.max() - window.min() <= cfg.one_line_span and not _sounds_across(
-            onsets[nearest[: cfg.hand_neighbours]],
-            ends[nearest[: cfg.hand_neighbours]],
+            onsets[nearest[:near]],
+            ends[nearest[:near]],
             window,
             cfg.one_voice_overlap,
         )
