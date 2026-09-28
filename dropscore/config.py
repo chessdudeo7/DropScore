@@ -493,6 +493,10 @@ class ScoreConfig:
     # opens a gap of twice what the hand has been doing, the staccato quarter
     # opens one of exactly what it has been doing. Zero lifts the cap.
     fill_pulses: float = 1.25
+    fill_whole_bars: bool = True
+
+    # How near a whole bar a length must be to count as one.
+    whole_bar_tolerance: float = 0.1
 
     # Whether a note overlapping only its immediate neighbour is written as
     # ending where that neighbour begins. Holding into the next note is how a

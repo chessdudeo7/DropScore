@@ -968,6 +968,12 @@ def _relabel(sequence: NoteSequence, hand_of) -> NoteSequence:
     )
 
 
+def _close_to_whole(value: float, tolerance: float, least: int = 0) -> bool:
+    """Is this a whole number of bars, to within a tolerance?"""
+    nearest = round(value)
+    return nearest >= least and abs(value - nearest) < tolerance
+
+
 def _sounds_across(onsets: np.ndarray, ends: np.ndarray, pitches: np.ndarray, least: float) -> bool:
     """Is a note above the register's middle ever heard under one below it?
 
@@ -1255,6 +1261,7 @@ def notate_durations(
 
     step = analysis.beat / cfg.steps_per_beat if cfg.steps_per_beat > 0 else 0.0
     written: list[Note] = []
+    everyone = np.array(sorted(n.onset for n in sequence))
 
     for hand in ("L", "R"):
         voice = sorted(sequence.hand(hand), key=lambda n: n.onset)
@@ -1267,6 +1274,7 @@ def notate_durations(
             if later - earlier > 1e-6
         )
         pulse = spacings[len(spacings) // 2] if spacings else 0.0
+        downbeat = beat_position(analysis.downbeat_phase, analysis)
         for index, note in enumerate(voice):
             # In the beat of the stretch this note falls in, which is not the
             # first stretch's where the piece changes tempo.
@@ -1297,12 +1305,41 @@ def notate_durations(
                 # is worse -- it lets a sixteenth held a fifth of the way to a
                 # distant onset count as reaching, and cost Pietschmann 3 six
                 # values and Fur Elise two.
+                # A note that starts on a bar line and has whole bars to
+                # itself before its staff speaks again is written as lasting
+                # them: a bass line does not stop dead for a bar. Unless the
+                # key was already down for a whole bar or more, which says its
+                # own length -- two bars of silence after a bar-long note is a
+                # bar and then a rest, and filling it wrote one page's three
+                # beats as six.
+                bars = False
+                if cfg.fill_whole_bars and here.beats_per_bar:
+                    per_bar = here.beat * here.beats_per_bar
+                    place = (beat_position(note.onset, analysis) - downbeat) / here.beats_per_bar
+                    reach, covered = gap / per_bar, note.duration / per_bar
+                    # And only while the rest of the music carries on. A staff
+                    # falling silent under a line that keeps going is a note
+                    # being held; a piece that stops is a rest, and filling
+                    # that wrote a note followed by a bar of silence as a
+                    # bar-long note.
+                    others = int(
+                        np.searchsorted(everyone, following - 1e-6)
+                        - np.searchsorted(everyone, note.onset + 1e-6)
+                    )
+                    bars = (
+                        others > 0
+                        and
+                        _close_to_whole(place, cfg.whole_bar_tolerance)
+                        and _close_to_whole(reach, cfg.whole_bar_tolerance, least=1)
+                        and not _close_to_whole(covered, cfg.whole_bar_tolerance, least=1)
+                    )
                 if gap > 0 and (
                     cfg.legato_ratio <= held < 1.0
                     or gap <= cfg.articulation_gap * analysis.beat + step / 2
+                    or bars
                 ):
                     filled = gap
-                    if cfg.fill_pulses > 0 and pulse > 0:
+                    if cfg.fill_pulses > 0 and pulse > 0 and not bars:
                         filled = min(filled, pulse * cfg.fill_pulses * here.beat)
                     if step > 0:
                         filled = round(filled / step) * step

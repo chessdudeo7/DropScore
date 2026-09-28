@@ -865,12 +865,12 @@ def test_a_note_inside_a_chord_is_written_as_reaching_the_next_one() -> None:
     assert all(abs(v - 1.0) < 0.05 for v in values), f"wrote {values[:4]}"
 
 
-def _analysis(tempo: float = 100.0, key: str = "E minor"):
+def _analysis(tempo: float = 100.0, key: str = "E minor", beats_per_bar: int = 4):
     from dropscore.score import Analysis
 
     return Analysis(
         tempo=tempo, beat=60.0 / tempo, beat_phase=0.0, downbeat_phase=0.0,
-        beats_per_bar=4, key=key, tempo_confidence=0.7, key_confidence=0.1,
+        beats_per_bar=beats_per_bar, key=key, tempo_confidence=0.7, key_confidence=0.1,
     )
 
 
@@ -1509,4 +1509,52 @@ def test_a_hand_above_middle_c_is_a_hand_but_not_a_second_staff() -> None:
     )
     assert all(n.hand == "R" for n in staves), (
         "music entirely above middle C was written across both staves"
+    )
+
+
+def test_a_bass_note_with_a_bar_to_itself_is_held_for_it() -> None:
+    """A staff falling silent while the music carries on is a note held, not
+    a note and a bar of rest. A bass line does not stop dead for a bar.
+
+    Measured on a real page: bass notes printed as three and six beats came
+    back as half a beat, because the hand's pulse -- a bass that moves every
+    beat in some bars and every three in others -- caps how far a note may be
+    written as reaching, and its median says one beat.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = []
+    for bar in range(8):  # a bass note a bar, under a pulse that keeps going
+        notes.append(Note(onset=bar * 3 * beat, pitch=48, duration=beat * 0.4, hand="L"))
+        for step in range(3):
+            notes.append(
+                Note(onset=(bar * 3 + step) * beat, pitch=64, duration=beat * 0.9, hand="R")
+            )
+    written = notate_durations(NoteSequence.of(notes), _analysis(beats_per_bar=3))
+    bass = [n.duration / beat for n in sorted(written) if n.pitch == 48][:-1]
+
+    assert bass and all(abs(v - 3.0) < 0.2 for v in bass), (
+        f"a bass note with a bar to itself was written as {bass[:3]}"
+    )
+
+
+def test_a_note_already_held_a_whole_bar_is_not_stretched_further() -> None:
+    """Two bars of silence after a bar-long note is a bar and then a rest.
+    Taking the whole gap wrote one page's three beats as six."""
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = []
+    for pair in range(6):  # a bar-long bass note every two bars
+        notes.append(Note(onset=pair * 6 * beat, pitch=48, duration=3 * beat, hand="L"))
+        for step in range(6):
+            notes.append(
+                Note(onset=(pair * 6 + step) * beat, pitch=64, duration=beat * 0.9, hand="R")
+            )
+    written = notate_durations(NoteSequence.of(notes), _analysis(beats_per_bar=3))
+    bass = [n.duration / beat for n in sorted(written) if n.pitch == 48][:-1]
+
+    assert bass and all(v < 4.0 for v in bass), (
+        f"a note already held a bar was stretched over the rest after it: {bass[:3]}"
     )
