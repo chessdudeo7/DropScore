@@ -494,6 +494,7 @@ class ScoreConfig:
     # opens one of exactly what it has been doing. Zero lifts the cap.
     fill_pulses: float = 1.25
     fill_whole_bars: bool = True
+    fill_last_of_figure: bool = True
 
     # How near a whole bar a length must be to count as one.
     whole_bar_tolerance: float = 0.1
