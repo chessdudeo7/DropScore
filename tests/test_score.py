@@ -1558,3 +1558,28 @@ def test_a_note_already_held_a_whole_bar_is_not_stretched_further() -> None:
     assert bass and all(v < 4.0 for v in bass), (
         f"a note already held a bar was stretched over the rest after it: {bass[:3]}"
     )
+
+
+def test_the_last_note_of_a_figure_is_worth_what_the_figure_was_worth() -> None:
+    """A note ending a figure has nothing to reach, and taking the whole
+    silence after it writes the rest as part of the note.
+
+    Fur Elise's left hand plays three sixteenths and then waits two beats.
+    The first two are written from the gap to the next; the third was left at
+    whatever the key was held for, half a sixteenth, seven times over.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    sixteenth = beat / 2
+    notes = []
+    for bar in range(8):  # three sixteenths, then two beats of air
+        for step, pitch in enumerate((45, 52, 57)):
+            notes.append(Note(onset=bar * 3 * beat + step * sixteenth, pitch=pitch,
+                              duration=sixteenth * 0.5, hand="L"))
+    written = sorted(notate_durations(NoteSequence.of(notes), _analysis(beats_per_bar=3)))
+    last = [n.duration / beat for n in written if n.pitch == 57][:-1]
+
+    assert last and all(abs(v - 0.5) < 0.1 for v in last), (
+        f"the note ending each figure was written as {last[:3]}, not the sixteenth it is"
+    )

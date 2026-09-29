@@ -1274,6 +1274,12 @@ def notate_durations(
             if later - earlier > 1e-6
         )
         pulse = spacings[len(spacings) // 2] if spacings else 0.0
+        # And how far apart they were falling just before each note, which
+        # is what says the value of the one that ends a figure.
+        steps = [
+            beat_position(later, analysis) - beat_position(earlier, analysis)
+            for earlier, later in zip(onsets, onsets[1:])
+        ]
         downbeat = beat_position(analysis.downbeat_phase, analysis)
         for index, note in enumerate(voice):
             # In the beat of the stretch this note falls in, which is not the
@@ -1333,12 +1339,32 @@ def notate_durations(
                         and _close_to_whole(reach, cfg.whole_bar_tolerance, least=1)
                         and not _close_to_whole(covered, cfg.whole_bar_tolerance, least=1)
                     )
+                # A note ending a figure has nothing to reach, and taking the
+                # whole silence after it writes the rest as part of the note.
+                # What it is worth is what the figure has been doing: three
+                # sixteenths, where the first two are written from the gap to
+                # the next and the third had two beats of air after it.
+                before = steps[index - 1] if index else 0.0
+                figure = bool(
+                    cfg.fill_last_of_figure
+                    and before > 0
+                    and gap > before * cfg.fill_pulses * here.beat
+                )
                 if gap > 0 and (
                     cfg.legato_ratio <= held < 1.0
                     or gap <= cfg.articulation_gap * analysis.beat + step / 2
                     or bars
+                    or figure
                 ):
                     filled = gap
+                    # A note ending a figure has nothing to reach, and taking
+                    # the whole silence after it writes the rest as part of
+                    # the note. What it is worth is what the figure has been
+                    # doing: three sixteenths where the first two are written
+                    # from the gap to the next and the third had two beats of
+                    # air after it.
+                    if figure and not bars:
+                        filled = min(filled, before * here.beat)
                     if cfg.fill_pulses > 0 and pulse > 0 and not bars:
                         filled = min(filled, pulse * cfg.fill_pulses * here.beat)
                     if step > 0:
