@@ -1233,6 +1233,46 @@ def quantize(
     )
 
 
+def _next_in_line(
+    voice: list[Note], index: int, reach: int, wait: float, pedal: int
+) -> float | None:
+    """When this note's own line speaks again, rather than its hand.
+
+    One staff can print two lines, and a hand holding a note while another
+    moves far below it is not a hand playing two notes in a row. Measured to
+    the next onset in the hand, such a note is worth only what the line below
+    leaves it: on the Interstellar arrangement, whose melody is held over a
+    repeated E an octave under it, four dotted halves and a two-bar note came
+    back as quarters and a second two-bar note as a dotted half -- while the
+    same notes' octave partners in the other hand, which had no line beneath
+    them, came back right off tiles just as short.
+
+    Only a line running well below is stepped over. Anything at or above the
+    note is its own line carrying on, so a bass note keeps the melody above it
+    as its next onset and is never stretched across it.
+    """
+    note = voice[index]
+    later = [n for n in voice[index + 1 :] if n.onset > note.onset + 1e-6]
+    under: list[Note] = []
+    for other in later:
+        if other.onset - note.onset > wait:
+            break
+        if other.pitch > note.pitch - reach:
+            # Its own line speaks again -- but what was stepped over has to
+            # have been a line, and one pitch struck over and over is what a
+            # pedal or an ostinato is. A single note below is a melody
+            # leaping down and climbing back, which is one line and not two:
+            # Fur Elise's right hand drops a ninth to C4 and rises through
+            # it, and stepping over that cost five of its written values.
+            if len(under) >= pedal and len({n.pitch for n in under}) == 1:
+                return other.onset
+            break
+        under.append(other)
+    # Its line never came back in time, or nothing below it was a pedal: the
+    # note is measured to whatever its hand did next, as it always was.
+    return later[0].onset if later else None
+
+
 def notate_durations(
     sequence: NoteSequence, analysis: Analysis, config: Config = DEFAULT
 ) -> NoteSequence:
@@ -1290,8 +1330,12 @@ def notate_durations(
             # The next *different* onset. Notes struck together are one event,
             # and measuring to the nearest of them gives a gap of nothing, so
             # no note inside a chord was ever written as reaching anything.
-            following = next(
-                (t for t in onsets[index + 1 :] if t > note.onset + 1e-6), None
+            following = _next_in_line(
+                voice,
+                index,
+                cfg.voice_reach,
+                cfg.voice_wait * here.beat * max(1, here.beats_per_bar),
+                cfg.voice_pedal,
             )
             if following is not None:
                 gap = following - note.onset

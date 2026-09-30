@@ -865,6 +865,61 @@ def test_a_note_inside_a_chord_is_written_as_reaching_the_next_one() -> None:
     assert all(abs(v - 1.0) < 0.05 for v in values), f"wrote {values[:4]}"
 
 
+def test_a_melody_over_a_pedal_is_written_at_its_own_spacing() -> None:
+    """One staff can print two lines, and a note held over a moving one is not
+    a note followed by the next thing that hand played.
+
+    The Interstellar arrangement holds its melody over a repeated E an octave
+    under it. Measured to the next onset in the hand, every dotted half came
+    back a quarter -- five of them -- while the same notes' octave partners in
+    the other hand, which had nothing beneath them, came back right.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = []
+    for i in range(27):                       # a pedal on every beat
+        notes.append(Note(onset=i * beat, pitch=64, duration=0.2, hand="R"))
+    for bar in range(1, 9):                   # a melody held over it, a bar each,
+        notes.append(                         # entering after the pedal, as it does
+            Note(onset=bar * 3 * beat, pitch=72 + bar % 3, duration=0.2, hand="R")
+        )
+    sequence = NoteSequence.of(sorted(notes, key=lambda n: n.onset))
+    analysis = analyze(sequence)
+
+    written = notate_durations(sequence, analysis)
+    held = [n.duration / analysis.beat for n in written if n.pitch > 64][:-1]
+    assert all(abs(v - 3.0) < 0.2 for v in held), f"wrote the melody {held}"
+    pedal = [n.duration / analysis.beat for n in written if n.pitch == 64][:-1]
+    assert all(abs(v - 1.0) < 0.2 for v in pedal), f"stretched the pedal {pedal}"
+
+
+def test_a_line_leaping_down_and_back_is_one_line() -> None:
+    """A single note below is a melody leaping, not a second voice.
+
+    Fur Elise's right hand drops a ninth to C4 and climbs back through it. Read
+    as a line of its own, the note above it is measured past the leap to wherever
+    the line next comes near, and the values around it stop agreeing with the
+    page: five of that page's went wrong until a lower line had to repeat
+    before it counted as one.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = []
+    for bar in range(8):
+        base = bar * 4 * beat
+        notes.append(Note(onset=base, pitch=69, duration=0.2, hand="R"))
+        for step, pitch in enumerate((60, 64, 69), start=1):
+            notes.append(Note(onset=base + step * beat, pitch=pitch, duration=0.2, hand="R"))
+    sequence = NoteSequence.of(sorted(notes, key=lambda n: n.onset))
+    analysis = analyze(sequence)
+
+    written = notate_durations(sequence, analysis)
+    values = [n.duration / analysis.beat for n in written][:-1]
+    assert all(abs(v - 1.0) < 0.05 for v in values), f"read the leap as a line: {values[:6]}"
+
+
 def _analysis(tempo: float = 100.0, key: str = "E minor", beats_per_bar: int = 4):
     from dropscore.score import Analysis
 

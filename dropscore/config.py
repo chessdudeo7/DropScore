@@ -575,6 +575,34 @@ class ScoreConfig:
     # little however cleanly it is played.
     one_voice_overlap: float = 0.055
 
+    # How far below a note another may run and still count as a line of its
+    # own rather than the same one carrying on. A staff can print two: on the
+    # Interstellar arrangement a melody is held over a repeated E an octave
+    # or so under it, and measuring each melody note to the next onset in the
+    # hand cost six of the page's values. Their octave partners in the other
+    # hand, which had nothing under them, came back right off tiles just as
+    # short; every held note on that page is now written as printed. Anything a
+    # fifth or more below is another line, and a step is never that far.
+    # Three to seven all measure the same; at eight the octave that separates
+    # those two lines starts reading as one, and by nine nothing is stepped
+    # over at all and the page is back where it was.
+    voice_reach: int = 7
+
+    # How many notes the line below must repeat before it counts as a line of
+    # its own. One pitch struck over and over is a pedal or an ostinato, and a
+    # note above it is being held; a single note below is a melody leaping
+    # down and climbing back, which is one line. Fur Elise's right hand drops
+    # a ninth to C4 and rises through it, and reading that as two lines cost
+    # five of its written values -- 88 of 104 down to 83.
+    voice_pedal: int = 2
+
+    # And how long a line may be waited for, in bars. A note is only held
+    # under a lower line while its own line comes back; past this the silence
+    # is a rest and the note keeps the next onset it actually had. Anything
+    # from three bars to eight measures the same, since nothing waits that
+    # long; under two it starts cutting the two-bar notes short.
+    voice_wait: float = 3.0
+
     # Onsets closer than this are struck together, not one after the other. A
     # key cannot be struck, released and struck again inside it.
     repeat_min_gap: float = 0.05
