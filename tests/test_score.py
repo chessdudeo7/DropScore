@@ -920,6 +920,60 @@ def test_a_line_leaping_down_and_back_is_one_line() -> None:
     assert all(abs(v - 1.0) < 0.05 for v in values), f"read the leap as a line: {values[:6]}"
 
 
+def test_a_left_hand_above_middle_c_keeps_its_own_staff() -> None:
+    """A page can divide well above middle C, and a fixed reach cannot get there.
+
+    The Silvestri arrangement alternates its left hand between C sharp 4 and
+    G sharp 4 under chords from C sharp 5 up. The boundary the register asks
+    for is about 70; held to four semitones either side of middle C it cannot
+    rise past 64, and all eight of the upper ostinato notes were printed on
+    the treble staff. What licenses it to rise is the chord struck against
+    that left hand, sixteen semitones above it, which no one hand spans.
+    """
+    from dropscore.score import assign_staves  # noqa: PLC0415
+
+    beat = 0.46
+    notes = []
+    for step in range(16):                       # the left hand, alternating
+        notes.append(
+            Note(onset=step * beat / 2, pitch=61 if step % 2 == 0 else 68,
+                 duration=0.2, hand="R")
+        )
+    for bar in range(4):                         # chords well above it
+        for pitch in (77, 80):
+            notes.append(Note(onset=bar * 2 * beat, pitch=pitch, duration=0.8, hand="R"))
+    sequence = NoteSequence.of(sorted(notes, key=lambda n: n.onset))
+
+    staves = {(n.onset, n.pitch): n.hand for n in assign_staves(sequence)}
+    upper = [h for (_, pitch), h in staves.items() if pitch == 68]
+    assert upper and all(h == "L" for h in upper), f"sent the left hand up: {upper}"
+    treble = [h for (_, pitch), h in staves.items() if pitch >= 77]
+    assert treble and all(h == "R" for h in treble), f"sent the chords down: {treble}"
+
+
+def test_a_bass_page_is_not_divided_by_its_own_voicings() -> None:
+    """A chord can say the staves part higher than usual; never that they part
+    lower.
+
+    A left hand alone voices an octave and a fifth. Read as two hands parting
+    at its widest interval, the boundary is dragged under the page's own
+    notes and the top of every chord goes to the treble staff -- one such page
+    kept only 8 of its 14.
+    """
+    from dropscore.score import assign_staves  # noqa: PLC0415
+
+    beat = 0.46
+    notes = []
+    for step in range(10):
+        base = step * beat
+        for pitch in (33, 45, 52):               # an octave, then a fifth
+            notes.append(Note(onset=base, pitch=pitch, duration=0.4, hand="R"))
+    sequence = NoteSequence.of(sorted(notes, key=lambda n: n.onset))
+
+    staves = [n.hand for n in assign_staves(sequence)]
+    assert all(h == "L" for h in staves), f"split a bass page: {sorted(set(staves))}"
+
+
 def _analysis(tempo: float = 100.0, key: str = "E minor", beats_per_bar: int = 4):
     from dropscore.score import Analysis
 

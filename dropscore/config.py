@@ -603,6 +603,16 @@ class ScoreConfig:
     # long; under two it starts cutting the two-bar notes short.
     voice_wait: float = 3.0
 
+    # How wide a simultaneity must be before it is read as two hands rather
+    # than one hand's chord, and so before its widest interval is taken to be
+    # where the staves part. Twelve to sixteen all measure the same. Below
+    # that, a hand's own spread chord is read as two -- the Interstellar
+    # arrangement strikes its treble E over a bass a fifth under it, twelve
+    # semitones in all, and reading that as two hands cost nine of its notes.
+    # Above it the Silvestri's own nineteen stops counting, and the eight
+    # notes this exists for go back to the wrong staff.
+    staff_chord_span: int = 14
+
     # Onsets closer than this are struck together, not one after the other. A
     # key cannot be struck, released and struck again inside it.
     repeat_min_gap: float = 0.05

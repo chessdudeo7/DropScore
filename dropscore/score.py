@@ -1017,6 +1017,44 @@ def assign_staves(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSeque
                            neighbours=config.score.staff_neighbours)
 
 
+def _chord_ceiling(
+    onsets: np.ndarray, pitches: np.ndarray, together: float, span: int
+) -> float | None:
+    """How high the staff boundary may go before it cuts a chord in half.
+
+    Notes struck at once and inside a hand's reach are that hand's chord, and
+    the boundary cannot pass through one. Where a simultaneity is wider than a
+    hand it is two hands, and its widest interval is where they part; the
+    bottom of the upper group is then the lowest note known to be printed on
+    the upper staff, and the boundary has to stay under it.
+
+    Read only as leave to go higher than the fixed reach from middle C, never
+    as a reason to come down: a bass page's own wide voicings, read as two
+    hands, put the boundary under its own notes and cost one page six of its
+    fourteen. The Silvestri strikes its bass C sharp against a chord sixteen
+    semitones up, which no hand spans, and that is what lets the boundary
+    climb to where the page really divides -- about 70, which a fixed reach
+    of four semitones cannot come near, and for want of which eight notes of
+    an alternating left hand were printed on the wrong staff.
+    """
+    order = np.argsort(onsets, kind="stable")
+    onsets, pitches = onsets[order], pitches[order]
+    lowest: float | None = None
+    start = 0
+    for index in range(len(onsets) + 1):
+        if index < len(onsets) and onsets[index] - onsets[start] <= together:
+            continue
+        chord = np.unique(pitches[start:index])
+        start = index
+        if len(chord) < 2 or chord[-1] - chord[0] <= span:
+            continue
+        gaps = np.diff(chord)
+        upper = float(chord[int(np.argmax(gaps)) + 1])
+        if lowest is None or upper < lowest:
+            lowest = upper
+    return lowest
+
+
 def _split_by_pitch(
     sequence: NoteSequence, config: Config = DEFAULT, clamp: bool = True,
     neighbours: int = 0,
@@ -1067,10 +1105,26 @@ def _split_by_pitch(
         # to F sharp 3 and starts its treble at G sharp 3, a boundary of 55,
         # which a reach of four either way cannot come down to.
         if clamp:
-            split = min(
-                max(split, MIDDLE_C - cfg.staff_reach_below),
-                MIDDLE_C + cfg.staff_boundary_reach,
+            # A chord says where the two staves part far better than a fixed
+            # reach from middle C does, so where the music around this note
+            # holds one, the boundary may rise to just under it. Only where
+            # nothing struck together says anything does the fixed ceiling
+            # stand in.
+            ceiling = _chord_ceiling(
+                onsets[nearest[:near]],
+                pitches[nearest[:near]],
+                cfg.repeat_min_gap,
+                cfg.staff_chord_span,
             )
+            # Only ever upwards. A chord can say the staves part higher than
+            # the default reach allows; it is never a reason to pull the
+            # boundary down, and read the other way a bass page's own wide
+            # voicings drag it under its own notes -- one such page went from
+            # all 14 to 8.
+            highest = MIDDLE_C + cfg.staff_boundary_reach
+            if ceiling is not None:
+                highest = max(highest, ceiling - 0.5)
+            split = min(max(split, MIDDLE_C - cfg.staff_reach_below), highest)
         # A note exactly on the boundary goes by middle C. Clamped, the
         # boundary lands on a whole pitch, and counting that pitch as upper put
         # a left hand's E2-E3-G#3 on two staves: the G#3 sat on a boundary held
