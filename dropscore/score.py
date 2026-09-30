@@ -1562,7 +1562,23 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
     # The metre first: it settles what a beat is counted as, and the beats are
     # tracked in that unit. Tracked in one and reported in another, every
     # written value came out a third of what it should be.
+    counted = beat
     beats_per_bar, beat_type, beat = _meter(sequence, beat, tatum, phase, config)
+    # Which gridline is the beat was settled for the beat the tempo came back
+    # with, and the metre may count a shorter one. The old answer does not
+    # carry over: asked of a beat of three tatums it picked one of three
+    # lines, and a beat of two has two lines to choose between, one of which
+    # the first question never offered. On Fur Elise it had been answering
+    # about the dotted eighth and the answer was kept for the eighth, leaving
+    # the steady grid a sixteenth out -- every bar line sat at 26.5, 29.5,
+    # 38.5 rather than on the music.
+    #
+    # Worth nothing on the current pages, and kept for being right rather than
+    # for what it scores: they all reach ``track_beats``, which lays its own
+    # chain and takes the phase it is handed no further. It is the grid used
+    # where the tempo is steady enough not to be tracked that this corrects.
+    if beat != counted:
+        phase = _beat_phase(sequence, tatum, phase % tatum, beat)
     beat_times = (
         track_beats(sequence, beat, phase, config)
         if tempo_confidence < cfg.steady_tempo
