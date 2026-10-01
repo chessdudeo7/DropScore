@@ -229,6 +229,34 @@ def test_a_piece_scored_by_order_ignores_where_the_notes_fell(tmp_path: Path) ->
     assert result.f1 == pytest.approx(1.0)
 
 
+def test_notes_the_page_stacks_may_come_back_in_either_order(tmp_path: Path) -> None:
+    """A chord has no order, so the recording settling it the other way round
+    is not a note missing and another invented.
+
+    Un Sospiro stacks a melody note over the bass of its arpeggio. Six came
+    back with the bass first, and the page scored 223 of 232 with 7 spurious
+    where it had really lost 3 and invented 1.
+    """
+    notes = _line()
+    # A melody note struck with the note at index 10, written above it.
+    for note in notes[10:]:
+        note[1] += 1
+    notes.insert(10, [80, notes[10][1], 0, "R"])
+
+    played = _freely(notes)
+    order = sorted(played, key=lambda n: n.onset)
+    # The recording resolves the bass of that chord first, the melody second.
+    order[10], order[11] = (
+        Note(onset=order[10].onset, pitch=order[11].pitch, duration=order[11].duration),
+        Note(onset=order[11].onset, pitch=order[10].pitch, duration=order[10].duration),
+    )
+
+    result = score_sequence(load(_order_piece(tmp_path, notes)), NoteSequence.of(order))
+
+    assert result.matched == len(notes), "a stacked note was counted missing"
+    assert result.f1 == pytest.approx(1.0)
+
+
 def test_order_scoring_finds_the_passage_inside_a_longer_recording(tmp_path: Path) -> None:
     """A page covers eight bars of a recording that runs for a hundred, and
     only the stretch it covers may be counted against its precision."""

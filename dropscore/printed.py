@@ -297,6 +297,55 @@ class PrintedResult:
         return cls(**known)
 
 
+def _settle_chords(
+    pairs: list[tuple[int, int]],
+    scored: list[PrintedNote],
+    printed: list[int],
+    pitches: list[int],
+    offset: int,
+) -> list[tuple[int, int]]:
+    """Pair up what the alignment dropped only for the order a chord came in.
+
+    Reading a page by order asks that every note comes back in its turn, and
+    notes the page stacks have no turn: which of them is written first in the
+    file is an arbitrary choice made when the page was read. The recording
+    settles them in whatever order the tiles resolve, a few tens of
+    milliseconds apart, and an alignment that may not go backwards then has
+    to drop one -- counting it missing and the note it swapped with spurious,
+    twice wrong for something neither the page nor the player decided.
+
+    Un Sospiro stacks a melody note over the bass of its arpeggio eight
+    times. Six came back with the bass first, and the page was scored at 223
+    of 232 with 7 spurious where it had really lost 3 and invented 1.
+
+    Only inside a chord, and only onto a note of the very pitch that is
+    missing. Where the page records no chords this does nothing at all.
+    """
+    chords: dict[float, list[int]] = {}
+    for index, note in enumerate(scored):
+        chords.setdefault(note.beat, []).append(index)
+    where = dict(pairs)
+    taken = {played for _, played in pairs}
+    found: list[tuple[int, int]] = []
+    for index, note in enumerate(scored):
+        if index in where:
+            continue
+        mates = chords[note.beat]
+        anchors = [where[mate] for mate in mates if mate in where]
+        if len(mates) < 2 or not anchors:
+            continue
+        # No further from where its chord landed than the chord is wide.
+        reach = len(mates)
+        for there in range(min(anchors) - reach, max(anchors) + reach + 1):
+            if there in taken or not 0 <= offset + there < len(pitches):
+                continue
+            if pitches[offset + there] == printed[index]:
+                found.append((index, there))
+                taken.add(there)
+                break
+    return sorted(pairs + found)
+
+
 def _score_by_order(
     piece: PrintedPiece, handed: NoteSequence, detected: int
 ) -> PrintedResult:
@@ -356,6 +405,7 @@ def _score_by_order(
         )
 
     pairs, offset = best
+    pairs = _settle_chords(pairs, piece.scored(), printed, pitches, offset)
     staff_right = sum(played[offset + there].hand == staves[here] for here, there in pairs)
     return PrintedResult(
         name=piece.name,
