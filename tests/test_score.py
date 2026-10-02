@@ -974,6 +974,33 @@ def test_a_bass_page_is_not_divided_by_its_own_voicings() -> None:
     assert all(h == "L" for h in staves), f"split a bass page: {sorted(set(staves))}"
 
 
+def test_a_hand_lifting_late_off_a_figure_is_not_a_longer_note() -> None:
+    """The last note of a figure is worth the figure's own step.
+
+    Fur Elise's left hand holds the A that ends each A-E-A about half again as
+    long as the two sixteenths before it, then rests for five beats. The page
+    writes all three alike, and taking the last at its played length wrote it
+    half as long again as the two it belongs with.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = []
+    for bar in range(8):
+        base = bar * 6 * beat
+        for step, pitch in enumerate((45, 52, 57)):      # the figure, then silence
+            notes.append(
+                Note(onset=base + step * beat, pitch=pitch,
+                     duration=beat * (1.5 if step == 2 else 0.9), hand="L")
+            )
+    sequence = NoteSequence.of(sorted(notes, key=lambda n: n.onset))
+    analysis = analyze(sequence)
+
+    written = notate_durations(sequence, analysis)
+    last = [n.duration / analysis.beat for n in written if n.pitch == 57][:-1]
+    assert all(abs(v - 1.0) < 0.2 for v in last), f"wrote the last of the figure {last}"
+
+
 def _analysis(tempo: float = 100.0, key: str = "E minor", beats_per_bar: int = 4):
     from dropscore.score import Analysis
 

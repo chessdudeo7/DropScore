@@ -493,6 +493,13 @@ class ScoreConfig:
     # opens a gap of twice what the hand has been doing, the staccato quarter
     # opens one of exactly what it has been doing. Zero lifts the cap.
     fill_pulses: float = 1.25
+
+    # How much longer than its figure's step the last note of one may have
+    # been held and still be written as that step. A hand lifting late is not
+    # a longer note; a key held twice the step really is. Anything from 1.55
+    # to 2 measures the same, and 1.75 is the middle of it -- under 1.5 the
+    # late lift is written as played, and by 2.5 a held note is being cut.
+    figure_overshoot: float = 1.75
     fill_whole_bars: bool = True
     fill_last_of_figure: bool = True
 

@@ -1467,10 +1467,29 @@ def notate_durations(
                         filled = min(filled, pulse * cfg.fill_pulses * here.beat)
                     if step > 0:
                         filled = round(filled / step) * step
-                    # Enforce the invariant after rounding, not before it: a
-                    # gap under half a step rounds to nothing, which is not a
-                    # note at all.
-                    duration = max(duration, filled)
+                    # A note ending a figure is worth the figure's own step,
+                    # and a hand lifting late off the last of them does not
+                    # make it longer: Fur Elise's left hand holds the A that
+                    # ends each A-E-A about half again as long as the two
+                    # sixteenths before it, with five beats of silence after,
+                    # and the page writes all three alike. So the figure's
+                    # step may shorten as well as lengthen -- but only back to
+                    # a note that was nearly that long already. Past that the
+                    # key really was held: the Interstellar arrangement holds
+                    # one of its dotted halves for all three beats over a
+                    # pedal stepping once a beat, and cutting that to the
+                    # pedal's step cost two of its values and one elsewhere.
+                    if (
+                        figure
+                        and not bars
+                        and 0 < duration <= cfg.figure_overshoot * filled
+                    ):
+                        duration = filled
+                    else:
+                        # Enforce the invariant after rounding, not before it:
+                        # a gap under half a step rounds to nothing, which is
+                        # not a note at all.
+                        duration = max(duration, filled)
 
                 # A note that outlasts the next onset is a voice held under a
                 # moving one, and the gap that matters is from where it ends,
