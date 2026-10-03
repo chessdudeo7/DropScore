@@ -1001,6 +1001,31 @@ def test_a_hand_lifting_late_off_a_figure_is_not_a_longer_note() -> None:
     assert all(abs(v - 1.0) < 0.2 for v in last), f"wrote the last of the figure {last}"
 
 
+def test_a_slur_reaching_exactly_the_note_after_next_is_still_a_slur() -> None:
+    """Where a note stops being slurred and starts being held is the note after
+    next. One reaching exactly that far has covered two notes and no more.
+
+    Judged half a step short of that line, a note landing right on it read as
+    a voice held under the music and was written at twice its printed length.
+    """
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    step = beat / 2
+    # Each note is taken before the one before it is let go, and the overlap
+    # runs exactly to where the note after next begins.
+    notes = [
+        Note(onset=i * step, pitch=62 + (i % 4), duration=step * 2, hand="R")
+        for i in range(32)
+    ]
+    sequence = NoteSequence.of(notes)
+    analysis = analyze(sequence)
+
+    written = notate_durations(sequence, analysis)
+    values = [n.duration / analysis.beat for n in written][:-2]
+    assert all(abs(v - 0.5) < 0.1 for v in values), f"read a slur as a sustain: {values[:5]}"
+
+
 def _analysis(tempo: float = 100.0, key: str = "E minor", beats_per_bar: int = 4):
     from dropscore.score import Analysis
 

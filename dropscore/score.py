@@ -1506,6 +1506,13 @@ def notate_durations(
                 # longer value. Only ever shortens to where the next note
                 # begins, so a held voice -- which runs past a whole figure,
                 # and is what the branch below exists for -- is untouched.
+                #
+                # The line between them is where the note after next begins. A
+                # note reaching exactly that far has covered two notes and no
+                # more, which is a slur over two; one that runs past it is
+                # holding under the music. Drawn half a step short of that
+                # line instead, a note landing right on it read as a sustain
+                # and was written twice its printed length.
                 beyond = next(
                     (t for t in onsets[index + 1 :] if t > following + 1e-6), None
                 )
@@ -1513,7 +1520,7 @@ def notate_durations(
                     cfg.overlap_is_legato
                     and duration <= note.duration + 1e-9
                     and following <= end
-                    and (beyond is None or end < beyond - step / 2)
+                    and (beyond is None or end <= beyond + cfg.legato_reach * step)
                 ):
                     duration = gap
                 elif duration <= note.duration + 1e-9 and following <= end:

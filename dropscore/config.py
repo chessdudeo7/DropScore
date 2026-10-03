@@ -514,6 +514,13 @@ class ScoreConfig:
     # moving one and is left alone.
     overlap_is_legato: bool = True
 
+    # How far past the note after next a slurred pair may reach, in steps of
+    # the grid -- slack for the jitter in a measured onset, not room to run
+    # on. A quarter to a whole step all measure the same; by two steps a note
+    # genuinely held under a moving line is being cut, and one page lost
+    # three of its values.
+    legato_reach: float = 0.5
+
     # How near a beat line a note must start, in beats, before its value is
     # taken out to the end of that beat. A note on a beat, released early and
     # engraved as played, leaves a rest running across the next beat line,
