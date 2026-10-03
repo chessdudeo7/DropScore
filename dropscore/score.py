@@ -1463,27 +1463,29 @@ def notate_durations(
                     # air after it.
                     if figure and not bars:
                         filled = min(filled, before * here.beat)
-                    if cfg.fill_pulses > 0 and pulse > 0 and not bars:
-                        filled = min(filled, pulse * cfg.fill_pulses * here.beat)
+                    if cfg.fill_reach > 0 and pulse > 0 and not bars:
+                        filled = min(filled, pulse * cfg.fill_reach * here.beat)
                     if step > 0:
                         filled = round(filled / step) * step
-                    # A note ending a figure is worth the figure's own step,
-                    # and a hand lifting late off the last of them does not
-                    # make it longer: Fur Elise's left hand holds the A that
-                    # ends each A-E-A about half again as long as the two
-                    # sixteenths before it, with five beats of silence after,
-                    # and the page writes all three alike. So the figure's
-                    # step may shorten as well as lengthen -- but only back to
-                    # a note that was nearly that long already. Past that the
-                    # key really was held: the Interstellar arrangement holds
-                    # one of its dotted halves for all three beats over a
-                    # pedal stepping once a beat, and cutting that to the
-                    # pedal's step cost two of its values and one elsewhere.
-                    if (
-                        figure
-                        and not bars
-                        and 0 < duration <= cfg.figure_overshoot * filled
-                    ):
+                    # A note is worth what the fill was capped to, and a hand
+                    # lifting late off it does not make it longer: Fur Elise's
+                    # left hand holds the A that ends each A-E-A about half
+                    # again as long as the two sixteenths before it, with five
+                    # beats of silence after, and the page writes all three
+                    # alike. So the cap may shorten as well as lengthen -- but
+                    # only back to a note that was nearly that long already.
+                    # Past that the key really was held: the Interstellar
+                    # arrangement holds one of its dotted halves for all three
+                    # beats over a pedal stepping once a beat, and cutting
+                    # that to the pedal's step cost two of its values and one
+                    # elsewhere.
+                    # Whatever the fill was held to -- the figure's own step
+                    # or the hand's pulse -- a note carried only a little past
+                    # it was held late, not held longer, and is written at
+                    # what it was held to. Not only where a figure set the
+                    # cap: the same hand lifting late off a note the pulse
+                    # capped is the same lift.
+                    if not bars and 0 < duration <= cfg.figure_overshoot * filled:
                         duration = filled
                     else:
                         # Enforce the invariant after rounding, not before it:

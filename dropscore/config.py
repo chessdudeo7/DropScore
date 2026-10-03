@@ -494,11 +494,26 @@ class ScoreConfig:
     # opens one of exactly what it has been doing. Zero lifts the cap.
     fill_pulses: float = 1.25
 
-    # How much longer than its figure's step the last note of one may have
-    # been held and still be written as that step. A hand lifting late is not
-    # a longer note; a key held twice the step really is. Anything from 1.55
-    # to 2 measures the same, and 1.75 is the middle of it -- under 1.5 the
-    # late lift is written as played, and by 2.5 a held note is being cut.
+    # How far a fill may reach, as a multiple of that pulse. One pulse: a note
+    # is written as reaching the next thing its hand does, and no further.
+    #
+    # This was the same number as the threshold above, which is a different
+    # question -- that one asks how much bigger than the last gap a silence
+    # must be to be a rest, and wants to sit between one and two; this one
+    # asks how far a note reaches, and wants to be one. Held at 1.25 it wrote
+    # a note a quarter longer than the hand's own step: Interstellar's left
+    # hand came back at 1.25 beats against a printed quarter twice over.
+    # Separated, the threshold above no longer moves the score at all and
+    # stands on its own reasoning. Below 0.9 here a page loses three values
+    # to fills cut short of the pulse they should reach.
+    fill_reach: float = 1.0
+
+    # How much longer than the fill's cap -- a figure's step, or the hand's
+    # own pulse -- a note may have been held and still be written at that cap.
+    # A hand lifting late is not a longer note; a key held twice as long
+    # really is. Anything from 1.6 to 2.25 measures the same, and 1.75 sits
+    # inside it -- at 1.2 the late lift is written as played, and by 2.5 a
+    # note genuinely held is being cut.
     figure_overshoot: float = 1.75
     fill_whole_bars: bool = True
     fill_last_of_figure: bool = True
