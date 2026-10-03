@@ -79,6 +79,38 @@ def _started_late(sequence: NoteSequence, offset: float) -> NoteSequence:
     )
 
 
+def test_a_chord_changing_once_a_bar_does_not_make_the_beat_the_quaver() -> None:
+    """Where nothing is supported at any beat, the slowest plausible one wins.
+
+    A hand holding a chord for a whole bar over a stream of quavers gives
+    accents a bar apart, so no candidate beat has anything repeating on it and
+    every one of them scores nothing. Taking the first of those ties silently
+    took the fastest: a page marked crotchet = 100 came back at 200, counted
+    as three quavers to the bar.
+    """
+    from dropscore.score import analyze  # noqa: PLC0415
+
+    beat = 0.6                      # crotchet = 100, three to the bar
+    quaver = beat / 2
+    notes = []
+    for bar in range(34):           # long enough for the accents to be counted
+        base = bar * 3 * beat
+        for step in range(6):       # the left hand, six quavers a bar
+            notes.append(
+                Note(onset=base + step * quaver, pitch=(44, 51, 56, 51, 56, 51)[step],
+                     duration=quaver * 0.95, hand="L")
+            )
+        for pitch in (72, 75):      # the right hand, one dyad held all bar
+            notes.append(
+                Note(onset=base, pitch=pitch, duration=3 * beat * 0.98, hand="R")
+            )
+    analysis = analyze(NoteSequence.of(sorted(notes, key=lambda n: n.onset)))
+
+    assert analysis.tempo == pytest.approx(100.0, rel=0.08), (
+        f"read the quaver as the beat: {analysis.tempo:.1f} BPM"
+    )
+
+
 @pytest.mark.parametrize("beats_per_bar", [3, 4])
 @pytest.mark.parametrize("offset_beats", [0.25, 0.5, 0.75, 2.5])
 def test_the_beat_is_found_wherever_the_recording_starts(

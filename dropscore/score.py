@@ -754,7 +754,14 @@ def _beat_from_tatum(
         conventional = 1.0 if multiple == cfg.steps_per_beat else cfg.other_multiple
 
         score = support * prior * fit * conventional
-        if best is None or score > best[0]:
+        # A score of nothing is not evidence for anything. Where no candidate
+        # is supported at all -- which happens when what is being scored sits
+        # a bar apart rather than a beat apart, so nothing repeats at any beat
+        # on offer -- every candidate ties at zero, and taking the first of
+        # them silently means the fastest. That read a page marked crotchet
+        # = 100 at 200, counted as three quavers to the bar. The fallback
+        # below is written for exactly this and never got the chance to run.
+        if score > 0 and (best is None or score > best[0]):
             best = (score, beat)
 
     if best is None:
