@@ -436,6 +436,26 @@ def test_a_key_signature_does_not_assert_a_note_the_music_never_plays() -> None:
     assert key in {"A minor", "C major"}, f"chose {key}, whose signature is never played"
 
 
+def test_a_signature_is_not_unfounded_for_a_degree_the_piece_does_not_use() -> None:
+    """A key claiming three accidentals, two of them played throughout, is well
+    evidenced even where the third never sounds.
+
+    This is C minor without its flat seventh: E flat and A flat all the way
+    through, no B of either kind. Charged for the missing B flat as heavily as
+    a key whose only accidental is unheard, it lost to C major -- on a
+    recording 99.4% of whose weight lies inside C minor.
+    """
+    plan = [(60, 40), (67, 22), (65, 18), (68, 15), (63, 10), (62, 7)]
+    notes, when = [], 0.0
+    for pitch, weight in plan:
+        for _ in range(weight):
+            notes.append(Note(onset=when, pitch=pitch, duration=1.0))
+            when += 0.6
+
+    key, _ = estimate_key(NoteSequence.of(notes))
+    assert key == "C minor", f"chose {key} over the key the music sits inside"
+
+
 def _played_with_rubato(sequence: NoteSequence, depth: float = 0.06) -> NoteSequence:
     """The same music, pushed and slowed smoothly the way a person plays it."""
     import math as _math  # noqa: PLC0415

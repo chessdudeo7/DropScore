@@ -856,12 +856,23 @@ def estimate_key(
             # on template shape alone and put a sharp on the page that the
             # piece never sounds. Both fit the notes; only one asserts
             # something unheard.
-            unfounded = sum(
-                1
-                for step in scale
+            # As a share of what the signature asserts, not a count of
+            # them. A signature claiming one accidental that never sounds is
+            # unfounded; one claiming three, of which two are played all the
+            # way through, is well evidenced and merely has a degree the
+            # piece does not use. Charged alike, C minor paid the same for an
+            # unplayed flat seventh as a key whose only accidental is unheard,
+            # and a recording that is 99.4% inside C minor was read as C
+            # major. A signature of one is unchanged, which is the case this
+            # was written for.
+            signature = [
+                step for step in scale
                 if (tonic + step) % 12 not in NATURAL_CLASSES
-                and weights[(tonic + step) % 12] == 0.0
+            ]
+            missing = sum(
+                1 for step in signature if weights[(tonic + step) % 12] == 0.0
             )
+            unfounded = missing / len(signature) if signature else 0.0
 
             score = (
                 correlation
