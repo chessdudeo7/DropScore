@@ -627,6 +627,16 @@ def detect_in_frame(
             x, y, w, h = cv2.boundingRect(contour)
             if h < cfg.min_tile_height or w < calibration.white_width * cfg.min_tile_width_ratio:
                 continue
+            # Nor wider than a hand could ever reach at once. A bloom-heavy
+            # renderer lights the strike line across the whole keyboard, and
+            # that bar is one blob: on the Moonlight recording it ran the full
+            # 1280 pixels and claimed fifty keys, each of which was then split
+            # out as a tile of its own. Measured over every clip here, no real
+            # blob passes six and a half white keys -- tiles merge only where
+            # the keys are side by side -- while that one has sixty-seven past
+            # ten in forty seconds.
+            if w > calibration.white_width * cfg.max_tile_keys:
+                continue
 
             # A blob no wider than a white key is one tile, and belongs to the
             # key it is centred on. Coverage is for telling merged tiles apart,

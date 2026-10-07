@@ -138,6 +138,11 @@ class TileConfig:
     # colour may sit and still be read as that tile's bloom or antialiasing
     # rather than a voice of its own. A glow halo measured 0.46.
     blend_tolerance: float = 6.0
+    # The widest a single blob may be, in white keys, before it is a glow
+    # across the keyboard rather than tiles. Nothing real measured here passes
+    # six and a half; ten leaves half again on top of that.
+    max_tile_keys: float = 10.0
+
     min_palette_share: float = 0.05
     max_sample_pixels: int = 200_000
 
