@@ -168,7 +168,18 @@ own synthetic clip, so there are no fixture files to check out. A few in
 `test_service.py` are timing-sensitive and can fail on a loaded machine; re-run
 them on their own before believing a failure.
 
-There is **no CI** — nothing runs these automatically yet.
+GitHub Actions runs them on every push and pull request, against the oldest and
+newest Python this package claims to support, with the `service` and `pdf`
+extras installed so their tests run instead of skipping. A second job installs
+the package with *no* extras and imports the pipeline, since a suite that
+installs everything cannot catch a dependency missing from the base list.
+
+`eval` is deliberately not part of that — 35 minutes is far past what a
+per-push check should cost. It runs weekly, and on demand from the Actions tab;
+run it by hand after any change to the vision or analysis stages, since it is
+the only check on key and tempo. It scores the synthetic corpus only, because
+the real recordings are not in the repository and, unlike the corpus, cannot be
+regenerated.
 
 ## The web app
 

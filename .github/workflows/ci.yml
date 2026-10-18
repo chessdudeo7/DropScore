@@ -1,0 +1,72 @@
+name: CI
+
+# Pull requests and pushes to main. The eval harness is deliberately not here:
+# it re-transcribes every clip and takes ~35 minutes, far past what a per-push
+# check should cost. It runs on a schedule instead -- see eval.yml.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the ceiling of what pyproject claims to support. The
+        # floor is the one that actually catches things -- newer syntax slips
+        # in otherwise and nobody notices until an install fails.
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # The service and pdf extras are installed so their tests run rather than
+      # skip: both are guarded by importorskip, so without them the suite goes
+      # quietly green over ~75 tests it never executed.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,service,pdf]"
+
+      - name: Show what is installed
+        run: pip list
+
+      # opencv-python-headless needs no display, and the suite renders its own
+      # clips, so there are no fixtures to fetch.
+      - name: Tests
+        run: pytest -q --durations=10
+
+  # A green suite says nothing about whether the package installs on its own:
+  # the tests job installs every extra, so a dependency missing from the base
+  # list would still import fine there.
+  import-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install with no extras
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: The CLI runs and the pipeline imports
+        run: |
+          dropscore --version
+          dropscore --help > /dev/null
+          python -c "import dropscore.score, dropscore.tiles, dropscore.tracking, dropscore.calibrate"

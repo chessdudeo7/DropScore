@@ -1,0 +1,52 @@
+name: Eval
+
+# The accuracy harness, kept out of CI because it re-transcribes every clip and
+# takes ~35 minutes. It is the only thing that checks key and tempo accuracy --
+# the test suite does not cover either -- so a change touching tempo or key
+# selection is unverified until this has run.
+#
+# Weekly, and on demand. Run it by hand (Actions -> Eval -> Run workflow) after
+# any change to the vision or analysis stages.
+on:
+  schedule:
+    - cron: "0 5 * * 1"   # Mondays, 05:00 UTC
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      # The clips are not in the repository -- they are rendered from a recipe
+      # that lives in code (CORPUS in dropscore/cli.py) precisely so the
+      # baseline stays reproducible. Takes a few minutes.
+      - name: Render the corpus
+        run: dropscore synth --corpus -o out/synth
+
+      # --no-printed because the real recordings and their printed music are
+      # not in the repository either, and unlike the corpus they cannot be
+      # regenerated. Those pages are scored locally.
+      - name: Eval
+        run: dropscore eval --baseline baseline.json --no-printed | tee eval.txt
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval.txt
+          retention-days: 90
