@@ -438,6 +438,21 @@ class ScoreConfig:
     # every level identically, and then this is the only thing left.
     other_multiple: float = 0.95
 
+    # The bonus above assumes the tatum is a sixteenth. Where it is an eighth
+    # instead, four of them make a half note, and preferring that reads the
+    # piece at half speed: a recording marked crotchet = 125 came back at 62.5,
+    # its tatum measured at 250 a minute and the onsets supporting every level
+    # within 1% (0.927 at two tatums against 0.939 at four). The tempo prior
+    # favoured 125 by 3.9% and the bonus overturned it by 5.3%.
+    #
+    # So the bonus is withheld where the beat it argues for is slower than
+    # this. Measured over 21 clips of known tempo: the two misreadings imply
+    # 62.5 and 64.9, while the slowest clip whose beat genuinely is four tatums
+    # implies 60.0 -- and that one is chosen correctly without the bonus, as is
+    # every other. Accuracy is identical for any floor from 65 to 135, so this
+    # is not a finely tuned value; it sits at the slow edge of `tempo_prior`.
+    conventional_min_bpm: float = 70.0
+
     # Quantization. Anything within half a step snaps to *some* gridline, so a
     # tolerance below 0.5 is what makes leaving outliers alone possible at all.
     # Zero disables quantization and keeps the measured times.

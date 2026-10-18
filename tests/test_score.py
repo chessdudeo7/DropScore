@@ -54,6 +54,18 @@ def test_does_not_report_the_subdivision_as_the_beat() -> None:
     assert beat == pytest.approx(0.5, rel=0.05)
 
 
+def test_an_unbroken_stream_of_quavers_is_not_read_at_half_speed() -> None:
+    """Four tatums are the beat only when the tatum is a semiquaver.
+
+    A stream of quavers supports every level equally, so the conventional
+    four-to-the-beat bonus decides -- and four quavers make a minim, which
+    reads the piece at half speed. Taken from a recording marked crotchet
+    = 125 that came back at 62.5.
+    """
+    beat, _, _ = estimate_tempo(_grid(125.0, count=136, subdivision=2))
+    assert 60.0 / beat == pytest.approx(125.0, rel=0.03)
+
+
 def test_phase_puts_offset_onsets_back_on_the_grid() -> None:
     """Phase is read at the tatum, so what matters is that onsets land on it.
 

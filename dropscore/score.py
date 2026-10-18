@@ -751,7 +751,11 @@ def _beat_from_tatum(
         # tatums is not punished where the finest grid is a thirty-second, is
         # worse: it hands the same bonus to a beat of two tatums, and reading a
         # slow piece at double speed is the commoner error by far.
-        conventional = 1.0 if multiple == cfg.steps_per_beat else cfg.other_multiple
+        # ...and only where the beat it argues for is one a listener could
+        # hold. Four tatums make a half note when the tatum is an eighth, and
+        # the bonus then reads the piece at half speed.
+        preferred = multiple == cfg.steps_per_beat and bpm >= cfg.conventional_min_bpm
+        conventional = 1.0 if preferred else cfg.other_multiple
 
         score = support * prior * fit * conventional
         # A score of nothing is not evidence for anything. Where no candidate
