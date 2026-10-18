@@ -2,16 +2,45 @@
 
 Turn falling-tile piano videos (Synthesia-style) into sheet music.
 
-**Status: all 10 stages built, none executed.** The pipeline runs video → MIDI and
-MusicXML, with a synthetic corpus and a scoring harness, and the frontend is wired
-to a real API. See [docs/ROADMAP.md](docs/ROADMAP.md) for what each stage does.
+**Status: all 10 stages built and running, and measured.** The pipeline runs
+video → MIDI and MusicXML, with a synthetic corpus and a scoring harness, and the
+frontend is wired to a real API. See [docs/ROADMAP.md](docs/ROADMAP.md) for what
+each stage does.
 
-> **Nothing here has ever been run.** The machine this was written on has no
-> Python interpreter — only the Windows Store stub — so every module is
-> hand-reviewed and unverified. Install Python 3.11+, `pip install -e ".[dev]"`,
-> and run `pytest` before trusting any of it. `dropscore eval` is what will show
-> whether the vision stages actually work; until it runs, their accuracy is
-> design intent rather than measurement.
+### What the numbers are
+
+Over the evaluation corpus — 15 synthetic clips with exact ground truth, plus
+real recordings scored against their printed music:
+
+```
+corpus F1 0.9996   hands 0.9677   key 15/15   tempo 15/15
+written 354/370    staff 588/593  545 tests
+```
+
+**Read that F1 with care.** The synthetic clips are rendered by this repository's
+own `synth` module, so they test the vision against this project's assumptions
+about what a falling-tile video looks like, and every tunable in `config.py` was
+measured against that corpus. A benchmark you tune against stops being an
+independent measurement.
+
+The honest figure is how it fares on renderers it has never seen, and there the
+record is worse: three new recordings, three defects the corpus did not catch —
+a tempo read at half speed (since fixed), a key and metre thrown off by
+background haze entering the palette, and an adjacent-semitone artefact on one
+renderer that remains unexplained. Expect to find something on each new style.
+
+### What is not measured
+
+**Precision on real recordings.** Ground truth for a real video needs either the
+printed arrangement that was actually played — as a vector PDF, since raster
+score images are too coarse to read noteheads from — or, far better, the MIDI
+the video was rendered from. Without one, only structural errors (key, metre,
+tempo) are visible, and a wrong note is not. Two attempts to derive ground truth
+from the video itself failed in opposite directions: one missed 24% of strikes,
+the other fabricated 26.
+
+If you have the MIDI for a clip, that is the single most useful thing you can
+add to this project.
 
 ## The backend
 
@@ -98,6 +127,11 @@ note-level precision, recall and F1, key and tempo accuracy, plus how far the
 fitted geometry landed from the geometry that drew each clip. With a baseline it
 exits non-zero when any clip gets worse, so it works as a CI gate.
 
+It re-transcribes every clip from scratch and takes roughly **35 minutes**, which
+is worth knowing before you start one. Some things only it measures — key and
+tempo accuracy are not covered by the test suite — so a change touching either
+is unverified until it has run.
+
 `--corpus` renders exactly the clips `baseline.json` was scored against: one per
 theme, so a change that only works on one look shows up as a regression on the
 rest, plus variants covering five tempos, six keys and held chords in a narrow
@@ -129,8 +163,12 @@ Reading from a YouTube URL needs the optional extra (`pip install -e ".[youtube]
 and violates YouTube's Terms of Service — it exists for local experimentation.
 Pass a local file for anything else.
 
-Run the tests with `pytest`. They render their own synthetic clip, so there are no
-fixture files to check out.
+Run the tests with `pytest` — 545 of them, about two minutes. They render their
+own synthetic clip, so there are no fixture files to check out. A few in
+`test_service.py` are timing-sensitive and can fail on a loaded machine; re-run
+them on their own before believing a failure.
+
+There is **no CI** — nothing runs these automatically yet.
 
 ## The web app
 
@@ -179,6 +217,35 @@ since the results view is drawn from it.
 Against a live API the piano roll and stats come from the real transcription and
 the download buttons are real links. In demo mode the notes come from a seeded
 PRNG keyed on the video id or filename, and the download buttons are disabled.
+
+## Known limitations
+
+**It is tuned to the styles it has seen.** Every constant in `config.py` carries
+a comment recording what was measured and what broke at other values — but those
+measurements come from this corpus. A renderer with a different look can break
+assumptions no test covers.
+
+**Open defects**, all reproducible:
+
+- One recording's tempo comes back halved. The onsets genuinely favour the wrong
+  level there; the fix that solved the same error elsewhere does not reach it.
+- Background haze can land in the same palette colour as a real voice. Its blobs
+  are up to 28 keys wide, clear every filter, and emit long sustained notes that
+  dominate by duration and drag the key and metre with them. No combination of
+  blob width, height or fill separates it from a legitimately merged chord, and
+  the colour cannot simply be dropped because it carries real notes too.
+- One renderer produces adjacent-semitone pairs at 30 times the rate of any
+  other. Eight mechanisms have been proposed and ruled out; the cause is unknown.
+- A handful of notes on known pages resist their written value or staff, each
+  blocked on a different conflict.
+
+**Hand assignment is at its ceiling, not merely imperfect.** The `hands` figure
+is entirely the single-colour case: where the renderer draws both hands in one
+colour there is no colour to split on, the hands overlap in pitch, and a pitch
+boundary is most of the information available. On the clip that drives the
+number, 115 of 193 notes sit inside the overlap, the best possible *fixed*
+boundary scores 88.6%, and the moving boundary already beats it at 89.6%.
+Improving this needs a different signal, not a tuned constant.
 
 ## Layout
 
