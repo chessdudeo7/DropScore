@@ -573,7 +573,17 @@ def _falls_like_a_tile(
         for times, edges in (top, bottom)
         if (rate := _fall_rate(times, edges)) is not None
     ]
-    return not fits or max(fits) >= cfg.min_fall_ratio * speed
+    if not fits:
+        return True
+    if max(fits) < cfg.min_fall_ratio * speed:
+        return False
+
+    # ...and an edge that can be measured must fall at about the scroll speed.
+    # Only one need answer: a tile taller than the fall area has its bottom
+    # pinned at the strike line while its top still scrolls.
+    return any(
+        abs(rate / speed - 1.0) <= cfg.scroll_match_tolerance for rate in fits
+    )
 
 
 def _fall_rate(times: Sequence[float], edges: Sequence[float]) -> float | None:

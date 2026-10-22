@@ -294,6 +294,26 @@ class TrackingConfig:
     # not read as ascent.
     min_fall_ratio: float = -0.05
 
+    # Not rising is a weak claim, and on a render thick with particles it lets
+    # most of them through: measured against a MIDI the video was rendered
+    # from, 270 of 633 surviving tracks matched no note at all. So an edge that
+    # can be measured must also fall at about the scroll speed, which is what
+    # scrolling means -- the same test `track_to_note` already applies to the
+    # top edge through `scroll_rate_tolerance`.
+    #
+    # Judged only where the edges are unclipped, which is why this lives in
+    # `_falls_like_a_tile` and not on the raw track: fitted through a plateau,
+    # a tile whose bottom has reached the strike line reads as stationary and
+    # is thrown away. Measured that way it cost 298 real notes across the
+    # corpus; measured on the filtered edges it costs none.
+    #
+    # Wide, because only one edge need answer and a fragment's fit is noisy.
+    # Measured over the fifteen corpus clips and a rendered probe of known
+    # notes: 1.0, 0.8 and 0.6 are all free -- no clip worse, no note lost --
+    # while 0.45 costs two notes on one clip. The probe gains F1 0.446 -> 0.490
+    # at 0.6. This is the tightest value that costs the corpus nothing.
+    scroll_match_tolerance: float = 0.6
+
     # Unclipped samples needed before the test is allowed to reject a track. A
     # tile taller than the fall area never shows its top edge and its bottom
     # stops dead at the strike line, so the question cannot always be asked --

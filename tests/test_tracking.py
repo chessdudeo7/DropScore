@@ -463,6 +463,24 @@ def test_a_rising_track_is_not_a_note() -> None:
     assert track_to_note(track, 100.0, calibration) is None
 
 
+def test_a_track_that_outruns_the_scroll_is_not_a_note() -> None:
+    """Falling is not enough: a tile falls at the scroll speed, by definition.
+
+    Particles drift downward too, and merely not rising lets them through. On
+    a render scored against the MIDI it was drawn from, 270 of 633 surviving
+    tracks matched no note at all.
+    """
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    track = TileTrack(pitch=60, track=0)
+    for index in range(8):
+        # Descending, but at three times the scroll speed below.
+        track.observe(_tile(60, 100.0 + index * 30.0, index * 0.1, height=20.0))
+
+    assert track_to_note(track, 100.0, calibration) is None
+
+
 def test_a_falling_track_is_still_a_note() -> None:
     """The same test must leave an ordinary descending tile alone."""
     from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
