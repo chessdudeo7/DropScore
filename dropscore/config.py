@@ -327,6 +327,32 @@ class TrackingConfig:
     # while fragments of a single tile land within 60ms.
     min_repeat: float = 0.07
 
+    # How far apart two onsets on one key may be and still be one tile.
+    #
+    # The overlap half of the merge had no such bound, and a note that overlaps
+    # is not necessarily a fragment: on a render thick with particles a junk
+    # note lasting a second swallowed every real note that began inside it and
+    # kept its own onset, so the note was lost twice over -- missing where it
+    # belonged and spurious where the junk started. Measured against the MIDI
+    # the video was drawn from, that cost 37% of the notes at 60fps.
+    #
+    # Beyond this reach the pair is left alone and the earlier note is trimmed
+    # to end where the later one starts, which is what must have happened: a
+    # key cannot sound twice at once, so its END was overestimated, not its
+    # onset.
+    #
+    # Two further conditions, each from a case that broke without it. The pair
+    # must not be `close` (fragments of one tile land within a few frames), and
+    # neither may be a fragment: a held note's short fragment can sit a long
+    # way after its parent's onset, and splitting those put a spurious note in
+    # a corpus clip that had been perfect.
+    #
+    # Measured over fifteen corpus clips and a rendered probe of known notes:
+    # every value from 0.30 to 0.07 is free on the corpus -- no clip worse, and
+    # `sparks` recovers its one missing note -- while the probe peaks at 0.20 at
+    # both frame rates, F1 0.490 -> 0.614 at 60fps and 0.754 -> 0.776 at 30fps.
+    merge_reach: float = 0.20
+
 
 @dataclass(frozen=True)
 class ScoreConfig:

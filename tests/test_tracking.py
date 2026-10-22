@@ -463,6 +463,38 @@ def test_a_rising_track_is_not_a_note() -> None:
     assert track_to_note(track, 100.0, calibration) is None
 
 
+def test_a_long_note_does_not_swallow_a_later_one_on_its_key() -> None:
+    """Overlapping is not the same as being one tile.
+
+    A spurious track lasting a second overlaps every real note that begins
+    inside it. Merging them kept the junk's onset, so the real note was lost
+    twice: missing where it belonged and spurious where the junk started.
+    Measured against the MIDI a render was drawn from, that cost 37% of the
+    notes at 60fps.
+    """
+    from dropscore.tracking import _merge_overlaps  # noqa: PLC0415
+
+    overlong = Note(onset=0.0, pitch=60, duration=1.0, hand="R", velocity=80)
+    later = Note(onset=0.60, pitch=60, duration=0.25, hand="R", velocity=80)
+
+    merged = sorted(_merge_overlaps([overlong, later]), key=lambda n: n.onset)
+
+    assert [round(n.onset, 2) for n in merged] == [0.0, 0.60]
+    # The earlier one is trimmed to where the later begins, not extended.
+    assert round(merged[0].duration, 2) == 0.60
+
+
+def test_fragments_of_one_tile_still_merge() -> None:
+    """The bound must not undo what the merge is for: one tile broken into
+    pieces a few frames apart is still one note."""
+    from dropscore.tracking import _merge_overlaps  # noqa: PLC0415
+
+    first = Note(onset=0.0, pitch=60, duration=0.05, hand="R", velocity=80)
+    second = Note(onset=0.04, pitch=60, duration=0.05, hand="R", velocity=80)
+
+    assert len(_merge_overlaps([first, second])) == 1
+
+
 def test_a_track_that_outruns_the_scroll_is_not_a_note() -> None:
     """Falling is not enough: a tile falls at the scroll speed, by definition.
 

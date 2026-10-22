@@ -804,7 +804,28 @@ def _merge_overlaps(notes: list[Note], config: Config = DEFAULT) -> list[Note]:
                 fragment and following.onset - previous_onset < min_repeat
             )
             previous_onset = following.onset
-            if close or following.onset < current.offset:
+
+            # Overlapping is not enough to be one tile. Past `merge_reach` the
+            # later note is its own, and the earlier one's end was overestimated
+            # -- trim it there rather than letting it swallow the later onset.
+            # Fragments are exempt: a held note's can sit far after its parent.
+            overlaps = following.onset < current.offset
+            far = following.onset - current.onset > config.tracking.merge_reach
+            if overlaps and far and not close and not fragment:
+                if following.onset > current.onset:
+                    merged.append(
+                        Note(
+                            onset=current.onset,
+                            pitch=pitch,
+                            duration=following.onset - current.onset,
+                            hand=current.hand,
+                            velocity=current.velocity,
+                        )
+                    )
+                current = following
+                continue
+
+            if close or overlaps:
                 end = max(current.offset, following.offset)
                 current = Note(
                     onset=current.onset,
