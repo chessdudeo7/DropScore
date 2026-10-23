@@ -277,6 +277,22 @@ class TrackingConfig:
     # tracks are legitimately short: its fifth percentile is 2 observations.
     min_observations: int = 3
 
+    # ...which is a count of frames, and so means different things at
+    # different frame rates: 100ms of evidence at 30fps but only 50 at 60.
+    # The bar for believing a note therefore *halves* when the recording
+    # carries more information, which is backwards. Stated as a duration as
+    # well, and the stricter of the two wins.
+    #
+    # A floor rather than a replacement, so this only ever raises the bar on a
+    # fast recording and never lowers it on a slow one: at 30fps it resolves
+    # to the same 3 frames and changes nothing, at 60fps it asks for 6, and at
+    # 12fps the frame count still holds at 3.
+    #
+    # Measured on a 60fps render of a known MIDI, F1 0.614 -> 0.635. Smaller
+    # than it once was: before the fall-speed and merge fixes this was worth
+    # three times as much, because it was catching junk those now remove.
+    min_observation_seconds: float = 0.1
+
     # Particles rise; tiles do not. A spark thrown off a struck key travels
     # upward, so a track whose every measurable edge is *ascending* was not a
     # tile, whatever colour it was drawn in.

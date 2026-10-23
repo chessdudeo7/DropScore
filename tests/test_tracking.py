@@ -463,6 +463,33 @@ def test_a_rising_track_is_not_a_note() -> None:
     assert track_to_note(track, 100.0, calibration) is None
 
 
+def test_a_faster_recording_does_not_lower_the_bar_for_a_note() -> None:
+    """Three frames is 100ms at 30fps and only 50 at 60.
+
+    Counted in frames alone, the evidence a note must show halves when the
+    recording carries twice as much of it, and short-lived junk gets in.
+    """
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+
+    def falling(fps: float, frames: int) -> TileTrack:
+        track = TileTrack(pitch=60, track=0)
+        for index in range(frames):
+            track.observe(
+                _tile(60, 200.0 + index * (100.0 / fps), index / fps, height=20.0)
+            )
+        return track
+
+    # Five frames at 60fps is 83ms. It clears the frame count and travels far
+    # enough, and the duration bar is the only thing left to refuse it.
+    assert track_to_note(falling(60.0, 5), 100.0, calibration) is None
+    # Six is 100ms, and is a note.
+    assert track_to_note(falling(60.0, 6), 100.0, calibration) is not None
+    # At 30fps five frames is 167ms: well past the bar, as it always was.
+    assert track_to_note(falling(30.0, 5), 100.0, calibration) is not None
+
+
 def test_a_long_note_does_not_swallow_a_later_one_on_its_key() -> None:
     """Overlapping is not the same as being one tile.
 

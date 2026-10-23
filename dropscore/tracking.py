@@ -606,7 +606,13 @@ def track_to_note(
     """Convert one tile track into a note, or None if it is not usable."""
     hands = hands or {}
     cfg = config.tracking
-    if track.length < cfg.min_observations:
+    # Frames and seconds both, whichever asks for more. A frame count alone
+    # halves what it demands when the recording doubles its frame rate.
+    interval = _frame_interval(track.times)
+    needed = cfg.min_observations
+    if interval > 0:
+        needed = max(needed, round(cfg.min_observation_seconds / interval))
+    if track.length < needed:
         return None
 
     strike = calibration.strike_y
