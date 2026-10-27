@@ -4,200 +4,238 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>DropScore — falling-tile piano video to sheet music</title>
+<meta name="description" content="Turn Synthesia-style falling-tile piano videos into MIDI, MusicXML and printable sheet music." />
+<meta name="theme-color" content="#06070c" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-<div class="glow-field" aria-hidden="true">
-  <span class="orb orb-a"></span>
-  <span class="orb orb-b"></span>
-  <span class="orb orb-c"></span>
+
+<!-- Backdrop: slow falling tiles, two orbs, and a glow that follows the cursor -->
+<div class="backdrop" aria-hidden="true">
+  <div class="orb orb-a"></div>
+  <div class="orb orb-b"></div>
+  <div class="tiles" id="bg-tiles"></div>
+  <div class="cursor-glow" id="cursor-glow"></div>
+  <div class="strike-line"></div>
 </div>
 
 <header class="topbar">
-  <div class="brand">
+  <a class="brand" href="#top" aria-label="DropScore home">
     <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
     <span class="brand-text">Drop<b>Score</b></span>
-  </div>
+  </a>
   <nav class="topnav">
     <a href="#how">How it works</a>
     <!-- Relative path is right when this file is opened from disk; when it is
          served, applyMode() repoints it at the mount the API exposes. -->
     <a href="../docs/PIPELINE.md" id="docs-link">Pipeline notes</a>
-    <span class="pill pill-warn" id="mode-pill">checking backend…</span>
+    <span class="pill pill-warn" id="mode-pill"><i class="pill-dot"></i>checking backend…</span>
   </nav>
 </header>
 
-<main>
+<main id="top">
   <!-- INPUT -->
   <section class="hero" id="input-stage">
-    <h1>Turn falling-tile piano videos<br /><em>into real sheet music.</em></h1>
-    <p class="sub">
-      Point DropScore at a Synthesia-style performance — a YouTube link or your own
-      video file. It watches the tiles, calibrates the keyboard, and reconstructs the
-      notes as MIDI and notation.
+    <span class="eyebrow reveal" style="--i:0">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>
+      Video in, sheet music out
+    </span>
+    <h1 class="reveal" style="--i:1">Turn falling-tile piano videos <br /><em>into real sheet music.</em></h1>
+    <p class="sub reveal" style="--i:2">
+      Drop in a Synthesia-style performance. DropScore watches the tiles, fits the
+      keyboard, reads every note as it crosses the strike line, and engraves the
+      result as MIDI, MusicXML and a printable score.
     </p>
 
-    <div class="tabs" role="tablist" aria-label="Video source">
-      <button class="tab is-active" id="tab-link" role="tab" aria-selected="true" aria-controls="pane-link" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
-        <span>YouTube link</span>
-      </button>
-      <button class="tab" id="tab-file" role="tab" aria-selected="false" aria-controls="pane-file" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4" /><path d="M7 9l5-5 5 5" /><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" /></svg>
-        <span>Upload a file</span>
-      </button>
-    </div>
+    <div class="card source-card reveal" style="--i:3">
+      <div class="card-rim" aria-hidden="true"></div>
 
-    <form id="source-form" autocomplete="off" novalidate>
-      <!-- link pane -->
-      <div class="pane" id="pane-link" role="tabpanel" aria-labelledby="tab-link">
-        <div class="url-form">
+      <div class="tabs" role="tablist" aria-label="Video source">
+        <button class="tab is-active" id="tab-link" role="tab" aria-selected="true" aria-controls="pane-link" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
+          <span>YouTube link</span>
+        </button>
+        <button class="tab" id="tab-file" role="tab" aria-selected="false" aria-controls="pane-file" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4" /><path d="M7 9l5-5 5 5" /><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" /></svg>
+          <span>Upload a file</span>
+        </button>
+      </div>
+
+      <form id="source-form" autocomplete="off" novalidate>
+        <!-- link pane -->
+        <div class="pane" id="pane-link" role="tabpanel" aria-labelledby="tab-link">
           <div class="field">
             <svg class="field-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></svg>
             <input id="url-input" type="text" inputmode="url" spellcheck="false"
-                   placeholder="https://www.youtube.com/watch?v=..." aria-label="YouTube video URL" />
-            <button type="button" class="ghost-btn" id="paste-btn" title="Paste from clipboard">Paste</button>
+                   placeholder="https://www.youtube.com/watch?v=…" aria-label="YouTube video URL" />
+            <button type="button" class="ghost-btn sm" id="paste-btn" title="Paste from clipboard">Paste</button>
+          </div>
+
+          <p class="hint" id="hint">Also accepts youtu.be, /shorts/ and /embed/ links.</p>
+
+          <div class="samples">
+            <span>Try</span>
+            <button class="chip" type="button" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ">watch?v=…</button>
+            <button class="chip" type="button" data-url="https://youtu.be/9bZkp7q19f0?t=42">youtu.be/…</button>
+            <button class="chip" type="button" data-url="https://www.youtube.com/shorts/aqz-KE-bpKQ">/shorts/…</button>
+          </div>
+
+          <div class="preview" id="preview" hidden>
+            <div class="preview-thumb">
+              <img id="preview-img" alt="Video thumbnail" />
+              <span class="preview-badge mono" id="preview-id"></span>
+            </div>
+            <div class="preview-meta">
+              <h3>Source detected</h3>
+              <p>DropScore will fetch this video and sample it at <b>30 fps</b> for tile tracking.</p>
+              <button class="link-btn" id="clear-btn" type="button">Use a different link</button>
+            </div>
+          </div>
+
+          <p class="note-tos">
+            Downloading from YouTube is against their Terms of Service. For anything beyond
+            local experimentation, upload your own file instead.
+          </p>
+        </div>
+
+        <!-- file pane -->
+        <div class="pane" id="pane-file" role="tabpanel" aria-labelledby="tab-file" hidden>
+          <label class="dropzone" id="dropzone" for="file-input">
+            <input id="file-input" type="file" accept="video/*" />
+            <span class="dz-ring" aria-hidden="true">
+              <svg class="dz-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 16V4" /><path d="M7 9l5-5 5 5" />
+                <path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" />
+              </svg>
+            </span>
+            <span class="dz-title">Drop a video here, or <u>browse</u></span>
+            <!-- Formats, size limit and where the file goes all depend on which
+                 server answered, so detectApi() fills this in rather than the
+                 markup asserting a list that would drift. -->
+            <span class="dz-sub" id="dz-sub">Checking what this build accepts…</span>
+          </label>
+
+          <p class="hint" id="file-hint">Checking for a transcription server…</p>
+
+          <div class="preview" id="file-preview" hidden>
+            <div class="preview-thumb">
+              <canvas id="file-thumb" width="320" height="180"></canvas>
+              <span class="preview-badge mono" id="file-badge"></span>
+            </div>
+            <div class="preview-meta">
+              <h3 id="file-name">video.mp4</h3>
+              <p class="mono" id="file-meta"></p>
+              <button class="link-btn" id="file-clear-btn" type="button">Choose a different file</button>
+            </div>
           </div>
         </div>
 
-        <p class="hint" id="hint">Also accepts youtu.be, /shorts/ and /embed/ links.</p>
-
-        <div class="samples">
-          <span>Try:</span>
-          <button class="chip" type="button" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ">watch?v=…</button>
-          <button class="chip" type="button" data-url="https://youtu.be/9bZkp7q19f0?t=42">youtu.be/…</button>
-          <button class="chip" type="button" data-url="https://www.youtube.com/shorts/aqz-KE-bpKQ">/shorts/…</button>
+        <div class="actions">
+          <button type="submit" class="primary-btn" id="submit-btn">
+            <span>Transcribe</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13" /><path d="M13 6l6 6-6 6" /></svg>
+          </button>
+          <span class="actions-note">Runs locally · nothing leaves your machine</span>
         </div>
+      </form>
 
-        <div class="preview" id="preview" hidden>
-          <div class="preview-thumb">
-            <img id="preview-img" alt="Video thumbnail" />
-            <span class="preview-badge mono" id="preview-id"></span>
-          </div>
-          <div class="preview-meta">
-            <h3>Source detected</h3>
-            <p>DropScore will fetch this video and sample it at <b>30 fps</b> for tile tracking.</p>
-            <button class="link-btn" id="clear-btn" type="button">Use a different link</button>
-          </div>
-        </div>
-
-        <p class="note-tos">
-          Downloading from YouTube is against their Terms of Service. For anything beyond
-          local experimentation, use your own file instead.
-        </p>
-      </div>
-
-      <!-- file pane -->
-      <div class="pane" id="pane-file" role="tabpanel" aria-labelledby="tab-file" hidden>
-        <label class="dropzone" id="dropzone" for="file-input">
-          <input id="file-input" type="file" accept="video/*" />
-          <svg class="dz-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 16V4" /><path d="M7 9l5-5 5 5" />
-            <path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2" />
-          </svg>
-          <span class="dz-title">Drop a video here, or <u>browse</u></span>
-          <!-- Formats, size limit and where the file goes all depend on which
-               server answered, so detectApi() fills this in rather than the
-               markup asserting a list that would drift. -->
-          <span class="dz-sub" id="dz-sub">Checking what this build accepts…</span>
-        </label>
-
-        <p class="hint" id="file-hint">Checking for a transcription server…</p>
-
-        <div class="preview" id="file-preview" hidden>
-          <div class="preview-thumb">
-            <canvas id="file-thumb" width="320" height="180"></canvas>
-            <span class="preview-badge mono" id="file-badge"></span>
-          </div>
-          <div class="preview-meta">
-            <h3 id="file-name">video.mp4</h3>
-            <p class="mono" id="file-meta"></p>
-            <button class="link-btn" id="file-clear-btn" type="button">Choose a different file</button>
-          </div>
-        </div>
-      </div>
-
-      <button type="submit" class="primary-btn" id="submit-btn">
-        <span>Transcribe</span>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13" /><path d="M13 6l6 6-6 6" /></svg>
-      </button>
-    </form>
-
-    <details class="options" id="options">
-      <summary>
-        <span>Transcription settings</span>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
-      </summary>
-      <div class="options-grid">
-        <label class="opt">
-          <span class="opt-label">Hand assignment</span>
-          <select id="opt-hands">
-            <option value="color">By tile colour (recommended)</option>
-            <option value="split">Fixed split at middle C</option>
-            <option value="pitch">Adaptive pitch clustering</option>
-            <option value="none">Single staff</option>
-          </select>
-        </label>
-        <label class="opt">
-          <span class="opt-label">Quantization</span>
-          <select id="opt-quant">
-            <option value="16">1/16 note</option>
-            <option value="32">1/32 note</option>
-            <option value="8">1/8 note</option>
-            <option value="0">None (raw timing)</option>
-          </select>
-        </label>
-        <label class="opt">
-          <span class="opt-label">Tempo</span>
-          <select id="opt-tempo">
-            <option value="auto">Estimate from note onsets</option>
-            <option value="fixed">Fix at 120 BPM</option>
-          </select>
-        </label>
-        <label class="opt">
-          <span class="opt-label">Key signature</span>
-          <select id="opt-key">
-            <option value="auto">Detect automatically</option>
-            <option value="C">C major / A minor</option>
-            <option value="G">G major / E minor</option>
-            <option value="F">F major / D minor</option>
-          </select>
-        </label>
-        <div class="opt opt-wide">
-          <span class="opt-label">Outputs</span>
-          <div class="checks">
-            <label><input type="checkbox" checked data-fmt="MIDI" /> <span>MIDI</span></label>
-            <label><input type="checkbox" checked data-fmt="MusicXML" /> <span>MusicXML</span></label>
-            <label><input type="checkbox" data-fmt="PDF" /> <span>PDF score</span></label>
-            <label><input type="checkbox" data-fmt="JSON" /> <span>Note JSON</span></label>
+      <details class="options" id="options">
+        <summary>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10" /><path d="M4 12h16" /><path d="M4 18h7" /><circle cx="17" cy="6" r="2" /><circle cx="14" cy="18" r="2" /></svg>
+          <span>Transcription settings</span>
+          <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" /></svg>
+        </summary>
+        <div class="options-grid">
+          <label class="opt">
+            <span class="opt-label">Hand assignment</span>
+            <select id="opt-hands">
+              <option value="color">By tile colour (recommended)</option>
+              <option value="split">Fixed split at middle C</option>
+              <option value="pitch">Adaptive pitch clustering</option>
+              <option value="none">Single staff</option>
+            </select>
+          </label>
+          <label class="opt">
+            <span class="opt-label">Quantization</span>
+            <select id="opt-quant">
+              <option value="16">1/16 note</option>
+              <option value="32">1/32 note</option>
+              <option value="8">1/8 note</option>
+              <option value="0">None (raw timing)</option>
+            </select>
+          </label>
+          <label class="opt">
+            <span class="opt-label">Tempo</span>
+            <select id="opt-tempo">
+              <option value="auto">Estimate from note onsets</option>
+              <option value="fixed">Fix at 120 BPM</option>
+            </select>
+          </label>
+          <label class="opt">
+            <span class="opt-label">Key signature</span>
+            <select id="opt-key">
+              <option value="auto">Detect automatically</option>
+              <option value="C">C major / A minor</option>
+              <option value="G">G major / E minor</option>
+              <option value="F">F major / D minor</option>
+            </select>
+          </label>
+          <div class="opt opt-wide">
+            <span class="opt-label">Outputs</span>
+            <div class="checks">
+              <label><input type="checkbox" checked data-fmt="MIDI" /> <span>MIDI</span></label>
+              <label><input type="checkbox" checked data-fmt="MusicXML" /> <span>MusicXML</span></label>
+              <label><input type="checkbox" data-fmt="PDF" /> <span>PDF score</span></label>
+              <label><input type="checkbox" data-fmt="JSON" /> <span>Note JSON</span></label>
+            </div>
           </div>
         </div>
-      </div>
-    </details>
+      </details>
+    </div>
+
+    <ul class="trust reveal" style="--i:4">
+      <li><b>88</b><span>keys mapped</span></li>
+      <li><b>MIDI · XML · PDF</b><span>outputs</span></li>
+      <li><b>No ML</b><span>just vision &amp; maths</span></li>
+      <li><b>Offline</b><span>runs on your machine</span></li>
+    </ul>
   </section>
 
   <!-- PROCESSING -->
   <section class="stage" id="processing-stage" hidden>
-    <div class="panel">
+    <div class="card panel">
+      <div class="card-rim" aria-hidden="true"></div>
       <div class="panel-head">
-        <h2>Transcribing</h2>
-        <span class="mono" id="elapsed">00:00</span>
+        <div>
+          <span class="eyebrow eyebrow-live"><i class="pill-dot"></i>Working</span>
+          <h2>Transcribing your video</h2>
+        </div>
+        <span class="elapsed mono" id="elapsed">00:00</span>
       </div>
       <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
       <ol class="steps" id="steps"></ol>
       <div class="console mono" id="console" aria-live="polite"></div>
-      <button class="ghost-btn danger" id="cancel-btn" type="button">Cancel</button>
+      <div class="panel-foot">
+        <button class="ghost-btn danger" id="cancel-btn" type="button">Cancel</button>
+      </div>
     </div>
   </section>
 
   <!-- RESULT -->
   <section class="stage" id="result-stage" hidden>
-    <div class="panel">
+    <div class="card panel">
+      <div class="card-rim" aria-hidden="true"></div>
       <div class="panel-head">
-        <h2>Transcription complete</h2>
+        <div>
+          <span class="eyebrow eyebrow-ok">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12l5 5L20 7" /></svg>
+            Done
+          </span>
+          <h2>Your score is ready</h2>
+        </div>
         <span class="pill pill-ok" id="result-conf">confidence 0.00</span>
       </div>
 
@@ -212,6 +250,7 @@
         <div class="keybed" id="keybed" aria-hidden="true"></div>
       </div>
 
+      <div class="downloads-head">Downloads</div>
       <div class="downloads" id="downloads"></div>
       <p class="hint error" id="missing-formats" hidden></p>
 
@@ -220,43 +259,77 @@
         <code>dropscore serve</code> and open the page it prints to transcribe for real.
       </p>
 
-      <button class="ghost-btn" id="again-btn" type="button">Transcribe another video</button>
+      <div class="panel-foot">
+        <button class="ghost-btn" id="again-btn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" /></svg>
+          Transcribe another video
+        </button>
+      </div>
     </div>
   </section>
 
   <!-- HOW -->
   <section class="how" id="how">
+    <span class="eyebrow">Under the hood</span>
     <h2>How DropScore reads a video</h2>
+    <p class="how-sub">Four stages, all classical computer vision. No model to download, no cloud, and nothing it cannot explain.</p>
     <div class="cards">
-      <article class="card">
+      <article class="card how-card">
         <span class="card-num">01</span>
         <h3>Find the keyboard</h3>
-        <p>Locate the keybed strip, then fit the 88-key grid from the black-key pattern so every x-position maps to a MIDI pitch.</p>
+        <p>Locate the keybed strip, then fit the 88-key grid from the black-key pattern so every x-position maps to a pitch.</p>
       </article>
-      <article class="card">
+      <article class="card how-card">
         <span class="card-num">02</span>
         <h3>Track the tiles</h3>
-        <p>Segment falling rectangles by colour and motion, follow them frame to frame, and read their height as note duration.</p>
+        <p>Segment falling rectangles by colour and motion, follow them frame to frame, and read their height as note length.</p>
       </article>
-      <article class="card">
+      <article class="card how-card">
         <span class="card-num">03</span>
         <h3>Convert to time</h3>
-        <p>Estimate the fall speed in pixels per second and turn each strike-line crossing into a precise note onset.</p>
+        <p>Measure the fall speed in pixels per second and turn each strike-line crossing into a precise note onset.</p>
       </article>
-      <article class="card">
+      <article class="card how-card">
         <span class="card-num">04</span>
         <h3>Engrave</h3>
-        <p>Quantize onsets to a detected tempo grid, split hands, spell accidentals against the key, and emit MIDI / MusicXML.</p>
+        <p>Quantize onsets to a detected tempo grid, split hands, spell accidentals against the key, and emit MIDI and MusicXML.</p>
       </article>
     </div>
   </section>
 </main>
 
 <footer>
-  <span>DropScore · prototype</span>
-  <span class="mono">frontend only — no video is uploaded or processed</span>
+  <span class="brand-text">Drop<b>Score</b></span>
+  <span class="mono" id="footer-note">open source · runs locally</span>
 </footer>
 
+<script>
+  // Backdrop only: a few tiles drifting down in the two hand colours, and a
+  // soft glow that follows the cursor. Purely decorative; app.js owns the app.
+  (function () {
+    var host = document.getElementById('bg-tiles');
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (host && !reduce) {
+      for (var i = 0; i < 18; i++) {
+        var t = document.createElement('i');
+        var left = 4 + Math.random() * 92;
+        t.style.left = left + '%';
+        t.style.height = (40 + Math.random() * 140) + 'px';
+        t.style.animationDuration = (14 + Math.random() * 16) + 's';
+        t.style.animationDelay = (-Math.random() * 30) + 's';
+        t.className = left < 50 ? 'l' : 'r';
+        host.appendChild(t);
+      }
+    }
+    var glow = document.getElementById('cursor-glow');
+    if (glow && window.matchMedia('(pointer: fine)').matches) {
+      window.addEventListener('pointermove', function (e) {
+        glow.style.transform = 'translate(' + (e.clientX - 300) + 'px,' + (e.clientY - 300) + 'px)';
+        glow.style.opacity = '1';
+      }, { passive: true });
+    }
+  })();
+</script>
 <script src="app.js"></script>
 </body>
 </html>
