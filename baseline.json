@@ -1,5 +1,5 @@
 {
-  "f1": 0.9998103546368292,
+  "f1": 0.9996206373292867,
   "clips": [
     {
       "name": "aurora_88key_seed0",
@@ -302,15 +302,15 @@
       "name": "sparks_88key_seed0",
       "metrics": {
         "reference_count": 193,
-        "estimate_count": 193,
-        "matched": 193,
-        "onset_mae": 0.00826758986911039,
-        "onset_p95": 0.00908267378792269,
-        "duration_mae": 0.016397444459883417,
-        "hand_accuracy": 0.8911917098445595,
+        "estimate_count": 192,
+        "matched": 192,
+        "onset_mae": 0.008266901196655211,
+        "onset_p95": 0.00907746230139721,
+        "duration_mae": 0.017793539715410877,
+        "hand_accuracy": 0.890625,
         "precision": 1.0,
-        "recall": 1.0,
-        "f1": 1.0
+        "recall": 0.9948186528497409,
+        "f1": 0.9974025974025974
       },
       "geometry": {
         "first_pitch_correct": true,
