@@ -817,7 +817,12 @@ def _merge_overlaps(notes: list[Note], config: Config = DEFAULT) -> list[Note]:
             # Fragments are exempt: a held note's can sit far after its parent.
             overlaps = following.onset < current.offset
             far = following.onset - current.onset > config.tracking.merge_reach
-            if overlaps and far and not close and not fragment:
+            # Unless they end together: then they are one tile, the later
+            # piece picked up after the track lost it near the strike line.
+            one_end = (
+                abs(following.offset - current.offset) <= config.tracking.merge_same_end
+            )
+            if overlaps and far and not close and not fragment and not one_end:
                 if following.onset > current.onset:
                     merged.append(
                         Note(

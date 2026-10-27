@@ -369,6 +369,27 @@ class TrackingConfig:
     # both frame rates, F1 0.490 -> 0.614 at 60fps and 0.754 -> 0.776 at 30fps.
     merge_reach: float = 0.20
 
+    # ...except that a tile has one end. When a track loses its tile near the
+    # strike line -- jumping to a sliver of the glow there while the tile is
+    # still in view -- the rest of the tile is picked up as a fresh track and
+    # becomes a second note starting partway through the first. Past
+    # `merge_reach` those two were trimmed apart, and every long note on a
+    # clean render came out as two halves meeting at the midpoint: 33 spurious
+    # notes against 158, and the halved bass notes moved the bar's accents far
+    # enough to read four-four as three.
+    #
+    # The two halves end together, because it is the one top edge that ends
+    # them -- measured 10ms apart -- where junk overlapping a real note ends
+    # wherever it happens to. So overlapping notes ending within this of each
+    # other are one tile, however far apart they start.
+    #
+    # Measured on a render of a known MIDI with effects off: F1 0.880 -> 0.974,
+    # every spurious note gone, metre back to 4/4, identical from 0.02 to 0.08.
+    # Neutral on the same render with heavy particles (0.634 either way). The
+    # cost is one note on `sparks`, which `merge_reach` had recovered and this
+    # gives back: junk there ends alongside a real note.
+    merge_same_end: float = 0.04
+
 
 @dataclass(frozen=True)
 class ScoreConfig:

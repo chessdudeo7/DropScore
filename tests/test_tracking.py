@@ -511,6 +511,25 @@ def test_a_long_note_does_not_swallow_a_later_one_on_its_key() -> None:
     assert round(merged[0].duration, 2) == 0.60
 
 
+def test_the_rest_of_a_tile_is_not_a_second_note() -> None:
+    """A tile has one end.
+
+    When its track jumps to the glow at the strike line, the rest of the tile
+    is picked up afresh and timed as a note starting partway through. Trimmed
+    apart, every long note on a clean render came out as two halves.
+    """
+    from dropscore.tracking import _merge_overlaps  # noqa: PLC0415
+
+    tile = Note(onset=0.0, pitch=48, duration=0.535, hand="L", velocity=80)
+    rest = Note(onset=0.26, pitch=48, duration=0.266, hand="L", velocity=80)
+
+    merged = _merge_overlaps([tile, rest])
+
+    assert len(merged) == 1
+    assert round(merged[0].onset, 2) == 0.0
+    assert round(merged[0].duration, 2) == 0.54
+
+
 def test_fragments_of_one_tile_still_merge() -> None:
     """The bound must not undo what the merge is for: one tile broken into
     pieces a few frames apart is still one note."""
