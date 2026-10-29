@@ -578,7 +578,7 @@ def score(piece: PrintedPiece, config: Config = DEFAULT) -> PrintedResult:
     """Transcribe the recording and score it against the printed music."""
     from .calibrate import calibrate  # noqa: PLC0415
     from .tiles import discover_palette  # noqa: PLC0415
-    from .tracking import measure_scroll_speed, transcribe  # noqa: PLC0415
+    from .tracking import transcribe_video  # noqa: PLC0415
     from .video import VideoReader  # noqa: PLC0415
 
     if not piece.video.exists():
@@ -589,8 +589,7 @@ def score(piece: PrintedPiece, config: Config = DEFAULT) -> PrintedResult:
             samples = reader.sample()
             calibration = calibrate(samples, config)
             palette = discover_palette(samples, calibration, config)
-            speed = measure_scroll_speed(reader, calibration, 40, config=config, palette=palette)
-            sequence = transcribe(reader.frames(), calibration, palette, speed, config)
+            sequence, _ = transcribe_video(reader, calibration, palette, config)
     except Exception as exc:  # noqa: BLE001 -- reported, not raised
         log.exception("could not transcribe %s", piece.video)
         return PrintedResult(name=piece.name, title=piece.title, error=str(exc))

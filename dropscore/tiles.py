@@ -183,19 +183,107 @@ def discover_palette(
     window = cfg.color_tolerance * cfg.spread_window
     spreads = np.array(
         [
-            float(np.median(closest[(nearest == index) & (closest < window)]))
-            if np.any((nearest == index) & (closest < window))
-            else 0.0
+            _member_spread(closest[(nearest == index) & (closest < window)], cfg)
             for index in range(len(kept_colors))
         ]
     )
 
     log.debug("palette: %d colours from %d sampled pixels", int(keep.sum()), len(pixels))
-    return Palette(
+    palette = Palette(
         background=background,
         colors=kept_colors,
         counts=counts[keep],
         spreads=spreads,
+    )
+    return _drop_line_colours(palette, frames, calibration, config)
+
+
+def _member_spread(distances: np.ndarray, cfg) -> float:
+    """How far a colour's own pixels typically sit from it.
+
+    The median, unless most of them sit in one narrow band that the median
+    falls outside. That is a flat tile colour with an effect around it: on a
+    render with particle smoke over the keys, 41% of the members sat 4-8 from
+    the colour and the rest straggled evenly out to 44, so the median read 15
+    and widened the radius from 22 to 37. Every smoke cloud became tile, and
+    the clip came back with 148 phantom notes and the wrong tempo and metre.
+    A gradient ramp spreads its pixels evenly and has no such band, so it keeps
+    the median and the radius it needs.
+
+    The band must also stand apart: smoke is a separate population, so the
+    distances just past the band are nearly empty (0.05 of the band's count on
+    that render). A colour whose members carry on past the band at a steady
+    density is one colour drawn with real variation, and its median is the
+    honest spread: Für Elise's second hand reads 0.18 there, and taking its
+    band shrank the radius and lost 8 of its 104 notes.
+    """
+    if distances.size == 0:
+        return 0.0
+    median = float(np.median(distances))
+    ordered = np.sort(distances)
+    width = cfg.spread_core_width
+    # The densest band: for each member, how many sit within `width` above it.
+    ends = np.searchsorted(ordered, ordered + width, side="right")
+    counts = ends - np.arange(ordered.size)
+    start = int(counts.argmax())
+    if counts[start] < cfg.spread_core_share * ordered.size:
+        return median
+    low, high = float(ordered[start]), float(ordered[start] + width)
+    if low <= median <= high:
+        return median
+    beyond = np.count_nonzero((ordered > high) & (ordered <= high + width))
+    if beyond >= cfg.spread_core_gap * counts[start]:
+        return median
+    return float(np.median(ordered[start : ends[start]]))
+
+
+def _drop_line_colours(
+    palette: Palette, frames: Sequence[Frame], calibration: Calibration, config: Config
+) -> Palette:
+    """Remove a grey that only ever draws lines, when another colour draws tiles.
+
+    Re-encoded, a clean render of one tile colour came back with two: the
+    second a dark grey made of the grid lines the visualizer draws at every C
+    and of tile edges whose colour the codec's chroma subsampling had washed
+    out. Each outline it drew around a real tile was tracked as a note of its
+    own -- 194 notes where there are 158, and 816 at 30 fps.
+
+    A colour is dropped only if all three hold: it is near grey, almost none
+    of it survives an opening a third of a key wide, and some other colour's
+    pixels mostly do. Outlined themes draw every voice thin, so the last
+    condition keeps them; a patterned tile fill is thin too, but coloured.
+    """
+    cfg = config.tiles
+    if palette.track_count < 2:
+        return palette
+    chroma = np.hypot(palette.colors[:, 1] - 128.0, palette.colors[:, 2] - 128.0)
+    if not np.any(chroma < cfg.line_max_chroma):
+        return palette
+
+    size = max(3, int(calibration.white_width * 0.35)) | 1
+    kernel = np.ones((size, size), np.uint8)
+    total = np.zeros(palette.track_count)
+    solid = np.zeros(palette.track_count)
+    for frame in frames[:: max(1, len(frames) // 24)]:
+        for index, mask in enumerate(_track_masks(frame.image, palette, calibration, config)):
+            total[index] += mask.sum()
+            solid[index] += cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel).sum()
+    solidity = solid / np.maximum(total, 1)
+
+    drop = (
+        (chroma < cfg.line_max_chroma)
+        & (solidity < cfg.line_max_solidity)
+        & (solidity.max() >= cfg.line_solid_neighbour)
+    )
+    if not drop.any() or drop.all():
+        return palette
+    keep = ~drop
+    log.debug("dropped %d line colour(s), solidity %s", int(drop.sum()), np.round(solidity, 2))
+    return Palette(
+        background=palette.background,
+        colors=palette.colors[keep],
+        counts=palette.counts[keep],
+        spreads=None if palette.spreads is None else palette.spreads[keep],
     )
 
 
@@ -399,14 +487,43 @@ def _track_masks(
 ) -> list[np.ndarray]:
     """One binary mask per palette colour, for the area above the strike line."""
     cfg = config.tiles
-    lab = _to_lab(image[: calibration.strike_y])
-    weighted = _weighted(lab, cfg.lightness_weight)
+    # Weighted in place: the Lab array is this call's own, and copying a whole
+    # frame of floats to scale one channel was a second of every minute.
+    weighted = _to_lab(image[: calibration.strike_y])
+    weighted[..., 0] *= cfg.lightness_weight
 
     targets = _weighted(palette.colors[:, None, None, :], cfg.lightness_weight)
-    distances = np.linalg.norm(weighted[None, ...] - targets, axis=3)
+    # Summed channel by channel rather than through one (colours, rows,
+    # columns, 3) difference array: the same arithmetic in the same order,
+    # without allocating the largest array detection ever makes, every frame.
+    distances = np.empty((len(targets),) + weighted.shape[:2], dtype=np.float32)
+    # One scratch buffer, reused: a new array per channel per colour was most
+    # of what this costs.
+    # In the type the arithmetic was always done in: the colours are float64,
+    # which promotes it, and the root alone is stored as float32.
+    diff = np.empty(weighted.shape[:2], dtype=np.result_type(weighted, targets))
+    total = np.empty_like(diff)
+    for k, target in enumerate(targets.reshape(len(targets), 3)):
+        np.subtract(weighted[..., 0], target[0], out=diff)
+        np.multiply(diff, diff, out=total)
+        for c in (1, 2):
+            np.subtract(weighted[..., c], target[c], out=diff)
+            np.multiply(diff, diff, out=diff)
+            total += diff
+        np.sqrt(total, out=distances[k])
 
-    nearest = distances.argmin(axis=0)
-    closest = distances.min(axis=0)
+    # Most videos have one or two colours, where the general argmin and min
+    # over a stacked array cost a tenth of detection. Same answers: argmin
+    # keeps the first of a tie, and so does a strict comparison.
+    if len(distances) == 1:
+        nearest = np.zeros(distances.shape[1:], dtype=np.intp)
+        closest = distances[0]
+    elif len(distances) == 2:
+        nearest = (distances[1] < distances[0]).astype(np.intp)
+        closest = np.minimum(distances[0], distances[1])
+    else:
+        nearest = distances.argmin(axis=0)
+        closest = np.take_along_axis(distances, nearest[None], axis=0)[0]
 
     # Only pixels genuinely close to a tile colour count. Bloom is a blend of
     # tile and background, so it sits far from both and drops out here.
@@ -471,9 +588,12 @@ def _track_masks(
     else:
         # The neighbour in the pixel's own direction is the colour second
         # nearest to it.
-        runner_up = distances.copy()
-        np.put_along_axis(runner_up, nearest[None], np.inf, axis=0)
-        second = runner_up.argmin(axis=0)
+        if len(distances) == 2:
+            second = 1 - nearest  # with two colours the other one is second
+        else:
+            runner_up = distances.copy()
+            np.put_along_axis(runner_up, nearest[None], np.inf, axis=0)
+            second = runner_up.argmin(axis=0)
         meeting = np.maximum(cfg.color_tolerance, gaps[nearest, second] / 2.0)
         solid = closest < np.minimum(radius[nearest], meeting)
 

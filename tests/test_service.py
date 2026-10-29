@@ -11,6 +11,7 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from dropscore.synth import RenderSpec, generate, render
@@ -33,11 +34,28 @@ from dropscore.service.jobs import LOG_LIMIT, LOG_TRIM, output_path  # noqa: E40
 SPEC = RenderSpec(width=640, height=360, fps=10.0)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def clip(tmp_path_factory: pytest.TempPathFactory) -> Path:
     directory = tmp_path_factory.mktemp("service-clip")
     video, _ = render(generate(seed=1, bars=2), directory / "demo.mp4", SPEC)
     return video
+
+
+@pytest.fixture(scope="module")
+def finished(tmp_path_factory: pytest.TempPathFactory, clip: Path):
+    """One upload run to completion, for the tests that only read its result.
+
+    Each of them used to upload and transcribe the same clip for itself.
+    """
+    workdir = tmp_path_factory.mktemp("finished-jobs")
+    with TestClient(create_app(workdir=workdir, serve_frontend=False)) as served:
+        with clip.open("rb") as handle:
+            response = served.post(
+                "/api/jobs/upload", files={"file": (clip.name, handle, "video/mp4")}
+            )
+        assert response.status_code == 200
+        job_id = response.json()["id"]
+        yield served, job_id, _wait(served, job_id)
 
 
 @pytest.fixture
@@ -284,15 +302,8 @@ def test_discard_is_safe_on_an_unknown_job(tmp_path: Path) -> None:
 # ── the real path ────────────────────────────────────────────────────
 
 
-def test_upload_runs_the_pipeline_and_reports_progress(client: TestClient, clip: Path) -> None:
-    with clip.open("rb") as handle:
-        response = client.post(
-            "/api/jobs/upload", files={"file": (clip.name, handle, "video/mp4")}
-        )
-    assert response.status_code == 200
-    job_id = response.json()["id"]
-
-    job = _wait(client, job_id)
+def test_upload_runs_the_pipeline_and_reports_progress(finished) -> None:
+    _, _, job = finished
     assert job["status"] == "done", job.get("error")
     assert job["progress"] == 1.0
     assert [s["state"] for s in job["stages"]] == ["done"] * len(STAGES)
@@ -306,13 +317,8 @@ def test_stage_keys_match_the_frontend_step_list(client: TestClient, clip: Path)
         assert f"key: '{key}'" in app_js, f"frontend has no step for stage {key!r}"
 
 
-def test_result_carries_notes_the_roll_can_draw(client: TestClient, clip: Path) -> None:
-    with clip.open("rb") as handle:
-        job_id = client.post(
-            "/api/jobs/upload", files={"file": (clip.name, handle, "video/mp4")}
-        ).json()["id"]
-
-    job = _wait(client, job_id)
+def test_result_carries_notes_the_roll_can_draw(finished) -> None:
+    _, _, job = finished
     result = job["result"]
     assert result["count"] == len(result["notes"])
     for note in result["notes"]:
@@ -426,13 +432,8 @@ def test_omitting_options_still_works(client: TestClient, clip: Path) -> None:
     assert response.status_code == 200
 
 
-def test_outputs_are_downloadable(client: TestClient, clip: Path) -> None:
-    with clip.open("rb") as handle:
-        job_id = client.post(
-            "/api/jobs/upload", files={"file": (clip.name, handle, "video/mp4")}
-        ).json()["id"]
-
-    job = _wait(client, job_id)
+def test_outputs_are_downloadable(finished) -> None:
+    client, job_id, job = finished
     assert set(job["formats"]) >= {"json", "midi", "musicxml"}
 
     midi = client.get(f"/api/jobs/{job_id}/download/midi")
@@ -541,13 +542,8 @@ def test_cancelling_a_long_pass_releases_the_worker(tmp_path: Path) -> None:
 # ── the source video is not kept ─────────────────────────────────────
 
 
-def test_source_video_is_deleted_but_outputs_survive(client: TestClient, clip: Path) -> None:
-    with clip.open("rb") as handle:
-        job_id = client.post(
-            "/api/jobs/upload", files={"file": (clip.name, handle, "video/mp4")}
-        ).json()["id"]
-
-    job = _wait(client, job_id)
+def test_source_video_is_deleted_but_outputs_survive(finished) -> None:
+    client, job_id, job = finished
     assert job["status"] == "done", job.get("error")
 
     stored = client.app.state.store.get(job_id)
@@ -737,7 +733,8 @@ def test_failures_are_captured_as_job_state(tmp_path: Path) -> None:
         time.sleep(0.05)
 
     assert job.status is Status.ERROR
-    assert job.error == "nope"
+    assert "nope" in job.error
+    assert "error: nope" in job.log
 
 
 def test_log_does_not_grow_without_bound(tmp_path: Path) -> None:
@@ -848,3 +845,160 @@ def test_eviction_resumes_once_jobs_finish(tmp_path: Path) -> None:
     _finish(first)
     store.create("fourth")
     assert store.get(first.id) is None, "the finished job should now be reclaimed"
+
+
+# ── what a visitor is told, and how much of the service one can take ──
+
+
+def test_a_pipeline_failure_is_explained_in_plain_words() -> None:
+    from dropscore.calibrate import CalibrationError  # noqa: PLC0415
+    from dropscore.service.jobs import explain  # noqa: PLC0415
+
+    message = explain(CalibrationError("keybed has no vertical structure to measure"))
+
+    assert "falling-tile" in message
+    assert "keybed" not in message
+
+
+def test_a_failed_job_keeps_the_technical_reason_in_its_log(tmp_path: Path) -> None:
+    from dropscore.tracking import TrackingError  # noqa: PLC0415
+
+    store = JobStore(tmp_path)
+    job = store.create("x")
+
+    def explode(_job) -> None:
+        raise TrackingError("12 usable frame pairs")
+
+    store.submit(job, explode)
+    for _ in range(100):
+        if job.status is Status.ERROR:
+            break
+        time.sleep(0.05)
+
+    assert "12 usable" not in job.error
+    assert any("12 usable" in line for line in job.log)
+
+
+def test_a_video_over_the_length_limit_is_refused(clip: Path) -> None:
+    from dropscore.service.jobs import transcribe_job  # noqa: PLC0415
+
+    store = JobStore(clip.parent / "limit-jobs")
+    job = store.create("long")
+    store.submit(job, lambda j: transcribe_job(j, clip, max_seconds=0.5))
+    for _ in range(200):
+        if job.is_finished:
+            break
+        time.sleep(0.05)
+
+    assert job.status is Status.ERROR
+    assert "limit" in job.error
+
+
+def test_a_video_of_a_few_frames_says_it_is_too_short(tmp_path: Path) -> None:
+    import cv2  # noqa: PLC0415
+
+    from dropscore.service.jobs import transcribe_job  # noqa: PLC0415
+
+    path = tmp_path / "three.mp4"
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), 30, (320, 240))
+    for _ in range(3):
+        writer.write(np.zeros((240, 320, 3), np.uint8))
+    writer.release()
+
+    store = JobStore(tmp_path / "jobs")
+    job = store.create("short")
+    store.submit(job, lambda j: transcribe_job(j, path))
+    for _ in range(200):
+        if job.is_finished:
+            break
+        time.sleep(0.05)
+
+    assert job.status is Status.ERROR
+    assert "3 frames long" in job.error
+
+
+def test_progress_moves_within_the_long_stage(tmp_path: Path) -> None:
+    from dropscore.service.jobs import until_cancelled  # noqa: PLC0415
+
+    job = JobStore(tmp_path).create("x")
+    job.status = Status.RUNNING
+    job.begin("notes")
+    before = job.progress
+    for _ in zip(range(5), until_cancelled(range(10), job, report_every=0, total=10)):
+        pass
+
+    assert job.progress > before
+
+
+def test_one_client_cannot_fill_the_queue(tmp_path: Path) -> None:
+    release = threading.Event()
+    app = create_app(workdir=tmp_path / "jobs", serve_frontend=False, max_active_per_client=1)
+    store = app.state.store
+    blocker = store.create("held")
+    blocker.client = "testclient"
+    store.submit(blocker, lambda _j: release.wait(10))
+    try:
+        with TestClient(app) as served:
+            response = served.post(
+                "/api/jobs/upload", files={"file": ("a.mp4", b"0" * 64, "video/mp4")}
+            )
+        assert response.status_code == 429
+    finally:
+        release.set()
+
+
+def test_a_restart_clears_the_jobs_nobody_can_reach(tmp_path: Path) -> None:
+    stale = tmp_path / ("ab" * 16)
+    stale.mkdir()
+    (stale / "source.mp4").write_bytes(b"0")
+    unrelated = tmp_path / "notes"
+    unrelated.mkdir()
+
+    JobStore(tmp_path)
+
+    assert not stale.exists()
+    assert unrelated.exists()
+
+
+def test_finished_jobs_expire_after_max_age(tmp_path: Path) -> None:
+    store = JobStore(tmp_path, max_age=3600)
+    old, recent = store.create("old"), store.create("recent")
+    _finish(old)
+    _finish(recent)
+    old.finished, recent.finished = time.time() - 7200, time.time()
+
+    assert store.get(old.id) is None
+    assert not old.workdir.exists()
+    assert store.get(recent.id) is recent
+    assert recent.workdir.exists()
+    store.shutdown()
+
+
+def test_running_jobs_never_expire(tmp_path: Path) -> None:
+    store = JobStore(tmp_path, max_age=1)
+    job = store.create("running")
+    job.created -= 7200
+    assert store.expire(now=time.time() + 7200) == 0
+    assert store.get(job.id) is job
+    store.shutdown()
+
+
+def test_an_idle_server_expires_results_without_a_new_request(tmp_path: Path) -> None:
+    store = JobStore(tmp_path, max_age=0.05, sweep_every=0.02)
+    job = store.create("x")
+    _finish(job)
+    job.finished = time.time()
+    deadline = time.time() + 5
+    while job.workdir.exists() and time.time() < deadline:
+        time.sleep(0.02)
+    assert not job.workdir.exists()
+    store.shutdown()
+
+
+def test_max_age_none_keeps_results(tmp_path: Path) -> None:
+    store = JobStore(tmp_path, max_age=None)
+    job = store.create("x")
+    _finish(job)
+    job.finished = 0.0
+    assert store.get(job.id) is job
+    store.shutdown()

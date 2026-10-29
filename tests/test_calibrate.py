@@ -276,3 +276,77 @@ def test_keybed_beats_a_burned_in_caption() -> None:
     top, end = max(runs, key=lambda run: float(structure[run[0] : run[1]].sum()))
 
     assert (top, end) == (300, 420)
+
+
+# ── awkward footage ──────────────────────────────────────────────────
+
+
+def test_a_tilted_keyboard_is_measured_and_levelled() -> None:
+    import cv2  # noqa: PLC0415
+
+    from dropscore.video import measure_tilt  # noqa: PLC0415
+
+    renderer = _render()
+    frames = _frames(renderer)
+    height, width = frames[0].image.shape[:2]
+    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), 0.8, 1.0)
+    tilted = [
+        cv2.warpAffine(f.image, matrix, (width, height), borderMode=cv2.BORDER_REPLICATE)
+        for f in frames
+    ]
+
+    level, _ = measure_tilt([f.image for f in frames])
+    degrees, agreement = measure_tilt(tilted)
+
+    assert abs(level) < 0.05
+    assert degrees == pytest.approx(-0.8, abs=0.1)
+    assert agreement >= DEFAULT.video.level_min_agreement
+
+
+def test_a_sliver_past_the_board_is_trimmed_rather_than_failing() -> None:
+    """A board a few pixels in from the frame edge bracketed 53 white keys on a
+    full piano, which has 52, and calibration refused the video outright."""
+    renderer = _render()
+    frames = _frames(renderer)
+    pad = int(renderer.layout.white_width * 0.6)
+    padded = []
+    for f in frames:
+        image = np.zeros((f.image.shape[0], f.image.shape[1] + pad, 3), np.uint8)
+        image[:, pad:] = f.image
+        image[:, :pad] = f.image[:, :1]  # the frame edge smeared outward, as a keystone does
+        padded.append(Frame(f.index, f.time, image, 1.0))
+
+    result = calibrate(padded)
+
+    assert (result.layout.first_pitch, result.layout.last_pitch) == (21, 108)
+
+
+def _on_a_desktop(image: np.ndarray) -> np.ndarray:
+    """The video in a window in one corner, beside another window full of text."""
+    import cv2  # noqa: PLC0415
+
+    h, w = image.shape[:2]
+    desk = np.full((h, w, 3), (90, 70, 50), np.uint8)
+    cv2.rectangle(desk, (w // 2 + 40, 30), (w - 30, h - 60), (245, 245, 245), -1)
+    for row in range(6):
+        cv2.putText(desk, f"notes line {row}", (w // 2 + 60, 70 + 35 * row),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (30, 30, 30), 1)
+    cv2.rectangle(desk, (14, 14), (22 + w // 2, 48 + h // 2), (200, 200, 200), -1)
+    desk[40 : 40 + h // 2, 18 : 18 + w // 2] = cv2.resize(image, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+    return desk
+
+
+def test_finds_the_keyboard_of_a_video_playing_in_a_window() -> None:
+    """A screen recording of a window: every row crossed the window edges and
+    the other window's text, and the whole fall area was taken for keybed."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    renderer = _render()
+    frames = [replace(f, image=_on_a_desktop(f.image)) for f in _frames(renderer)]
+    result = calibrate(frames)
+
+    assert result.layout.first_pitch == renderer.layout.first_pitch
+    assert result.layout.last_pitch == renderer.layout.last_pitch
+    for pitch in (21, 60, 61, 108):
+        expected = 18 + renderer.layout.key_center(pitch) / 2
+        assert result.layout.key_center(pitch) == pytest.approx(expected, abs=1.5)

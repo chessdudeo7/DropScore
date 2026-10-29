@@ -107,8 +107,8 @@ dropscore export video.notes.json -f midi -f musicxml
 
 **Trust the MIDI over the notation.** MIDI says exactly what the tiles said, with
 no editorial decisions. MusicXML is mechanically correct but musically
-approximate: one voice per staff, notes tied across barlines, no beaming or
-dynamics. Turning a note stream into *readable* notation is a partly aesthetic
+approximate: up to two voices per staff, notes tied across barlines, short
+notes beamed a beat at a time, no dynamics or slurs. Turning a note stream into *readable* notation is a partly aesthetic
 problem, and this does the mechanical part only.
 
 PDF engraves in-process with verovio (`pip install "dropscore[pdf]"`), falling
@@ -184,13 +184,40 @@ regenerated.
 ## The web app
 
 ```bash
-pip install -e ".[service]"
+pip install -e ".[service,pdf]"
 dropscore serve
 ```
 
 Serves the API and the frontend from one origin at `http://127.0.0.1:8000`. Upload
 a video, watch the real pipeline run stage by stage, and download the MIDI,
-MusicXML and note JSON it produces.
+MusicXML, PDF and note JSON it produces. Without the `pdf` extra, PDF is offered
+only if MuseScore is on `PATH`.
+
+Or in a container, with both extras installed:
+
+```bash
+docker build -t dropscore .
+docker run -p 8000:8000 dropscore
+```
+
+**Limits**, each a `serve` flag:
+
+| Flag | Default | |
+|---|---|---|
+| `--max-minutes` | 15 | longest video accepted; the page refuses a longer one before uploading it |
+| `--jobs-per-client` | 2 | videos one visitor may have queued or running at once |
+| `--keep-hours` | 24 | how long finished results stay downloadable |
+| (fixed) | 2 GB | largest upload |
+
+The whole queue is capped at 20 active jobs. Visitors are told when they hit a
+limit, and a failed job says what was wrong with the video in plain words (not
+a falling-tile video, no keyboard found, could not be decoded); the technical
+reason stays in the job log. Behind a reverse proxy, set `FORWARDED_ALLOW_IPS` to
+the proxy's address, or every visitor shares the proxy's per-client limit.
+
+Job directories from a previous run are deleted at startup, since nothing can
+reach them once the in-memory job list is gone. `web/privacy.html` is a draft
+privacy page, not yet linked from the app.
 
 The uploaded video is **deleted as soon as the job settles**, whatever the
 outcome — a source is up to 2 GB and useless once read, while the outputs are

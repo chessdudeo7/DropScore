@@ -76,13 +76,6 @@
 
           <p class="hint" id="hint">Also accepts youtu.be, /shorts/ and /embed/ links.</p>
 
-          <div class="samples">
-            <span>Try</span>
-            <button class="chip" type="button" data-url="https://www.youtube.com/watch?v=dQw4w9WgXcQ">watch?v=…</button>
-            <button class="chip" type="button" data-url="https://youtu.be/9bZkp7q19f0?t=42">youtu.be/…</button>
-            <button class="chip" type="button" data-url="https://www.youtube.com/shorts/aqz-KE-bpKQ">/shorts/…</button>
-          </div>
-
           <div class="preview" id="preview" hidden>
             <div class="preview-thumb">
               <img id="preview-img" alt="Video thumbnail" />
@@ -138,7 +131,7 @@
             <span>Transcribe</span>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13" /><path d="M13 6l6 6-6 6" /></svg>
           </button>
-          <span class="actions-note">Runs locally · nothing leaves your machine</span>
+          <span class="actions-note">Your video is deleted once it has been transcribed</span>
         </div>
       </form>
 
@@ -200,7 +193,7 @@
       <li><b>88</b><span>keys mapped</span></li>
       <li><b>MIDI · XML · PDF</b><span>outputs</span></li>
       <li><b>No ML</b><span>just vision &amp; maths</span></li>
-      <li><b>Offline</b><span>runs on your machine</span></li>
+      <li><b>Private</b><span>videos are not kept</span></li>
     </ul>
   </section>
 
@@ -243,10 +236,19 @@
 
       <div class="roll-wrap">
         <div class="roll-head">
-          <span>Piano roll</span>
+          <span class="roll-title">
+            Piano roll
+            <button class="ghost-btn sm" id="play-btn" type="button" aria-pressed="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14l11-7z" /></svg>
+              <span>Listen</span>
+            </button>
+          </span>
           <span class="mono" id="roll-range"></span>
         </div>
-        <canvas id="roll" height="240"></canvas>
+        <div class="roll-canvas">
+          <canvas id="roll" height="240"></canvas>
+          <div class="playhead" id="playhead" hidden></div>
+        </div>
         <div class="keybed" id="keybed" aria-hidden="true"></div>
       </div>
 
@@ -300,7 +302,7 @@
 
 <footer>
   <span class="brand-text">Drop<b>Score</b></span>
-  <span class="mono" id="footer-note">open source · runs locally</span>
+  <span class="mono" id="footer-note">falling tiles in, sheet music out</span>
 </footer>
 
 <script>

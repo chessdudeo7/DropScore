@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Sequence
 
 import cv2
 import numpy as np
@@ -112,6 +112,50 @@ class Frame:
         return self.image.shape[1]
 
 
+def measure_tilt(images: Sequence[np.ndarray]) -> tuple[float, float]:
+    """(degrees, agreement): how far the keyboard's top edge is from level.
+
+    The top of the keybed is the longest horizontal edge in these videos. It
+    is found in each of 24 strips across the frame, in the lower two thirds,
+    and a line is fitted through the strips by the median of their pairwise
+    slopes, so a strip that latched onto a tile instead does not move it.
+    Agreement is the share of strips within two pixels of that line. Rotating
+    the frame by the angle returned levels it.
+    """
+    gray = np.median(
+        np.stack([cv2.cvtColor(i, cv2.COLOR_BGR2GRAY) for i in images]), axis=0
+    ).astype(np.float32)
+    height, width = gray.shape
+    rows = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    top = height // 3
+    strips = 24
+    xs, ys = [], []
+    for k in range(strips):
+        a, b = int(width * (k + 0.1) / strips), int(width * (k + 0.9) / strips)
+        if b <= a:
+            continue
+        profile = np.abs(rows[top:, a:b]).mean(axis=1)
+        xs.append((a + b) / 2.0)
+        ys.append(top + int(np.argmax(profile)))
+    if len(xs) < 4:
+        return 0.0, 0.0
+    x, y = np.array(xs), np.array(ys, dtype=float)
+    pairs = [
+        (y[j] - y[i]) / (x[j] - x[i]) for i in range(len(x)) for j in range(i + 1, len(x))
+    ]
+    slope = float(np.median(pairs))
+    residual = y - (np.median(y - slope * x) + slope * x)
+    agreement = float(np.mean(np.abs(residual) <= 2.0))
+    return float(np.degrees(np.arctan(slope))), agreement
+
+
+def _rotate(image: np.ndarray, matrix: np.ndarray) -> np.ndarray:
+    height, width = image.shape[:2]
+    return cv2.warpAffine(
+        image, matrix, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+    )
+
+
 def _spread(lo: int, hi: int, count: int) -> np.ndarray:
     """Up to ``count`` distinct indices spread evenly over ``[lo, hi)``.
 
@@ -155,6 +199,9 @@ class VideoReader:
             )
 
         self.info = self._probe()
+        # Set by sample() when the keyboard is tilted; applied to every frame.
+        self._level: np.ndarray | None = None
+        self.tilt: float = 0.0
 
         # Read nothing past ``end`` seconds. A screen recording rarely stops
         # when the piece does: one ran on into a channel's end screen and an
@@ -229,6 +276,8 @@ class VideoReader:
                 (self.info.width, self.info.height),
                 interpolation=cv2.INTER_AREA,  # correct choice when downscaling
             )
+        if self._level is not None:
+            image = _rotate(image, self._level)
         return Frame(
             index=index,
             time=index / self.info.fps,
@@ -312,7 +361,7 @@ class VideoReader:
             # No usable count: fall back to walking the file and keeping every
             # nth frame. Costs a full pass, but only happens on odd containers.
             log.info("%s reports no frame count; scanning to sample", self.path.name)
-            return self._sample_by_scan(count)
+            return self._levelled(self._sample_by_scan(count))
 
         lo = int(total * cfg.calibration_margin)
         hi = int(total * (1.0 - cfg.calibration_margin))
@@ -327,7 +376,28 @@ class VideoReader:
 
         if not frames:
             raise VideoError(f"Could not read any frames from {self.path.name}.")
-        return frames
+        return self._levelled(frames)
+
+    def _levelled(self, frames: list[Frame]) -> list[Frame]:
+        """Measure the keyboard's tilt once, and correct it from here on.
+
+        Done here because every pipeline starts by sampling, so whatever reads
+        frames afterwards -- calibration, the palette, tracking -- sees them
+        level without having to know.
+        """
+        if self._level is not None or not frames:
+            return frames
+        cfg = self.config.video
+        degrees, agreement = measure_tilt([f.image for f in frames])
+        if agreement < cfg.level_min_agreement or not (
+            cfg.level_min_degrees <= abs(degrees) <= cfg.level_max_degrees
+        ):
+            return frames
+        height, width = frames[0].image.shape[:2]
+        self._level = cv2.getRotationMatrix2D((width / 2, height / 2), degrees, 1.0)
+        self.tilt = degrees
+        log.info("%s: keyboard tilted %.2f degrees; levelling", self.path.name, degrees)
+        return [replace(f, image=_rotate(f.image, self._level)) for f in frames]
 
     def _sample_by_scan(self, count: int) -> list[Frame]:
         """Two passes: count frames without decoding, then decode only the picks.

@@ -1,0 +1,10 @@
+.git
+out
+debug
+tests
+**/__pycache__
+*.egg-info
+baseline.json
+*.mp4
+*.mid
+*.musicxml

@@ -28,6 +28,16 @@ class VideoConfig:
     # Fraction of the video to ignore at each end when sampling for calibration.
     calibration_margin: float = 0.05
 
+    # A keyboard filmed off a screen is rarely level, and the key grid is fitted
+    # in columns: tilted half a degree, a full board drifts by a key's height
+    # from one end to the other and the grid fails. Tilts between these bounds
+    # are measured from the keyboard's top edge and rotated out of every frame.
+    # Every render and recording here measures under 0.05 degrees.
+    level_min_degrees: float = 0.15
+    level_max_degrees: float = 5.0
+    # Share of the strips across the frame that must agree on the edge's line.
+    level_min_agreement: float = 0.5
+
 
 @dataclass(frozen=True)
 class CalibrationConfig:
@@ -75,7 +85,6 @@ class CalibrationConfig:
     # Sanity bounds on the keybed band, as guards against non-piano video.
     min_keybed_px: int = 12
     max_keybed_ratio: float = 0.60
-    min_edge_energy: float = 1.0
 
     # Plausible white-key widths in pixels. Below ~4px adjacent keys cannot be
     # separated at all; above ~80px the video is showing barely an octave.
@@ -92,6 +101,15 @@ class CalibrationConfig:
 
     # Columns quieter than this fraction of the busiest are outside the keyboard.
     extent_ratio: float = 0.08
+
+    # Finding a video playing inside a larger picture (calibrate.video_columns),
+    # tried only when the whole picture will not fit: a pixel moves when its
+    # brightness varies by more than this across the samples; a column belongs
+    # to the video when this share of its fall-area rows is within the
+    # tolerance of the fall area's background.
+    video_motion_level: float = 8.0
+    video_colour_tolerance: float = 20.0
+    video_plain_share: float = 0.5
 
     # Reject the fit below this black-key pattern match rate. A one-key offset
     # typically scores around 0.4, so 0.8 separates cleanly.
@@ -139,6 +157,14 @@ class TileConfig:
     # rather than a voice of its own. A glow halo measured 0.46.
     blend_tolerance: float = 6.0
     min_palette_share: float = 0.05
+
+    # A grey that is never solid, beside a colour that is, is not a voice: it
+    # is grid lines and the edges a codec has bled the colour out of. Solidity
+    # is the share of a colour's pixels left after an opening a third of a key
+    # wide. Real tile colours measured 0.18 or more; the grey 0.00-0.01.
+    line_max_chroma: float = 8.0
+    line_max_solidity: float = 0.10
+    line_solid_neighbour: float = 0.25
     max_sample_pixels: int = 200_000
 
     # A colour's acceptance radius is at least this multiple of how far its own
@@ -152,6 +178,17 @@ class TileConfig:
     # enough to keep a gradient's far end, tight enough to exclude pixels that
     # are only nearest to this colour for want of a better match.
     spread_window: float = 2.0
+
+    # A colour whose own pixels mostly sit in one tight band is a flat tile
+    # colour, however far its other members straggle. When at least
+    # spread_core_share of them fall within spread_core_width of each other and
+    # the median lies outside that band, the spread is read from the band. A
+    # gradient has no such band; a particle cloud around flat tiles does.
+    spread_core_width: float = 4.0
+    spread_core_share: float = 0.4
+    # ...and only when the next spread_core_width past the band holds fewer than
+    # this share of the band's members: smoke stands apart, real variation does not.
+    spread_core_gap: float = 0.1
 
     # How close a pixel must sit to a palette colour to count as solid tile.
     # Bloom is a blend of tile and background, so it lands outside this and is
@@ -181,12 +218,6 @@ class TileConfig:
     # A region less filled than this is an outlined tile, whose middle is empty
     # by design, rather than two stacked tiles with a seam between them.
     outline_fill_ratio: float = 0.45
-
-    # ...but only if its side edges run nearly the full height, which is what
-    # makes an outline an outline. Judged separately from row_fill_ratio: that
-    # bar is deliberately low, and reusing it let a key with a neighbour
-    # bleeding into one edge column pass as hollow.
-    outline_edge_ratio: float = 0.80
 
     # An outlined tile has a column stroked at least this full in each side
     # third, and is judged from its middle rather than its edges; columns under
@@ -250,6 +281,9 @@ class TrackingConfig:
     # sub-pixel quirk but a sign the probe itself went wrong.
     bias_probe_shifts: tuple[int, ...] = (4, 6, 8)
     max_bias: float = 2.0
+    # How far one frame's readings at the probe shifts may disagree before
+    # the frame is taken to be measuring nothing.
+    bias_agreement: float = 0.5
 
     # Association. A tile can only be where the known speed puts it, so the gate
     # is a fraction of the distance it should have travelled since last seen.
@@ -385,9 +419,12 @@ class TrackingConfig:
     #
     # Measured on a render of a known MIDI with effects off: F1 0.880 -> 0.974,
     # every spurious note gone, metre back to 4/4, identical from 0.02 to 0.08.
-    # Neutral on the same render with heavy particles (0.634 either way). The
-    # cost is one note on `sparks`, which `merge_reach` had recovered and this
-    # gives back: junk there ends alongside a real note.
+    # Neutral on the same render with heavy particles (0.634 either way).
+    #
+    # Only for a later piece first seen after the earlier note's onset, which
+    # a piece picked up from a lost track always is. That gave back the note
+    # it had cost on `sparks`, where sparks bridged two strikes of one key, and
+    # lifted the glow render 0.823 -> 0.843 (0.754 -> 0.776 at 30fps).
     merge_same_end: float = 0.04
 
 
@@ -501,6 +538,9 @@ class ScoreConfig:
     # discriminating -- two readings of one piece came back at 0.913 apiece,
     # and noise between saturated scores chose the beat.
     repeat_tolerance: float = 0.25
+    # The slowest a unit of two tatums may move and still be written as an
+    # eighth (0.5s is 120 to the minute); slower, it is a quarter.
+    max_eighth_seconds: float = 0.5
 
     # Third, how idiomatic the commonest note value looks against the beat.
     # A piece written almost entirely in sixteenths is far rarer than one in

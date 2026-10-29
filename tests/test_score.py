@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 from dropscore.config import DEFAULT, Config, ScoreConfig
@@ -1808,3 +1809,53 @@ def test_the_last_note_of_a_figure_is_worth_what_the_figure_was_worth() -> None:
     assert last and all(abs(v - 0.5) < 0.1 for v in last), (
         f"the note ending each figure was written as {last[:3]}, not the sixteenth it is"
     )
+
+
+def test_a_triplet_stream_stays_in_threes_when_its_onsets_are_a_coin_toss() -> None:
+    """In an unbroken stream an onset follows every onset two tatums on and
+    three tatums on alike, so which is more common says little: Moonlight's
+    triplets measured 0.83 against 0.80, and the piece came back in 3/8 at 36
+    to the minute. Its arpeggio returns to the same note every third tatum,
+    and that settles it."""
+    from dropscore.score import _meter, _repeats_at  # noqa: PLC0415
+
+    tatum = 0.4
+    notes = []
+    for i in range(144):
+        if i % 12 in (9, 11):
+            continue  # a gap that happens to favour two-tatum repeats
+        notes.append(Note(onset=i * tatum, pitch=(56, 61, 64)[i % 3], duration=tatum * 0.9, hand="R"))
+        if i % 12 == 0:
+            notes.append(Note(onset=i * tatum, pitch=37, duration=tatum * 11.5, hand="L"))
+    sequence = NoteSequence.of(notes)
+    onsets = np.array(sorted({n.onset for n in sequence}))
+    tolerance = tatum * DEFAULT.score.repeat_tolerance
+    assert _repeats_at(onsets, 2 * tatum, tolerance) > _repeats_at(onsets, 3 * tatum, tolerance)
+
+    _, beat_type, beat = _meter(sequence, 3 * tatum, tatum, 0.0, DEFAULT)
+
+    assert beat_type == 8
+    assert beat == pytest.approx(tatum, rel=0.01)
+
+
+def test_a_slow_unit_of_two_tatums_is_a_quarter_not_an_eighth() -> None:
+    """Grouped like Für Elise -- three units of two tatums -- but moving at a
+    walking pace: a waltz at 86 to the minute. Counted as eighths it came back
+    as 3/8 at 43 with every value written at half its size."""
+    from dropscore.score import _meter  # noqa: PLC0415
+
+    tatum = 60.0 / 86 / 2
+    notes = []
+    for bar in range(24):
+        start = bar * 6 * tatum
+        for step in (0, 2, 4):
+            notes.append(
+                Note(onset=start + step * tatum, pitch=45 if step == 0 else 76,
+                     duration=tatum * 0.6, hand="L" if step == 0 else "R")
+            )
+    sequence = NoteSequence.of(notes)
+
+    beats_per_bar, beat_type, beat = _meter(sequence, 3 * tatum, tatum, 0.0, DEFAULT)
+
+    assert (beats_per_bar, beat_type) == (3, 4)
+    assert beat == pytest.approx(2 * tatum, rel=0.01)

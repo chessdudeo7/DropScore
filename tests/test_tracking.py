@@ -449,6 +449,23 @@ def test_correlation_bias_still_reads_a_frame_that_has_tiles_in_it() -> None:
     assert abs(_correlation_bias([image], window, DEFAULT.tracking)) < 1.0
 
 
+def test_sustained_columns_measure_no_correlation_bias(caplog) -> None:
+    """Tiles running the full height of the fall area look the same shifted, so
+    the probe's readings disagree (-43.8, -3.05 and +6.26px on synthesia
+    sustained) and the implausible-bias warning fired on a correct clip."""
+    from dropscore.tracking import _correlation_bias  # noqa: PLC0415
+
+    height, width = 240, 320
+    columns = np.zeros((height, width), dtype=np.float32)
+    for left in (60, 110, 160):
+        columns[: height - 2, left : left + 24] = 255.0  # stopping just short of the strike line
+    window = cv2.createHanningWindow((width, height), cv2.CV_32F)
+
+    with caplog.at_level("WARNING", logger="dropscore.tracking"):
+        assert _correlation_bias([columns], window, DEFAULT.tracking) == 0.0
+    assert "implausibly" not in caplog.text
+
+
 def test_a_rising_track_is_not_a_note() -> None:
     """Sparks thrown off a struck key rise; tiles fall. Colour cannot tell them
     apart, and on one clip they cost 41 spurious notes."""
@@ -528,6 +545,28 @@ def test_the_rest_of_a_tile_is_not_a_second_note() -> None:
     assert len(merged) == 1
     assert round(merged[0].onset, 2) == 0.0
     assert round(merged[0].duration, 2) == 0.54
+
+
+def test_a_second_tile_seen_before_the_first_struck_is_its_own_note() -> None:
+    """Ending together is not enough when the later track was on screen first.
+
+    On `sparks` the gap between two strikes of one key was bridged by sparks
+    of the same colour just above the strike line, so the first tile's track
+    ran on to the second tile's end. Both notes ended together and were fused,
+    although the second tile had been falling, separately, for a second.
+    """
+    from dropscore.tracking import _merge_overlaps  # noqa: PLC0415
+
+    bridged = Note(onset=39.60, pitch=71, duration=0.56, hand="R", velocity=80)
+    second = Note(onset=39.91, pitch=71, duration=0.25, hand="R", velocity=80)
+
+    seen_early = {id(bridged): 37.5, id(second): 38.5}
+    merged = sorted(_merge_overlaps([bridged, second], first_seen=seen_early), key=lambda n: n.onset)
+    assert [round(n.onset, 2) for n in merged] == [39.60, 39.91]
+
+    # Picked up after the first was struck, it is still the rest of that tile.
+    seen_late = {id(bridged): 37.5, id(second): 39.70}
+    assert len(_merge_overlaps([bridged, second], first_seen=seen_late)) == 1
 
 
 def test_fragments_of_one_tile_still_merge() -> None:
@@ -867,3 +906,56 @@ def test_a_screen_capture_that_drops_frames_keeps_each_tile_in_one_track() -> No
 
     tracks = build_tracks(detections, speed, calibration)
     assert len(tracks) == 1, f"one tile became {len(tracks)} tracks: {[t.length for t in tracks]}"
+
+
+# ── one decode ───────────────────────────────────────────────────────
+
+
+class _CountingReader:
+    """A reader over rendered frames that counts how many it hands out."""
+
+    def __init__(self, frames: list[Frame]) -> None:
+        self._frames = frames
+        self.decoded = 0
+
+    def frames(self, start: int = 0, stop: int | None = None, step: int = 1):
+        for frame in self._frames[start:stop:step]:
+            self.decoded += 1
+            yield frame
+
+
+def test_transcribe_video_decodes_each_frame_once() -> None:
+    from dropscore.tracking import transcribe_video  # noqa: PLC0415
+
+    renderer = _renderer(bars=3)
+    frames = _all_frames(renderer)
+    reader = _CountingReader(frames)
+    calibration = _calibration(renderer)
+    palette = discover_palette(frames[:: max(1, len(frames) // 24)], calibration, DEFAULT)
+
+    sequence, speed = transcribe_video(reader, calibration, palette, DEFAULT)
+
+    assert reader.decoded == len(frames)
+    assert speed.value == pytest.approx(renderer.speed, rel=0.02)
+    _, missed, extra = _match(sequence, renderer.notes)
+    assert not missed and not extra
+
+
+def test_transcribe_video_measures_what_the_two_pass_route_does() -> None:
+    from dropscore.tracking import _probe_starts, transcribe_video  # noqa: PLC0415
+
+    renderer = _renderer(bars=3)
+    frames = _all_frames(renderer)
+    calibration = _calibration(renderer)
+    palette = discover_palette(frames[:: max(1, len(frames) // 24)], calibration, DEFAULT)
+
+    _, speed = transcribe_video(None, calibration, palette, DEFAULT, frames=iter(frames))
+
+    shifts = []
+    for start in _probe_starts(len(frames), 40, 8):
+        window = frames[start : start + 40]
+        try:
+            shifts.extend(estimate_speed(window, calibration, palette=palette).shifts)
+        except TrackingError:
+            continue
+    assert speed.samples == len(shifts)

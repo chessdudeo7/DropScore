@@ -16,7 +16,10 @@ only:
   written, so anything stage 7 declined to quantize gets rounded here
   regardless.
 * A tempo mark opens the piece, and a new one opens each declared section.
-* No beaming, dynamics, articulation, slurs or pedal.
+* Eighths and shorter are beamed a beat at a time (a dotted quarter in 6/8,
+  9/8 and 12/8, the whole bar in 3/8), broken by rests. Beaming across beats,
+  which a copyist would do for a run of eighths in 4/4, is not attempted.
+* No dynamics, articulation, slurs or pedal.
 
 The consequence, stated plainly: **the MIDI is accurate and the notation is
 approximate.** When they disagree, the MIDI is right.
@@ -28,11 +31,14 @@ import logging
 import math
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
 from xml.etree import ElementTree as ET
 
 from ..notes import Note, NoteSequence
 from ..score import Analysis
 from .midi import key_signature
+
+Spelling = Callable[[int], tuple[str, int, int]]
 
 log = logging.getLogger(__name__)
 
@@ -60,11 +66,53 @@ _TYPES = (
 
 
 def spell(pitch: int, flats: bool) -> tuple[str, int, int]:
-    """(step, alter, octave) for a MIDI pitch, spelled to suit the key."""
+    """(step, alter, octave) for a MIDI pitch, all sharps or all flats.
+
+    What a note is spelled as when the key is not known.
+    """
     step, alter = (_FLAT_SPELLING if flats else _SHARP_SPELLING)[pitch % 12]
     # Neither spelling table crosses an octave boundary — no Cb or B# — so the
     # octave is always the plain MIDI one.
     return step, alter, pitch // 12 - 1
+
+
+_LETTERS = "CDEFGAB"
+_NATURAL = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+
+# Which scale degree (0 = tonic) each semitone above the tonic is written on.
+# The diatonic notes take their own degree; the chromatic ones take the
+# spelling a page would usually carry: in C major C#, Eb, F#, Ab and Bb; in A
+# minor Bb, C#, D#, F# and G# -- the raised sixth and seventh of the melodic
+# and harmonic minor, not flattened neighbours of the notes above them.
+_MAJOR_DEGREES = (0, 0, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6)
+_MINOR_DEGREES = (0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6)
+
+
+def spell_in_key(pitch: int, key: str) -> tuple[str, int, int] | None:
+    """(step, alter, octave) for a pitch, spelled as it would be in ``key``.
+
+    Spelling from the signature alone -- every black key a sharp in a sharp
+    key, a flat in a flat key -- wrote the seventh of F# major as F natural
+    instead of E#, the fourth of Gb major as B instead of Cb, and every Bb in
+    C major as A#. Spelling by scale degree gets all three right. None when
+    the key name cannot be read.
+    """
+    parts = key.split()
+    if not parts or parts[0][:1] not in _NATURAL:
+        return None
+    tonic = parts[0]
+    tonic_pc = (_NATURAL[tonic[0]] + tonic.count("#") - tonic.count("b")) % 12
+    minor = len(parts) > 1 and parts[1].lower().startswith("min")
+    semitones = (pitch - tonic_pc) % 12
+    degree = (_MINOR_DEGREES if minor else _MAJOR_DEGREES)[semitones]
+    step = _LETTERS[(_LETTERS.index(tonic[0]) + degree) % 7]
+    alter = (pitch % 12 - _NATURAL[step]) % 12
+    if alter > 6:
+        alter -= 12
+    if abs(alter) > 1:
+        return None  # a double accidental: leave it to the plain tables
+    # B# and Cb sit across the octave line from the pitch they sound.
+    return step, alter, (pitch - alter) // 12 - 1
 
 
 # Lengths a single note or rest can be written as, longest first, in divisions.
@@ -231,12 +279,12 @@ def _add_note(
     pitch: int | None,
     duration: int,
     staff: int,
-    flats: bool,
+    spelling: "Spelling",
     chord: bool = False,
     tied_from: bool = False,
     tied_to: bool = False,
     voice: int | None = None,
-) -> None:
+) -> ET.Element:
     element = ET.SubElement(parent, "note")
     if chord:
         ET.SubElement(element, "chord")
@@ -244,7 +292,7 @@ def _add_note(
     if pitch is None:
         ET.SubElement(element, "rest")
     else:
-        step, alter, octave = spell(pitch, flats)
+        step, alter, octave = spelling(pitch)
         pitch_element = ET.SubElement(element, "pitch")
         ET.SubElement(pitch_element, "step").text = step
         if alter:
@@ -269,6 +317,75 @@ def _add_note(
         for start, kind in ((tied_from, "stop"), (tied_to, "start")):
             if start:
                 ET.SubElement(notations, "tied", type=kind)
+    return element
+
+
+# How many beams each written value carries.
+_BEAMS = {"eighth": 1, "16th": 2, "32nd": 3}
+
+
+def _beam_span(beats_per_bar: int, beat_type: int, bar_length: int) -> int:
+    """Length of one beam group, in divisions.
+
+    A beat, which is what the reader counts: a quarter in simple time and a
+    dotted quarter in compound time. 3/8 is felt in one, so its bar is beamed
+    as a whole, the way editions print the opening of Für Elise.
+    """
+    if beat_type == 8 and beats_per_bar == 3:
+        return bar_length
+    if beat_type == 8 and beats_per_bar % 3 == 0:
+        return DIVISIONS * 3 // 2
+    return DIVISIONS * 4 // beat_type
+
+
+def _add_beams(items: list[tuple[int, int, ET.Element | None]], span: int) -> None:
+    """Beam one voice's notes in one bar, a beat at a time.
+
+    ``items`` is every written value in order: its start, its length, and the
+    first note of its chord, or None for a rest. A file without beams leaves
+    beaming to the program reading it, and Verovio, which engraves the PDF,
+    does not beam: every eighth and sixteenth was printed with its own flag.
+    """
+    groups: list[list[tuple[ET.Element, int]]] = []
+    current: list[tuple[ET.Element, int]] = []
+    window = None
+    for start, length, element in items:
+        name = element.findtext("type") if element is not None else None
+        beams = _BEAMS.get(name or "", 0)
+        here = start // span
+        fits = bool(beams) and (start + length - 1) // span == here
+        if not fits or here != window:
+            if len(current) > 1:
+                groups.append(current)
+            current = []
+        window = here if fits else None
+        if fits:
+            current.append((element, beams))
+    if len(current) > 1:
+        groups.append(current)
+
+    for group in groups:
+        for level in range(1, 4):
+            marks = [beams >= level for _, beams in group]
+            for index, (element, _) in enumerate(group):
+                if not marks[index]:
+                    continue
+                before = index > 0 and marks[index - 1]
+                after = index + 1 < len(group) and marks[index + 1]
+                if before and after:
+                    kind = "continue"
+                elif after:
+                    kind = "begin"
+                elif before:
+                    kind = "end"
+                else:
+                    kind = "forward hook" if index == 0 else "backward hook"
+                beam = ET.Element("beam", number=str(level))
+                beam.text = kind
+                # Schema order: beams come after <staff>, before <notations>.
+                notations = element.find("notations")
+                at = list(element).index(notations) if notations is not None else len(element)
+                element.insert(at, beam)
 
 
 def _in_uniform_time(
@@ -373,6 +490,9 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
     fifths, mode = key_signature(key)
     flats = fifths < 0
 
+    def spelling(pitch: int) -> tuple[str, int, int]:
+        return (key and spell_in_key(pitch, key)) or spell(pitch, flats)
+
     # Durations are written in divisions of a quarter note, so a beat counted
     # as an eighth is half a quarter: everything below measures in quarters.
     quarter = beat * beat_type / 4.0
@@ -460,7 +580,7 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
 
         per_measure = bar_lines[index + 1] - bar_lines[index]
         if index == 0:
-            _add_tempo(measure, tempo)
+            _add_tempo(measure, tempo, beats_per_bar, beat_type)
         elif index in announce:
             beats, section_tempo = announce[index]
             if beats != beats_per_bar:
@@ -469,7 +589,7 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
                 ET.SubElement(time_element, "beats").text = str(beats)
                 ET.SubElement(time_element, "beat-type").text = str(beat_type)
                 beats_per_bar = beats
-            _add_tempo(measure, section_tempo)
+            _add_tempo(measure, section_tempo, beats_per_bar, beat_type)
 
         written = False
         for staff in (1, 2):
@@ -494,41 +614,62 @@ def build(sequence: NoteSequence, analysis: Analysis | None = None) -> ET.Elemen
                     voice += 3  # 5 and 6, leaving the usual gap after 1 and 2
 
                 position = 0
+                items: list[tuple[int, int, ET.Element | None]] = []
                 for event, tied_from, tied_to in events:
                     if event.start > position:
-                        _add_rests(measure, event.start - position, staff, flats, voice)
+                        _add_rests(measure, event.start - position, staff, spelling, voice)
+                        items.append((position, event.start - position, None))
                     values = _parts(event.duration)
+                    at = event.start
                     for part_index, value in enumerate(values):
                         for order, pitch in enumerate(event.pitches):
-                            _add_note(
-                                measure, pitch, value, staff, flats,
+                            element = _add_note(
+                                measure, pitch, value, staff, spelling,
                                 chord=order > 0,
                                 tied_from=tied_from if part_index == 0 else True,
                                 tied_to=tied_to if part_index == len(values) - 1 else True,
                                 voice=voice,
                             )
+                            if order == 0:
+                                items.append((at, value, element))
+                        at += value
                     position = event.start + sum(values)
 
                 if position < per_measure:
-                    _add_rests(measure, per_measure - position, staff, flats, voice)
+                    _add_rests(measure, per_measure - position, staff, spelling, voice)
+                _add_beams(items, _beam_span(beats_per_bar, beat_type, per_measure))
 
     return ET.ElementTree(root)
 
 
-def _add_tempo(measure: ET.Element, tempo: float) -> None:
-    """A metronome mark, and the playback tempo that goes with it."""
+def _add_tempo(
+    measure: ET.Element, tempo: float, beats_per_bar: int = 4, beat_type: int = 4
+) -> None:
+    """A metronome mark, and the playback tempo that goes with it.
+
+    ``tempo`` is in quarters a minute, which is what ``<sound>`` wants. The
+    mark names the note the reader counts: in 6/8, 9/8 and 12/8 that is the
+    dotted quarter, and "quarter = 72" over a 6/8 bar reads as a different
+    piece from "dotted quarter = 48".
+    """
     direction = ET.SubElement(measure, "direction", placement="above")
     kind = ET.SubElement(direction, "direction-type")
     metronome = ET.SubElement(kind, "metronome")
     ET.SubElement(metronome, "beat-unit").text = "quarter"
-    ET.SubElement(metronome, "per-minute").text = str(int(round(tempo)))
+    if beat_type == 8 and beats_per_bar % 3 == 0 and beats_per_bar > 3:
+        ET.SubElement(metronome, "beat-unit-dot")
+        ET.SubElement(metronome, "per-minute").text = str(int(round(tempo * 2 / 3)))
+    else:
+        ET.SubElement(metronome, "per-minute").text = str(int(round(tempo)))
     ET.SubElement(direction, "sound", tempo=f"{tempo:.1f}")
 
 
-def _add_rests(parent: ET.Element, duration: int, staff: int, flats: bool, voice: int) -> None:
+def _add_rests(
+    parent: ET.Element, duration: int, staff: int, spelling: "Spelling", voice: int
+) -> None:
     """Rests filling a span, each a value that exists."""
     for part in _parts(duration):
-        _add_note(parent, None, part, staff, flats, voice=voice)
+        _add_note(parent, None, part, staff, spelling, voice=voice)
 
 
 def _text(tag: str, value: int) -> ET.Element:

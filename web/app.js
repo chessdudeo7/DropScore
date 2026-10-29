@@ -101,6 +101,9 @@ async function detectApi() {
           if (Number.isFinite(limits.max_upload_bytes)) {
             maxBytes = limits.max_upload_bytes;
           }
+          if (Number.isFinite(limits.max_seconds)) {
+            maxSeconds = limits.max_seconds;
+          }
           if (Array.isArray(limits.outputs) && limits.outputs.length) {
             availableOutputs = limits.outputs;
           }
@@ -194,6 +197,9 @@ function selectTab(which) {
     const on = name === which;
     tab.classList.toggle('is-active', on);
     tab.setAttribute('aria-selected', String(on));
+    // One tab stop for the pair, as the ARIA tab pattern expects; the arrow
+    // keys move between them.
+    tab.tabIndex = on ? 0 : -1;
     pane.hidden = !on;
   }
   syncSubmit();
@@ -201,6 +207,17 @@ function selectTab(which) {
 
 $('#tab-link').addEventListener('click', () => selectTab('link'));
 $('#tab-file').addEventListener('click', () => selectTab('file'));
+for (const tab of [$('#tab-link'), $('#tab-file')]) {
+  tab.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const next = state.tab === 'link' ? 'file' : 'link';
+    const target = event.key === 'Home' ? 'link' : event.key === 'End' ? 'file' : next;
+    selectTab(target);
+    $(`#tab-${target}`).focus();
+  });
+}
+$('#tab-file').tabIndex = -1;
 
 function syncSubmit() {
   const probing = api.probing;
@@ -258,18 +275,12 @@ $('#clear-btn').addEventListener('click', () => {
   urlInput.focus();
 });
 
-document.querySelectorAll('.chip').forEach((chip) => {
-  chip.addEventListener('click', () => {
-    urlInput.value = chip.dataset.url;
-    refreshPreview();
-  });
-});
-
 // ── file input ───────────────────────────────────────────────────────
 /* What this build accepts. These are only the defaults for demo mode: when a
  * server answers, its own limits replace them, so the two cannot disagree about
  * what an upload will be allowed to be. */
 let maxBytes = 2 * 1024 * 1024 * 1024;
+let maxSeconds = null; // only a server has a length limit
 let ALLOWED_EXT = ['mp4', 'webm', 'mov', 'mkv', 'm4v', 'avi'];
 let availableOutputs = ['json', 'midi', 'musicxml', 'pdf'];
 
@@ -396,6 +407,17 @@ async function acceptFile(file) {
   setFileHint('Reading video…');
   try {
     const meta = await probeVideo(file);
+    // Checked here so a long video is turned away before it is uploaded,
+    // not after. The server checks again for files the browser cannot read.
+    if (api.available && maxSeconds && meta.duration > maxSeconds) {
+      URL.revokeObjectURL(meta.url);
+      setFileHint(
+        `That video is ${fmtClock(meta.duration)} long — the limit is ${fmtClock(maxSeconds)}. ` +
+        'Trim it to the part you want transcribed.',
+        true,
+      );
+      return;
+    }
     if (state.file && state.file.url) URL.revokeObjectURL(state.file.url);
     state.file = { file, ...meta };
 
@@ -470,9 +492,13 @@ const STEPS = [
   { key: 'fetch',   label: 'Fetching video stream',        note: '720p · 30 fps', ms: 1400,
     fileLabel: 'Reading video file',                       fileNote: 'local' },
   { key: 'keys',    label: 'Calibrating keyboard geometry', note: '88 keys',      ms: 1200 },
-  { key: 'tiles',   label: 'Detecting and tracking tiles',  note: 'per frame',    ms: 2400 },
-  { key: 'timing',  label: 'Solving fall speed and onsets', note: 'px → seconds', ms: 1200 },
-  { key: 'notes',   label: 'Building note events',          note: 'pitch + hand', ms: 900  },
+  // In the order the server runs them: the palette is found from a sample,
+  // the tiles are followed through every frame -- the longest step, and the
+  // one the progress bar moves through -- and the fall speed is then measured
+  // from the tiles that pass found.
+  { key: 'tiles',   label: 'Finding the tile colours',      note: 'per hand',     ms: 900  },
+  { key: 'notes',   label: 'Following the tiles',           note: 'per frame',    ms: 2400 },
+  { key: 'timing',  label: 'Measuring the fall speed',      note: 'px → seconds', ms: 1200 },
   { key: 'score',   label: 'Quantizing and engraving',      note: 'MIDI / XML',   ms: 1300 },
 ];
 
@@ -731,7 +757,10 @@ $('#cancel-btn').addEventListener('click', () => {
   show(inputStage);
 });
 
-$('#again-btn').addEventListener('click', () => show(inputStage));
+$('#again-btn').addEventListener('click', () => {
+  stopPlayback();
+  show(inputStage);
+});
 
 // ── simulated result ─────────────────────────────────────────────────
 function synthesizeNotes(videoId) {
@@ -782,7 +811,16 @@ function drawRoll(notes) {
   ctx.clearRect(0, 0, w, h);
 
   const dur = Math.max(...notes.map((n) => n.t + n.dur));
-  const lo = 36, hi = 96;
+  // Fitted to the notes, a few semitones either side, but never narrower than
+  // three octaves: a fixed C2-C7 window cut off everything below or above it.
+  const pitches = notes.map((n) => n.pitch);
+  let lo = Math.min(...pitches) - 3;
+  let hi = Math.max(...pitches) + 3;
+  if (hi - lo < 36) {
+    const mid = (lo + hi) / 2;
+    lo = Math.round(mid - 18);
+    hi = lo + 36;
+  }
   const x = (t) => (t / dur) * w;
   const y = (p) => h - ((p - lo) / (hi - lo)) * h;
   const rowH = h / (hi - lo);
@@ -798,10 +836,10 @@ function drawRoll(notes) {
     ctx.stroke();
   }
 
-  // bar lines
-  const beat = 60 / 96.4;
-  ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-  for (let t = 0; t < dur; t += beat * 4) {
+  // A line every second, stronger every five. These were bar lines at a
+  // fixed 96.4 bpm, which matched no piece in particular; seconds are honest.
+  for (let t = 1; t < dur; t += 1) {
+    ctx.strokeStyle = t % 5 === 0 ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.03)';
     ctx.beginPath();
     ctx.moveTo(x(t), 0);
     ctx.lineTo(x(t), h);
@@ -823,6 +861,86 @@ function drawRoll(notes) {
   ctx.shadowBlur = 0;
   return dur;
 }
+
+// ── listening ────────────────────────────────────────────────────────
+/* A plain synthesised piano, enough to hear whether the notes are right
+ * before downloading anything. Scheduled up front on the audio clock, which
+ * keeps time far better than timers; the playhead follows that clock. */
+const player = { ctx: null, voices: [], raf: 0, notes: [], dur: 0, started: 0 };
+
+function stopPlayback() {
+  cancelAnimationFrame(player.raf);
+  for (const v of player.voices) {
+    try { v.stop(); } catch { /* already stopped */ }
+  }
+  player.voices = [];
+  if (player.ctx) player.ctx.close().catch(() => {});
+  player.ctx = null;
+  const btn = $('#play-btn');
+  btn.setAttribute('aria-pressed', 'false');
+  btn.querySelector('span').textContent = 'Listen';
+  $('#playhead').hidden = true;
+}
+
+function startPlayback() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx || !player.notes.length) return;
+  stopPlayback();
+  const ctx = new AudioCtx();
+  player.ctx = ctx;
+  const master = ctx.createGain();
+  // Low enough that a dense chord of summed voices does not clip.
+  master.gain.value = 0.22;
+  master.connect(ctx.destination);
+  const t0 = ctx.currentTime + 0.1;
+  player.started = t0;
+
+  for (const n of player.notes) {
+    const start = t0 + n.t;
+    const length = Math.max(0.08, n.dur);
+    const freq = 440 * Math.pow(2, (n.pitch - 69) / 12);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, start);
+    env.gain.linearRampToValueAtTime(0.9, start + 0.008);
+    env.gain.exponentialRampToValueAtTime(0.35, start + Math.min(0.4, length));
+    env.gain.setValueAtTime(0.35, start + length);
+    env.gain.exponentialRampToValueAtTime(0.001, start + length + 0.25);
+    env.connect(master);
+    for (const [type, gain, mult] of [['triangle', 0.7, 1], ['sine', 0.3, 2]]) {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.value = freq * mult;
+      const g = ctx.createGain();
+      g.gain.value = gain;
+      osc.connect(g).connect(env);
+      osc.start(start);
+      osc.stop(start + length + 0.3);
+      player.voices.push(osc);
+    }
+  }
+
+  const btn = $('#play-btn');
+  btn.setAttribute('aria-pressed', 'true');
+  btn.querySelector('span').textContent = 'Stop';
+  const head = $('#playhead');
+  head.hidden = false;
+  const tick = () => {
+    if (!player.ctx) return;
+    const elapsed = player.ctx.currentTime - player.started;
+    if (elapsed > player.dur + 0.4) {
+      stopPlayback();
+      return;
+    }
+    head.style.left = `${Math.max(0, Math.min(1, elapsed / player.dur)) * 100}%`;
+    player.raf = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+$('#play-btn').addEventListener('click', () => {
+  if (player.ctx) stopPlayback();
+  else startPlayback();
+});
 
 function drawKeybed() {
   const bed = $('#keybed');
@@ -923,6 +1041,10 @@ function showResult({ notes, confidence, stats: rows, downloads, missing = {} })
   drawKeybed();
 
   const dur = notes.length ? Math.max(...notes.map((n) => n.t + n.dur)) : 0;
+  stopPlayback();
+  player.notes = notes;
+  player.dur = dur;
+  $('#play-btn').hidden = !notes.length;
   $('#roll-range').textContent = `0.0s – ${dur.toFixed(1)}s · ${notes.length} events`;
 
   // The canvas is still zero-width in the task that unhides its section, and

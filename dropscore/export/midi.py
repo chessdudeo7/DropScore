@@ -16,7 +16,7 @@ import logging
 import struct
 from pathlib import Path
 
-from ..notes import NoteSequence
+from ..notes import Note, NoteSequence
 from ..score import Analysis
 
 log = logging.getLogger(__name__)
@@ -87,6 +87,34 @@ def _track(events: list[tuple[int, bytes]], name: str | None = None) -> bytes:
     return _chunk(b"MTrk", bytes(data))
 
 
+def _releases(notes, ticks) -> list[tuple[Note, int]]:
+    """Each note with the tick it is released at.
+
+    A key cannot sound twice at once. Rounded to the beat grid, a held note can
+    run past the next strike of the same key -- 280 times in one waltz -- and a
+    MIDI note-off names only the key, so the first note's release silenced the
+    second one early. A note is released by the next strike of its key, and a
+    second strike on the same tick is dropped rather than written as a note
+    with no length.
+    """
+    by_key: dict[int, list[Note]] = {}
+    for note in notes:
+        by_key.setdefault(note.pitch, []).append(note)
+    kept: list[tuple[Note, int]] = []
+    for strikes in by_key.values():
+        strikes.sort(key=lambda n: n.onset)
+        for index, note in enumerate(strikes):
+            start, end = ticks(note.onset), ticks(note.offset)
+            if index + 1 < len(strikes):
+                end = min(end, ticks(strikes[index + 1].onset))
+            if end > start:
+                kept.append((note, end))
+            elif index + 1 == len(strikes):
+                kept.append((note, start + 1))
+    kept.sort(key=lambda pair: pair[0].onset)
+    return kept
+
+
 def write(
     sequence: NoteSequence,
     path: str | Path,
@@ -122,10 +150,10 @@ def write(
         if not notes:
             continue
         events: list[tuple[int, bytes]] = []
-        for note in notes:
+        for note, release in _releases(notes, ticks):
             velocity = max(1, min(127, note.velocity))
             events.append((ticks(note.onset), bytes([0x90 | channel, note.pitch, velocity])))
-            events.append((ticks(note.offset), bytes([0x80 | channel, note.pitch, 0])))
+            events.append((release, bytes([0x80 | channel, note.pitch, 0])))
         tracks.append(_track(events, name=label))
 
     header = _chunk(b"MThd", struct.pack(">HHH", 1, len(tracks), TICKS_PER_BEAT))

@@ -349,6 +349,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
         workdir=args.workdir,
         config=_config_from_args(args),
         keep_sources=args.keep_sources,
+        max_active_per_client=args.jobs_per_client,
+        max_seconds=args.max_minutes * 60 or None,
+        max_age=args.keep_hours * 3600 or None,
     )
     print(f"DropScore on http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
@@ -547,7 +550,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     """Calibrate, detect, track and time — the pipeline as far as it goes."""
     from .calibrate import calibrate  # noqa: PLC0415
     from .tiles import discover_palette  # noqa: PLC0415
-    from .tracking import measure_scroll_speed, transcribe  # noqa: PLC0415
+    from .tracking import transcribe_video  # noqa: PLC0415
 
     source = resolve(args.source)
     config = _config_from_args(args)
@@ -561,12 +564,10 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         # Speed needs consecutive frames, and several probes rather than one:
         # a stretch of long sustained notes carries no vertical motion to
         # correlate, so a single window can land somewhere unmeasurable.
-        speed = measure_scroll_speed(
-            reader, calibration, args.speed_frames, config=config, palette=palette
+        sequence, speed = transcribe_video(
+            reader, calibration, palette, config, frames_per_window=args.speed_frames
         )
         log.info("scroll speed %.2f px/s (confidence %.2f)", speed.value, speed.confidence)
-
-        sequence = transcribe(reader.frames(), calibration, palette, speed, config)
 
     sequence.source = f"dropscore:{source.label}"
     analysis = None
@@ -766,6 +767,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--keep-sources",
         action="store_true",
         help="keep uploaded videos after transcribing, for debugging a bad clip",
+    )
+    serve.add_argument(
+        "--max-minutes",
+        type=float,
+        default=15.0,
+        help="longest video accepted, in minutes (0 for no limit)",
+    )
+    serve.add_argument(
+        "--jobs-per-client",
+        type=int,
+        default=2,
+        help="videos one visitor may have queued or running at once (0 for no limit)",
+    )
+    serve.add_argument(
+        "--keep-hours",
+        type=float,
+        default=24.0,
+        help="how long finished results stay downloadable, in hours (0 to keep until restart)",
     )
     serve.set_defaults(func=cmd_serve)
 

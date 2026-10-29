@@ -172,11 +172,21 @@ def _correlation_bias(
         log.debug("no signal to measure the correlation bias on; assuming none")
         return 0.0
 
-    errors = [
-        cv2.phaseCorrelate(image, np.roll(image, probe, axis=0), window)[0][1] - probe
-        for image in usable
-        for probe in cfg.bias_probe_shifts
-    ]
+    # The estimator's own offset is the same whatever the shift: one theme
+    # read 3, 5 and 7 as 3.499, 5.498 and 7.497. A frame whose errors disagree
+    # across the shifts is not locking onto anything, and is left out. On a
+    # piece of sustained chords every tile can run the full height of the fall
+    # area, so the mask hardly changes when rolled and the peak lands anywhere:
+    # measured at -43.8, -3.05 and +6.26px for shifts of 4, 6 and 8, which
+    # tripped the guard below on a clip whose speed was right.
+    errors: list[float] = []
+    for image in usable:
+        reading = [
+            cv2.phaseCorrelate(image, np.roll(image, probe, axis=0), window)[0][1] - probe
+            for probe in cfg.bias_probe_shifts
+        ]
+        if max(reading) - min(reading) <= cfg.bias_agreement:
+            errors.extend(reading)
     bias = float(np.median(errors)) if errors else 0.0
 
     if abs(bias) > cfg.max_bias:
@@ -199,9 +209,16 @@ def _detected_mask(
     a few percent of the frame has a standard deviation near 0.14, which is
     below ``min_residual`` and discarded every pair before it was correlated.
     """
-    height, width = calibration.strike_y, frame.image.shape[1]
+    return _paint_tiles(
+        detect_in_frame(frame, palette, calibration, config),
+        calibration.strike_y,
+        frame.image.shape[1],
+    )
+
+
+def _paint_tiles(tiles: Iterable[Tile], height: int, width: int) -> np.ndarray:
     mask = np.zeros((height, width), dtype=np.float32)
-    for tile in detect_in_frame(frame, palette, calibration, config):
+    for tile in tiles:
         top, bottom = int(tile.top), max(int(tile.top) + 1, int(tile.bottom))
         left, right = int(tile.left), max(int(tile.left) + 1, int(tile.right))
         mask[top:bottom, left:right] = 255.0
@@ -269,14 +286,34 @@ def estimate_speed(
     # Measured across the corpus the two agree closely, and where they differ
     # the detected mask is the better of the two -- worst error 1.03% against
     # 1.36%, and better on ten of fourteen clips.
-    def signal(index: int) -> np.ndarray:
-        if palette is None:
-            return residual(images[index])
-        return _detected_mask(frames[index], palette, calibration, config)
+    # Every frame is one half of two pairs, so without remembering the
+    # answer each one was detected twice -- most of this function's runtime.
+    signals: dict[int, np.ndarray] = {}
 
-    window = cv2.createHanningWindow(
-        (images[0].shape[1], images[0].shape[0]), cv2.CV_32F
-    )
+    def signal(index: int) -> np.ndarray:
+        if index not in signals:
+            signals[index] = (
+                residual(images[index])
+                if palette is None
+                else _detected_mask(frames[index], palette, calibration, config)
+            )
+        return signals[index]
+
+    return _speed_from_signals(frames, signal, images[0].shape[:2], cfg)
+
+
+def _speed_from_signals(
+    frames: Sequence[Frame],
+    signal,
+    shape: tuple[int, int],
+    cfg: TrackingConfig,
+) -> SpeedEstimate:
+    """Phase-correlate ``signal(i)`` against ``signal(i + lag)`` over a window.
+
+    Only the frames' times are read, so the frames may be stand-ins for ones
+    already decoded and discarded.
+    """
+    window = cv2.createHanningWindow((shape[1], shape[0]), cv2.CV_32F)
 
     # Measure and remove the estimator's own systematic offset.
     #
@@ -299,7 +336,7 @@ def estimate_speed(
     # full of drifting sparks the probe returned about -1.5px, which inflated
     # a correct 159px/s into 204.
     bias = _correlation_bias(
-        [signal(i) for i in (0, len(images) // 2, len(images) - 1)],
+        [signal(i) for i in (0, len(frames) // 2, len(frames) - 1)],
         window,
         cfg,
     )
@@ -384,28 +421,40 @@ def measure_scroll_speed(
     # neither end of one is ever on screen and there is nothing to correlate.
     # A probe that lands on a title card simply finds no motion and drops out,
     # which costs one window and is much cheaper than missing the only good one.
+    starts = _probe_starts(total, frames_per_window, windows)
+
+    def probe(start: int) -> SpeedEstimate | None:
+        window = list(reader.frames(start=start, stop=start + frames_per_window))
+        if len(window) < 2:
+            return None
+        return estimate_speed(window, calibration, config=config, palette=palette)
+
+    return _pool_probes(starts, probe)
+
+
+def _probe_starts(total: int, frames_per_window: int, windows: int) -> list[int]:
     windows = max(1, windows)
     span = max(1, total - frames_per_window)
-    starts = (
+    return (
         [int(span * i / (windows - 1)) for i in range(windows)]
         if windows > 1
         else [span // 2]
     )
 
+
+def _pool_probes(starts: Sequence[int], probe) -> SpeedEstimate:
+    """Pool the speed measured at each probe window into one estimate."""
     pooled: list[float] = []
     probe_values: list[float] = []
     spreads: list[float] = []
     failures: list[str] = []
     for start in starts:
-        window = list(reader.frames(start=start, stop=start + frames_per_window))
-        if len(window) < 2:
-            continue
         try:
-            estimate = estimate_speed(
-                window, calibration, config=config, palette=palette
-            )
+            estimate = probe(start)
         except TrackingError as exc:
             failures.append(f"frame {start}: {exc}")
+            continue
+        if estimate is None:
             continue
         pooled.extend(estimate.shifts or (estimate.value,))
         probe_values.append(estimate.value)
@@ -750,13 +799,19 @@ def tracks_to_notes(
     tracks: Sequence[TileTrack], speed: float, calibration: Calibration, config: Config = DEFAULT
 ) -> NoteSequence:
     hands = hands_by_register(tracks)
-    notes = [track_to_note(t, speed, calibration, config, hands) for t in tracks]
-    return NoteSequence.of(
-        _merge_overlaps([n for n in notes if n is not None], config)
-    )
+    notes: list[Note] = []
+    first_seen: dict[int, float] = {}
+    for track in tracks:
+        note = track_to_note(track, speed, calibration, config, hands)
+        if note is not None:
+            notes.append(note)
+            first_seen[id(note)] = track.times[0]
+    return NoteSequence.of(_merge_overlaps(notes, config, first_seen))
 
 
-def _merge_overlaps(notes: list[Note], config: Config = DEFAULT) -> list[Note]:
+def _merge_overlaps(
+    notes: list[Note], config: Config = DEFAULT, first_seen: dict[int, float] | None = None
+) -> list[Note]:
     """Fuse notes that are really one note on the same key.
 
     A key cannot sound twice at once, so an overlap is not two notes: it is one
@@ -785,6 +840,9 @@ def _merge_overlaps(notes: list[Note], config: Config = DEFAULT) -> list[Note]:
     either. Testing instead for the duration *floor* was too strict: only four
     of fifteen fragments on a real recording had collapsed that far, the rest
     measuring 33 to 46ms.
+
+    ``first_seen`` maps a note (by ``id``) to when its track first appeared,
+    which tells a second tile from a piece of the first; see ``one_end``.
 
     The cost is that a repeat faster than ``min_repeat`` where one of the two
     is also mistimed reads as one note. At 144 BPM that is quicker than a
@@ -819,8 +877,17 @@ def _merge_overlaps(notes: list[Note], config: Config = DEFAULT) -> list[Note]:
             far = following.onset - current.onset > config.tracking.merge_reach
             # Unless they end together: then they are one tile, the later
             # piece picked up after the track lost it near the strike line.
+            #
+            # A piece is only picked up once its parent has lost the tile at
+            # the strike line, so it is first seen after the parent's onset:
+            # all 34 such merges on a clean render were. A second tile on the
+            # key was on screen well before -- 1.1s on `sparks`, where same-
+            # coloured sparks above the line bridged the gap between two
+            # strikes and joined their tiles, and both notes ended together.
+            seen = (first_seen or {}).get(id(following))
             one_end = (
                 abs(following.offset - current.offset) <= config.tracking.merge_same_end
+                and (seen is None or seen >= current.onset)
             )
             if overlaps and far and not close and not fragment and not one_end:
                 if following.onset > current.onset:
@@ -851,6 +918,79 @@ def _merge_overlaps(notes: list[Note], config: Config = DEFAULT) -> list[Note]:
         merged.append(current)
 
     return merged
+
+
+@dataclass(frozen=True)
+class _Stamp:
+    """What tracking needs of a frame once its pixels are gone."""
+
+    index: int
+    time: float
+
+
+def transcribe_video(
+    reader: VideoReader,
+    calibration: Calibration,
+    palette: Palette,
+    config: Config = DEFAULT,
+    frames: Iterable[Frame] | None = None,
+    frames_per_window: int = 40,
+    windows: int = 8,
+) -> tuple[NoteSequence, SpeedEstimate]:
+    """Detect every frame once, then measure the speed and track from that.
+
+    Measuring the speed used to decode its probe windows separately and detect
+    every frame in them twice, before the tracking pass decoded and detected
+    the whole video again: on a 33-second clip the speed alone took 50 of the
+    130 seconds. Tracking needs the speed, but detection does not, and the
+    speed is measured from detected tiles -- so detections are kept (a few
+    rectangles a frame), and both are worked out from the one decode.
+
+    ``frames`` replaces ``reader.frames()``, for a caller that wraps the stream.
+    """
+    stream = reader.frames() if frames is None else frames
+    stamps: list[_Stamp] = []
+    found: list[list[Tile]] = []
+    width = 0
+    for frame in stream:
+        width = frame.image.shape[1]
+        stamps.append(_Stamp(frame.index, frame.time))
+        found.append(detect_in_frame(frame, palette, calibration, config))
+
+    if len(stamps) < 2:
+        raise TrackingError("need at least two frames to measure speed")
+
+    # Positions in the stored list, not source indices, so a stream that
+    # starts part-way through probes its own span.
+    starts = _probe_starts(len(stamps), frames_per_window, windows)
+    height = calibration.strike_y
+    cfg = config.tracking
+
+    def probe(start: int) -> SpeedEstimate | None:
+        span = range(start, min(start + frames_per_window, len(stamps)))
+        if len(span) < 2:
+            return None
+        window = [stamps[i] for i in span]
+        gaps = {window[i + 1].index - window[i].index for i in range(len(window) - 1)}
+        if len(gaps) > 1 or min(gaps) <= 0:
+            raise TrackingError(f"frames are not evenly spaced: gaps of {sorted(gaps)}")
+        painted: dict[int, np.ndarray] = {}
+
+        def signal(i: int) -> np.ndarray:
+            if i not in painted:
+                painted[i] = _paint_tiles(found[span[i]], height, width)
+            return painted[i]
+
+        return _speed_from_signals(window, signal, (height, width), cfg)
+
+    speed = _pool_probes(starts, probe)
+    if speed.value <= 0:
+        raise TrackingError(f"scroll speed must be positive, got {speed.value}")
+
+    tracks = build_tracks(zip(stamps, found), speed.value, calibration, config)
+    sequence = tracks_to_notes(tracks, speed.value, calibration, config)
+    log.info("%d tracks -> %d notes", len(tracks), len(sequence))
+    return sequence, speed
 
 
 def transcribe(

@@ -20,7 +20,7 @@ from ..config import Config, DEFAULT
 from ..sources import SourceError, parse_youtube_id
 from ..export import FORMATS
 from ..export.pdf import available as pdf_available
-from .jobs import JobStore, Status, transcribe_job
+from .jobs import MAX_AGE_SECONDS, MAX_SECONDS, JobStore, Status, transcribe_job
 from .options import TranscribeOptions
 
 log = logging.getLogger(__name__)
@@ -48,6 +48,13 @@ DOCS_MOUNT = "/guide"
 # and again while copying, for requests that arrive chunked or misdeclare it.
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 ALLOWED_SUFFIXES = {".mp4", ".webm", ".mov", ".mkv", ".m4v", ".avi"}
+
+
+# Two workers transcribe at once and the rest wait. Without a cap one visitor
+# could fill the queue for everybody; these keep a single client to a couple of
+# jobs at a time and the whole queue short enough that waiting is reasonable.
+MAX_ACTIVE_PER_CLIENT = 2
+MAX_ACTIVE_TOTAL = 20
 
 
 def _too_large() -> str:
@@ -80,8 +87,30 @@ def create_app(
     config: Config = DEFAULT,
     serve_frontend: bool = True,
     keep_sources: bool = False,
+    max_active_per_client: int = MAX_ACTIVE_PER_CLIENT,
+    max_active_total: int = MAX_ACTIVE_TOTAL,
+    max_seconds: float | None = MAX_SECONDS,
+    max_age: float | None = MAX_AGE_SECONDS,
 ) -> "FastAPI":
-    store = JobStore(Path(workdir), keep_sources=keep_sources)
+    store = JobStore(Path(workdir), keep_sources=keep_sources, max_age=max_age)
+
+    def client_of(request: Request) -> str:
+        return request.client.host if request.client else ""
+
+    def admit(request: Request) -> str:
+        """Refuse a job that would take more than a fair share of the queue."""
+        client = client_of(request)
+        if max_active_per_client and store.active(client) >= max_active_per_client:
+            raise HTTPException(
+                429,
+                f"You already have {max_active_per_client} videos being transcribed. "
+                "Wait for one to finish, or cancel it, before starting another.",
+            )
+        if max_active_total and store.active() >= max_active_total:
+            raise HTTPException(
+                503, "DropScore is busy right now. Please try again in a few minutes."
+            )
+        return client
 
     # Probed once: nobody installs an engraver halfway through a server's
     # life. Reporting it lets the UI stop offering an output this machine
@@ -109,6 +138,7 @@ def create_app(
             "version": "0.1.0",
             "accepted": sorted(s.lstrip(".") for s in ALLOWED_SUFFIXES),
             "max_upload_bytes": MAX_UPLOAD_BYTES,
+            "max_seconds": max_seconds,
             "outputs": sorted(f for f in FORMATS if f != "pdf" or engraver),
         }
 
@@ -137,9 +167,11 @@ def create_app(
         declared = request.headers.get("content-length", "")
         if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
             raise HTTPException(413, _too_large())
+        client = admit(request)
 
         # The filename is client-supplied; JobStore.create sanitises it.
         job = store.create(file.filename or "video")
+        job.client = client
         target = job.workdir / f"source{suffix}"
 
         written = 0
@@ -161,18 +193,22 @@ def create_app(
         job.say(f"received {job.label}{suffix} ({written / 1e6:.1f} MB)")
         store.submit(
             job,
-            lambda j: transcribe_job(j, target, chosen.apply(config), chosen.formats),
+            lambda j: transcribe_job(
+                j, target, chosen.apply(config), chosen.formats, max_seconds
+            ),
         )
         return {"id": job.id}
 
     @app.post("/api/jobs/url")
-    def submit_url(request: UrlRequest) -> dict[str, Any]:
+    def submit_url(request: UrlRequest, http: Request) -> dict[str, Any]:
         video_id = parse_youtube_id(request.url)
         if not video_id:
             raise HTTPException(400, "That does not look like a YouTube link")
+        client = admit(http)
 
         chosen = request.options
         job = store.create(video_id)
+        job.client = client
         job.say(
             "note: downloading from YouTube is against their Terms of Service; "
             "uploading a file is the supported path"
@@ -186,7 +222,11 @@ def create_app(
             except SourceError as exc:
                 raise RuntimeError(str(exc)) from exc
             transcribe_job(
-                current_job, resolved.path, chosen.apply(config), chosen.formats
+                current_job,
+                resolved.path,
+                chosen.apply(config),
+                chosen.formats,
+                max_seconds,
             )
 
         store.submit(job, work)

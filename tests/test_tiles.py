@@ -823,3 +823,87 @@ def test_a_black_key_zigzagging_with_its_white_neighbour_keeps_each_of_its_tiles
     x0, x1 = int(round(lo)), int(round(hi))
     spans = _split_vertically(mask, (x0, 40, x1, 154), DEFAULT)
     assert len(spans) == 2, f"D#5 read as {spans}"
+
+
+# ── colours that only draw lines ─────────────────────────────────────
+
+
+def _grid_and_tiles_frames(grey_tiles: bool = False) -> tuple[list[Frame], Calibration]:
+    """Black fall area, solid purple tiles, thin grey lines like a visualizer's grid."""
+    import cv2  # noqa: PLC0415
+
+    layout = KeyboardLayout(x0=0.0, width=1280.0)
+    calibration = Calibration(
+        layout=layout, strike_y=400, keybed_bottom=480,
+        white_width=layout.white_width, confidence=1.0,
+    )
+    frames = []
+    for i in range(24):
+        image = np.zeros((480, 1280, 3), np.uint8)
+        for x in range(60, 1280, 172):
+            cv2.line(image, (x, 0), (x, 399), (90, 90, 90), 1)
+        cv2.line(image, (0, 100 + i * 5), (1279, 100 + i * 5), (90, 90, 90), 1)
+        for k in range(6):
+            left = 100 + k * 190
+            color = (90, 90, 90) if grey_tiles and k % 2 else (255, 60, 200)
+            cv2.rectangle(image, (left, 50 + i * 8), (left + 20, 160 + i * 8), color, -1)
+        frames.append(Frame(i, i / 30, image, 1.0))
+    return frames, calibration
+
+
+def test_a_grey_that_only_draws_lines_is_not_a_voice() -> None:
+    frames, calibration = _grid_and_tiles_frames()
+    palette = discover_palette(frames, calibration, DEFAULT)
+
+    assert palette.track_count == 1
+    assert np.hypot(*(palette.colors[0, 1:] - 128.0)) > 20  # the purple
+
+
+def test_grey_tiles_are_kept() -> None:
+    frames, calibration = _grid_and_tiles_frames(grey_tiles=True)
+    palette = discover_palette(frames, calibration, DEFAULT)
+
+    greys = np.hypot(palette.colors[:, 1] - 128.0, palette.colors[:, 2] - 128.0) < 8
+    assert greys.any()
+
+
+def _spread(distances, **overrides):
+    from dropscore.tiles import _member_spread
+
+    cfg = replace(DEFAULT.tiles, **overrides)
+    return _member_spread(np.asarray(distances, dtype=float), cfg)
+
+
+def test_spread_of_a_flat_colour_ignores_the_smoke_around_it():
+    # 41% of the members in one tight band, then a gap, then smoke straggling
+    # evenly to 44: a flat tile colour under a particle cloud, as measured on
+    # the glow render. Read from the median, the spread would widen the radius
+    # until the cloud counted as tile.
+    rng = np.random.default_rng(0)
+    band = rng.uniform(5.0, 6.5, 410)
+    tail = rng.uniform(12.0, 44.0, 590)
+    distances = np.concatenate([band, tail])
+    assert np.median(distances) > 14.0
+    assert _spread(distances) < 7.0
+
+
+def test_spread_of_a_gradient_keeps_its_median():
+    # A ramp spreads its pixels evenly: no band holds 40% of them.
+    distances = np.random.default_rng(1).uniform(0.0, 30.0, 1000)
+    assert _spread(distances) == pytest.approx(np.median(distances))
+
+
+def test_spread_keeps_the_median_when_it_lies_in_the_band():
+    rng = np.random.default_rng(2)
+    distances = np.concatenate([rng.uniform(9.0, 10.5, 600), rng.uniform(0.0, 3.0, 400)])
+    assert _spread(distances) == pytest.approx(np.median(distances))
+
+
+def test_spread_keeps_the_median_when_the_variation_carries_on_past_the_band():
+    # Für Elise's second colour: 41% of its members within 4 of each other, but
+    # the rest continue at a steady density with no gap. That is one colour
+    # drawn with real variation; read from the band it lost 8 of 104 notes.
+    rng = np.random.default_rng(3)
+    distances = np.concatenate([rng.uniform(2.2, 4.0, 410), rng.uniform(4.0, 30.0, 590)])
+    assert np.median(distances) > 7.0
+    assert _spread(distances) == pytest.approx(np.median(distances))

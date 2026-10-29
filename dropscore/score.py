@@ -507,17 +507,51 @@ def _meter(
         #
         # Asked directly, the grouping settles it: where two tatums repeat more
         # than three, the tatum is a sixteenth and the unit is two of them.
+        #
+        # Unless the notes themselves come round in threes. In an unbroken
+        # stream every onset is followed by another at two tatums and at three,
+        # so onsets alone are a coin toss: Moonlight's triplets measured 0.83
+        # against 0.80, and the piece was written in 3/8 at 36 to the minute.
+        # Which pitch comes back is not a coin toss -- its arpeggio repeats
+        # its note three tatums on 58% of the time and two tatums on 10%,
+        # where Fur Elise's figures repeat at two (28%) more than three (18%).
         if steps == 3 and count % 2 == 0:
             onsets = np.array(sorted({float(n.onset) for n in sequence}))
             tolerance = tatum * cfg.repeat_tolerance
             if _repeats_at(onsets, 2.0 * tatum, tolerance) > _repeats_at(
                 onsets, 3.0 * tatum, tolerance
-            ):
+            ) and _pitch_returns(sequence, tatum, 2) >= _pitch_returns(sequence, tatum, 3):
                 eighth, count = 2.0 * tatum, count // 2
+                # Three units of two tatums is three eighths only if the unit
+                # moves like an eighth. Fur Elise's goes at 178 to the minute;
+                # a waltz's at 86 is a walking quarter, and calling it an eighth
+                # wrote a 3/4 waltz as 3/8 at 43 and every value at half size.
+                if eighth > cfg.max_eighth_seconds:
+                    return count, 4, eighth
 
         return count, 8, eighth
 
     return estimate_meter(sequence, beat, phase, config), 4, beat
+
+
+def _pitch_returns(sequence: NoteSequence, tatum: float, lag: int) -> float:
+    """Share of tatum slots whose pitches sound again ``lag`` tatums later.
+
+    The figure a piece is built from repeats at its own length: an arpeggio
+    in threes plays the same note every third slot, one in twos every second.
+    """
+    if tatum <= 0:
+        return 0.0
+    slots: dict[int, set[int]] = {}
+    for note in sequence:
+        slots.setdefault(int(round(note.onset / tatum)), set()).add(note.pitch)
+    paired = returned = 0
+    for slot, pitches in slots.items():
+        later = slots.get(slot + lag)
+        if later is not None:
+            paired += 1
+            returned += bool(pitches & later)
+    return returned / paired if paired else 0.0
 
 
 def _eighths_in_a_bar(sequence: NoteSequence, eighth: float, phase: float, cfg) -> int:
@@ -1212,25 +1246,7 @@ def _split_by_pitch(
     )
 
 
-def _two_means(values: np.ndarray) -> float:
-    """Boundary between the two clusters in a 1-D set of pitches."""
-    if values.size == 0:
-        return 60.0
-    low, high = float(values.min()), float(values.max())
-    if high - low < 1e-6:
-        return low + 0.5
-
-    centres = np.array([low, high])
-    for _ in range(12):
-        labels = np.abs(values[:, None] - centres[None, :]).argmin(axis=1)
-        for i in (0, 1):
-            if np.any(labels == i):
-                centres[i] = values[labels == i].mean()
-    return float(centres.mean())
-
-
 # ── quantization ─────────────────────────────────────────────────────
-
 
 
 def quantize(

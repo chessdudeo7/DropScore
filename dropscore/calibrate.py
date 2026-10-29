@@ -31,6 +31,7 @@ import numpy as np
 
 from .config import Config, DEFAULT
 from .keyboard import COMMON_RANGES, KeyboardLayout, WHITE_PITCH_CLASSES, white_pitches
+from .notes import MIN_PITCH
 from .video import Frame
 
 log = logging.getLogger(__name__)
@@ -480,8 +481,92 @@ def _measure_black_offsets(
     )
 
 
+def video_columns(frames: Sequence[Frame], config: Config = DEFAULT) -> tuple[int, int] | None:
+    """The columns a falling-tile video occupies inside a larger picture.
+
+    A screen recording can show the video in a window, with a desktop and other
+    windows around it. Every row then crosses the window's edges and whatever
+    the other windows hold, so rows inside the fall area look as structured as
+    the keyboard does, and the keybed was found as the whole window: 171 white
+    keys fitted to a 52-key board.
+
+    The fall area gives the video away. Where the tiles move, the background
+    behind them is one plain colour, and that colour runs to the video's edges
+    and stops there. So: find where the pixels move, read the background colour
+    there, and take the run of columns, through the moving ones, whose rows over
+    the fall area are mostly that colour. None when the run is the whole frame,
+    or there is nothing to go on.
+    """
+    cfg = config.calibration
+    stack = np.stack([_gray(frame.image) for frame in frames]).astype(np.float32)
+    moving = stack.std(axis=0) > cfg.video_motion_level
+    rows, columns = np.nonzero(moving)
+    if rows.size < cfg.min_key_px ** 2:
+        return None
+    r0, r1 = np.percentile(rows, [1, 99]).astype(int)
+    c0, c1 = np.percentile(columns, [1, 99]).astype(int)
+    if r1 <= r0 or c1 <= c0:
+        return None
+
+    background = np.median(stack, axis=0)
+    colour = float(np.median(background[moving]))
+    plain = np.abs(background[r0 : r1 + 1] - colour) <= cfg.video_colour_tolerance
+    inside = plain.mean(axis=0) >= cfg.video_plain_share
+
+    # Grid lines and held tiles break the run for a column or two; a window
+    # edge is a wide break. Close the narrow ones before walking outwards.
+    gap = max(2, int(cfg.min_key_px))
+    closed = inside.copy()
+    false_runs = _runs_above((~inside).astype(np.float32), 0.5, 1)
+    for start, end in false_runs:
+        if end - start <= gap and start > 0 and end < inside.size:
+            closed[start:end] = True
+
+    middle = (c0 + c1) // 2
+    if not closed[middle]:
+        return None
+    lo, hi = middle, middle
+    while lo > 0 and closed[lo - 1]:
+        lo -= 1
+    while hi < closed.size - 1 and closed[hi + 1]:
+        hi += 1
+    if lo == 0 and hi == closed.size - 1:
+        return None
+    return int(lo), int(hi + 1)
+
+
 def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
-    """Fit a keyboard to sampled frames."""
+    """Fit a keyboard to sampled frames.
+
+    Where the whole picture will not fit, the video may be playing in part of
+    it -- a screen recording of a window -- so the fit is tried again inside
+    the columns the video occupies, and placed back in the full frame.
+    """
+    try:
+        return _calibrate(frames, config)
+    except CalibrationError as first:
+        if len(frames) < 2:
+            raise
+        span = video_columns(frames, config)
+        if span is None:
+            raise
+        lo, hi = span
+        cropped = [replace(frame, image=frame.image[:, lo:hi]) for frame in frames]
+        try:
+            inner = _calibrate(cropped, config)
+        except CalibrationError:
+            raise first from None
+        log.info("keyboard found inside columns %d-%d of the frame", lo, hi)
+        diagnostics = dict(inner.diagnostics, video_columns=[lo, hi])
+        return replace(
+            inner,
+            layout=replace(inner.layout, x0=inner.layout.x0 + lo),
+            diagnostics=diagnostics,
+        )
+
+
+def _calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
+    """Fit a keyboard to sampled frames, using the whole picture."""
     if len(frames) < 2:
         raise CalibrationError("calibration needs at least two frames")
 
@@ -527,18 +612,34 @@ def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
     black = _classify_black(samples, white_reference)
 
     # The keyboard's outer edges are boundaries too, and never black keys.
-    interior = black[1:-1]
-    rotation, confidence = anchor_pitch(interior)
-
-    white_count = boundaries.size - 1
-    first_pitch = _first_pitch(rotation, white_count)
-    whites = [p for p in range(first_pitch, 109) if p % 12 in WHITE_PITCH_CLASSES]
-    if len(whites) < white_count:
+    #
+    # A board filmed at a slight angle, or one whose end sits a few pixels in
+    # from the frame, can bracket one sliver too many: a keystoned recording of
+    # a full piano fitted 53 white keys, and a piano has 52. So where the fit
+    # runs past the top of the keyboard, the outermost boundary at either end
+    # is tried without, and the trim the black keys agree with best is kept.
+    fitted = None
+    for trim_left, trim_right in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        kept = slice(trim_left, boundaries.size - trim_right)
+        if boundaries[kept].size < 3:
+            continue
+        rotation, confidence = anchor_pitch(black[kept][1:-1])
+        white_count = boundaries[kept].size - 1
+        first_pitch = _first_pitch(rotation, white_count)
+        whites = [p for p in range(first_pitch, 109) if p % 12 in WHITE_PITCH_CLASSES]
+        if len(whites) < white_count or first_pitch < MIN_PITCH:
+            continue  # off the top of the piano, or below the bottom
+        if fitted is None or confidence > fitted[0]:
+            fitted = (confidence, kept, first_pitch, whites[white_count - 1], white_count)
+        if (trim_left, trim_right) == (0, 0):
+            break  # it fitted as found; nothing to second-guess
+    if fitted is None:
         raise CalibrationError(
-            f"fitted {white_count} white keys starting at {first_pitch}, which "
-            f"runs past the top of the piano"
+            f"fitted {boundaries.size - 1} white keys, which runs off the end "
+            f"of the piano"
         )
-    last_pitch = whites[white_count - 1]
+    confidence, kept, first_pitch, last_pitch, white_count = fitted
+    boundaries = boundaries[kept]
 
     x0 = float(boundaries[0])
     layout = KeyboardLayout(

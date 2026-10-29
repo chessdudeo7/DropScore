@@ -29,15 +29,31 @@ from ..notes import NoteSequence
 
 log = logging.getLogger(__name__)
 
-# The stages the UI already knows how to draw.
+# The stages the UI draws, in the order they run. The tiles are followed
+# through every frame before the fall speed is worked out from what was found,
+# so "notes" -- the long one -- comes before "timing".
 STAGES: tuple[tuple[str, str], ...] = (
     ("fetch", "Reading video"),
     ("keys", "Calibrating keyboard geometry"),
-    ("tiles", "Detecting and tracking tiles"),
-    ("timing", "Solving fall speed and onsets"),
-    ("notes", "Building note events"),
+    ("tiles", "Finding the tile colours"),
+    ("notes", "Following the tiles frame by frame"),
+    ("timing", "Measuring the fall speed"),
     ("score", "Quantizing and engraving"),
 )
+
+#: Longest video accepted, in seconds. Transcription runs at about real time
+#: or slower, and a worker slot held for an hour starves everyone else.
+MAX_SECONDS = 15 * 60
+
+#: Fewest frames worth trying. Calibration and the fall speed both compare
+#: frames, so a still image or a handful of frames fails further in with a
+#: message about the wrong thing ("not a falling-tile video").
+MIN_FRAMES = 10
+
+# How long a finished job's results stay downloadable. Retention by count
+# alone kept a quiet server's results on disk indefinitely: with fewer than
+# 50 jobs ever run, nothing was deleted until a restart.
+MAX_AGE_SECONDS = 24 * 60 * 60
 
 
 class Status(str, Enum):
@@ -61,7 +77,45 @@ class Cancelled(Exception):
     """Raised inside a worker when the job has been cancelled."""
 
 
+class Rejected(RuntimeError):
+    """A video the service declines, with a message meant for the person."""
+
+
+# What each pipeline failure means to someone who uploaded a video. The
+# exception's own text is written for whoever debugs the pipeline -- "keybed
+# has no vertical structure to measure" -- and stays in the job log; the error
+# shown in the UI says what was wrong with the video and what to try instead.
+_NOT_TILES = (
+    "This doesn't look like a falling-tile piano video. DropScore needs the "
+    "keyboard visible along the bottom of the frame with tiles falling onto it."
+)
+_EXPLANATIONS: tuple[tuple[str, str], ...] = (
+    ("VideoError", "This video could not be read. Try exporting it again as an H.264 MP4."),
+    ("CalibrationError", _NOT_TILES),
+    ("TileError", "No falling tiles were found in this video. " + _NOT_TILES.split(". ", 1)[1]),
+    (
+        "TrackingError",
+        (
+            "The tiles could not be followed as they fell. This happens with videos "
+            "that jump, cut between shots, or are not falling-tile videos at all."
+        ),
+    ),
+)
+
+
+def explain(exc: BaseException) -> str:
+    """The message to show for a failed job."""
+    if isinstance(exc, Rejected):
+        return str(exc)
+    names = {cls.__name__ for cls in type(exc).__mro__}
+    for name, message in _EXPLANATIONS:
+        if name in names:
+            return message
+    return f"Something went wrong while transcribing: {exc}"
+
+
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+_JOB_ID = re.compile(r"[0-9a-f]{32}")  # uuid4().hex
 
 
 def safe_label(raw: str, fallback: str = "video", limit: int = 48) -> str:
@@ -89,6 +143,7 @@ class Job:
     id: str
     label: str
     workdir: Path
+    client: str = ""  # who submitted it, for the per-client limit
     source_path: Path | None = None  # the input video, deleted once it is read
     status: Status = Status.QUEUED
     stage_states: dict[str, str] = field(default_factory=dict)
@@ -102,6 +157,8 @@ class Job:
     # Formats that were asked for but could not be written, and why. Reported
     # rather than raised, so the outputs that did work stay available.
     failed_formats: dict[str, str] = field(default_factory=dict)
+    # How far through the active stage, 0 to 1, where the stage can tell.
+    stage_fraction: float = 0.0
     _cancel: threading.Event = field(default_factory=threading.Event)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -115,10 +172,12 @@ class Job:
         self.check_cancelled()
         with self._lock:
             self.stage_states[stage] = "active"
+            self.stage_fraction = 0.0
 
     def finish(self, stage: str) -> None:
         with self._lock:
             self.stage_states[stage] = "done"
+            self.stage_fraction = 0.0
 
     def say(self, message: str) -> None:
         with self._lock:
@@ -167,6 +226,8 @@ class Job:
     @property
     def progress(self) -> float:
         done = sum(1 for state in self.stage_states.values() if state == "done")
+        if self.status is Status.RUNNING:
+            done += min(max(self.stage_fraction, 0.0), 1.0)
         return done / len(STAGES)
 
     # ── reading, by the API ──────────────────────────────────────────
@@ -201,18 +262,66 @@ class JobStore:
         workers: int = 2,
         retain: int = 50,
         keep_sources: bool = False,
+        max_age: float | None = MAX_AGE_SECONDS,
+        sweep_every: float = 600.0,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.retain = retain
+        self.max_age = max_age
         # Sources are deleted whatever the outcome, not just on success: a
         # service must not depend on failures being rare to stay within its
         # disk budget. Set this to keep them for debugging a bad video.
         self.keep_sources = keep_sources
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
+        self._clear_orphans()
         self._lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="dropscore")
+        # Expiry has to happen on an idle server too, so it does not wait for
+        # the next upload.
+        self._stopped = threading.Event()
+        if max_age is not None:
+            threading.Thread(
+                target=self._sweep_until_stopped, args=(sweep_every,),
+                name="dropscore-sweep", daemon=True,
+            ).start()
+
+    def _sweep_until_stopped(self, every: float) -> None:
+        while not self._stopped.wait(every):
+            self.expire()
+
+    def expire(self, now: float | None = None) -> int:
+        """Delete finished jobs older than ``max_age``. Returns how many."""
+        if self.max_age is None:
+            return 0
+        cutoff = (time.time() if now is None else now) - self.max_age
+        with self._lock:
+            old = [
+                job for job in self._jobs.values()
+                if job.is_finished and job.finished is not None and job.finished < cutoff
+            ]
+            for job in old:
+                self._jobs.pop(job.id, None)
+                self._order.remove(job.id)
+        for job in old:
+            shutil.rmtree(job.workdir, ignore_errors=True)
+        if old:
+            log.info("expired %d finished job(s)", len(old))
+        return len(old)
+
+    def _clear_orphans(self) -> None:
+        """Delete job directories left by an earlier run of the server.
+
+        Jobs live in memory, so after a restart nothing can reach the outputs a
+        previous run left behind -- their ids 404 -- yet the files stayed on
+        disk for good, and with ``keep_sources`` the videos too. Only names a
+        job would have been given are touched, so pointing the store at a
+        directory that holds anything else does not delete it.
+        """
+        for entry in self.root.iterdir():
+            if entry.is_dir() and _JOB_ID.fullmatch(entry.name):
+                shutil.rmtree(entry, ignore_errors=True)
 
     def create(self, label: str) -> Job:
         """Register a job. The label is sanitised here, at the one chokepoint."""
@@ -259,7 +368,17 @@ class JobStore:
                 surplus,
             )
 
+    def active(self, client: str | None = None) -> int:
+        """Jobs queued or running, for one client or for everyone."""
+        with self._lock:
+            return sum(
+                1
+                for job in self._jobs.values()
+                if not job.is_finished and (client is None or job.client == client)
+            )
+
     def get(self, job_id: str) -> Job | None:
+        self.expire()
         with self._lock:
             return self._jobs.get(job_id)
 
@@ -293,7 +412,7 @@ class JobStore:
             job.say("cancelled")
         except Exception as exc:  # noqa: BLE001 - the API reports the message
             job.status = Status.ERROR
-            job.error = str(exc)
+            job.error = explain(exc)
             job.say(f"error: {exc}")
             log.exception("job %s failed", job.id)
         finally:
@@ -313,6 +432,7 @@ class JobStore:
         transcription finished, which for a long video is minutes. Workers check
         between frames, so they stop promptly.
         """
+        self._stopped.set()
         with self._lock:
             live = [job for job in self._jobs.values() if not job.is_finished]
 
@@ -324,7 +444,9 @@ class JobStore:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
 
-def until_cancelled(frames: Iterable[Any], job: Job, report_every: int = 200) -> Iterator[Any]:
+def until_cancelled(
+    frames: Iterable[Any], job: Job, report_every: int = 200, total: int = 0
+) -> Iterator[Any]:
     """Pass frames through, checking for cancellation between each one.
 
     The main tracking pass consumes every frame of the video and is by far the
@@ -339,8 +461,10 @@ def until_cancelled(frames: Iterable[Any], job: Job, report_every: int = 200) ->
     """
     for index, frame in enumerate(frames, start=1):
         job.check_cancelled()
+        if total > 0:
+            job.stage_fraction = index / total
         if report_every and index % report_every == 0:
-            job.say(f"tracked {index} frames")
+            job.say(f"tracked {index} of {total} frames" if total > 0 else f"tracked {index} frames")
         yield frame
 
 
@@ -363,6 +487,7 @@ def transcribe_job(
     video: Path,
     config: Config = DEFAULT,
     formats: Sequence[str] = ("json", "midi", "musicxml"),
+    max_seconds: float | None = MAX_SECONDS,
 ) -> None:
     """The pipeline, stage by stage, reporting as it goes.
 
@@ -375,7 +500,7 @@ def transcribe_job(
     from ..export import extension, write as export_write  # noqa: PLC0415
     from ..score import ScoreError, postprocess  # noqa: PLC0415
     from ..tiles import discover_palette  # noqa: PLC0415
-    from ..tracking import measure_scroll_speed, transcribe  # noqa: PLC0415
+    from ..tracking import transcribe_video  # noqa: PLC0415
     from ..video import VideoReader  # noqa: PLC0415
 
     # Recorded so the store can delete it once the job settles, whatever the
@@ -386,6 +511,17 @@ def transcribe_job(
     with VideoReader(video, config) as reader:
         info = reader.info
         job.say(f"{info.source_width}x{info.source_height} - {info.fps:.2f} fps")
+        if max_seconds and info.duration > max_seconds:
+            raise Rejected(
+                f"This video is {info.duration / 60:.0f} minutes long; the limit is "
+                f"{max_seconds / 60:.0f}. Trim it to the part you want transcribed."
+            )
+        if 0 < info.frame_count < MIN_FRAMES:
+            raise Rejected(
+                f"This video is only {info.frame_count} "
+                f"frame{'s' if info.frame_count > 1 else ''} long. Upload a "
+                "recording that shows the tiles falling for at least a second."
+            )
         if info.scale < 1.0:
             job.say(f"working at {info.width}x{info.height}")
         samples = reader.sample()
@@ -402,28 +538,30 @@ def transcribe_job(
         job.say(f"{palette.track_count} tile colour(s) discovered")
         job.finish("tiles")
 
+        job.begin("notes")
+        frames = until_cancelled(reader.frames(), job, total=info.frame_count or 0)
+        sequence, speed = transcribe_video(reader, calibration, palette, config, frames=frames)
+        job.finish("notes")
+        # Measured inside the pass from the tiles it found; reported as its
+        # own stage because it is a separate thing that can go wrong.
         job.begin("timing")
-        speed = measure_scroll_speed(
-            reader, calibration, 40, config=config, palette=palette
-        )
         job.say(f"scroll speed {speed.value:.1f} px/s (confidence {speed.confidence:.2f})")
+        job.say(f"{len(sequence)} note events")
         job.finish("timing")
 
-        job.begin("notes")
-        sequence = transcribe(
-            until_cancelled(reader.frames(), job), calibration, palette, speed, config
+    if not len(sequence):
+        raise Rejected(
+            "No notes were found. The keyboard was recognised, but no tiles were "
+            "seen reaching it."
         )
-        job.say(f"{len(sequence)} note events")
-        job.finish("notes")
 
     job.begin("score")
     analysis = None
-    if len(sequence):
-        try:
-            sequence, analysis = postprocess(sequence, config)
-            job.say(str(analysis))
-        except ScoreError as exc:
-            job.say(f"left unquantized: {exc}")
+    try:
+        sequence, analysis = postprocess(sequence, config)
+        job.say(str(analysis))
+    except ScoreError as exc:
+        job.say(f"left unquantized: {exc}")
 
     sequence.source = f"dropscore:{job.label}"
 

@@ -15,6 +15,7 @@ the renderer is what matters here.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 
 from .notes import MAX_PITCH, MIN_PITCH
 
@@ -94,15 +95,15 @@ class KeyboardLayout:
 
     # ── counts ───────────────────────────────────────────────────────
 
-    @property
+    @cached_property
     def white_count(self) -> int:
         return white_ordinal(self.last_pitch) - white_ordinal(self.first_pitch) + 1
 
-    @property
+    @cached_property
     def white_width(self) -> float:
         return self.width / self.white_count
 
-    @property
+    @cached_property
     def black_width(self) -> float:
         return self.white_width * self.black_width_ratio
 
@@ -142,6 +143,12 @@ class KeyboardLayout:
         offset = self.black_offsets[BLACK_PITCH_CLASSES.index(pitch % 12)]
         return self.x0 + boundary_index * self.white_width + offset * self.black_width
 
+    @cached_property
+    def _centers(self) -> tuple[float, ...]:
+        # nearest_key runs for every narrow blob of every frame, and asking
+        # key_center for all 88 keys each time was a tenth of detection.
+        return tuple(self.key_center(p) for p in self.pitches)
+
     def key_span(self, pitch: int) -> tuple[float, float]:
         """Left and right edges of any key, as drawn."""
         if is_white(pitch):
@@ -152,7 +159,9 @@ class KeyboardLayout:
 
     def nearest_key(self, x: float) -> int | None:
         """The key whose centre is closest to column ``x``, if ``x`` lies on it."""
-        pitch = min(self.pitches, key=lambda p: abs(self.key_center(p) - x))
+        centers = self._centers
+        best = min(range(len(centers)), key=lambda i: abs(centers[i] - x))
+        pitch = self.first_pitch + best
         left, right = self.key_span(pitch)
         return pitch if left <= x <= right else None
 

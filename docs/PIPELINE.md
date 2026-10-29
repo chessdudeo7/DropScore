@@ -80,7 +80,12 @@ Per frame, in the region *above* the strike line:
 
 Known nastiness:
 - **Glow/bloom** inflates blobs. Erode by a fixed fraction of key width, or
-  threshold on the saturated core rather than the halo.
+  threshold on the saturated core rather than the halo. As built, there is no
+  erosion: each colour accepts pixels within a radius set by how tightly its
+  own pixels cluster. That spread is read from the colour's densest band when
+  most pixels sit there, so a particle cloud around flat tiles cannot widen
+  the radius (`tiles._member_spread`). On a smoke-effect render it had widened
+  from 22 to 37, and every cloud read as a tile.
 - **Vertically adjacent repeated notes** merge into one tall blob. Detect the
   1–2 px seam, or use the fact that repeated notes have a gap of ≥ 1 px at typical
   scroll speeds.
@@ -102,6 +107,18 @@ Known nastiness:
   would quantize badly; reading them off pixel geometry does not.
 - Only tiles fully visible at some point can be measured precisely. Tiles longer
   than the screen need duration accumulated across frames.
+- As built (`tracking.transcribe_video`), the video is decoded once: every frame
+  is detected, the detections are kept (a few rectangles a frame), the speed is
+  measured from them at eight windows across the clip, and only then are tracks
+  built. Measuring the speed from its own decode first used to cost two fifths
+  of the runtime.
+- A keyboard filmed off a screen is rarely level. `VideoReader.sample()`
+  measures the tilt of the keybed's top edge and, from 0.15° up, rotates every
+  frame level before anything else sees it.
+- A screen recording can show the video in a window beside other windows.
+  When the whole picture will not calibrate, `calibrate.video_columns` finds
+  the columns whose fall-area rows are the moving region's background colour,
+  and the keyboard is fitted inside them and shifted back into the frame.
 
 ## 5. Notes → score
 
@@ -116,9 +133,17 @@ Now it is a symbolic-music problem, which is well-trodden:
 - **Quantize** to 1/16 or 1/32, with a penalty for moving a note far — never snap
   blindly, snapping is what makes machine transcriptions unreadable.
 - **Key signature** via Krumhansl-style pitch-class profile correlation, then spell
-  accidentals accordingly (F# vs Gb).
+  accidentals accordingly (F# vs Gb). As built, each note is spelled by its scale
+  degree in the key (`musicxml.spell_in_key`), so F# major gets its E# and C
+  major its B♭, not A#.
 - **Emit** MIDI first (trivial, and the honest ground truth of what was played),
-  then MusicXML via `music21`, then PDF via MuseScore/LilyPond CLI.
+  then MusicXML via `music21`, then PDF via MuseScore/LilyPond CLI. As built, a
+  MIDI note is released no later than the next strike of its key: rounding can
+  leave a note held past it, and a note-off names only the key. MusicXML is
+  written directly, with eighths and shorter beamed a beat at a time (a dotted
+  quarter in compound time, the bar in 3/8), because Verovio, which engraves
+  the PDF first, does not beam a file that leaves it out. A compound metre's
+  tempo mark names the dotted quarter.
 
 Important expectation-setting: **the MIDI will be excellent, the engraved sheet
 music will be mediocre.** Turning a note stream into readable notation (voicing,

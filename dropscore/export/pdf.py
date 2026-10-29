@@ -14,6 +14,7 @@ there is no reason not to use it.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -61,6 +62,33 @@ def available() -> bool:
     return _verovio_available() or find_engraver() is not None
 
 
+# A music-font character set inside text, as verovio sets the note of a tempo
+# mark: <tspan font-family="Leipzig">U+ECA5</tspan>. The notes and staves are
+# drawn as outlines and convert cleanly; these are characters, and svglib has
+# no music font to draw them in, so each became a solid black box -- one above
+# the first bar of every page that had a tempo.
+_TEXT_GLYPH = re.compile(
+    r'<tspan([^>]*font-family="(?:Leipzig|Bravura)[^"]*"[^>]*)>([-]+)</tspan>'
+)
+# SMuFL's metronome marks: a note value standing for the beat.
+_METRONOME = range(0xECA0, 0xECC0)
+
+
+def _plain_text_glyphs(svg: str) -> str:
+    """Write music-font characters in text as words the PDF can draw."""
+
+    def replace(match: re.Match[str]) -> str:
+        glyphs = match.group(2)
+        if all(ord(g) in _METRONOME for g in glyphs):
+            attributes = re.sub(r'\s*font-family="[^"]*"', "", match.group(1))
+            attributes = re.sub(r'font-size="(\d+)px"',
+                                lambda m: f'font-size="{int(m.group(1)) * 9 // 16}px"', attributes)
+            return f"<tspan{attributes}>Tempo</tspan>"
+        return ""  # better absent than a black box
+
+    return _TEXT_GLYPH.sub(replace, svg)
+
+
 def _engrave_with_verovio(xml_path: Path, path: Path) -> Path:
     """Engrave in-process: MusicXML to SVG to PDF."""
     from io import BytesIO  # noqa: PLC0415
@@ -70,7 +98,15 @@ def _engrave_with_verovio(xml_path: Path, path: Path) -> Path:
     from reportlab.pdfgen import canvas as pdf_canvas  # noqa: PLC0415
     from svglib.svglib import svg2rlg  # noqa: PLC0415
 
-    toolkit = verovio.toolkit()
+    # Named explicitly, because the default is not to be trusted off the main
+    # thread. The Windows wheel bakes in the path of the machine it was built
+    # on, and the package corrects it on import -- for the thread that
+    # imported it. The service engraves in a worker thread, where the toolkit
+    # went looking on the build machine, found no fonts, and every PDF failed.
+    # Built without loading fonts, since the default path is the wrong one: it
+    # otherwise printed five font errors into the server log on every PDF.
+    toolkit = verovio.toolkit(False)
+    toolkit.setResourcePath(str(Path(verovio.__file__).parent / "data"))
     toolkit.setOptions(
         {
             "pageWidth": 2100,
@@ -91,7 +127,7 @@ def _engrave_with_verovio(xml_path: Path, path: Path) -> Path:
 
     canvas = pdf_canvas.Canvas(str(path))
     for number in range(1, pages + 1):
-        svg = toolkit.renderToSVG(number)
+        svg = _plain_text_glyphs(toolkit.renderToSVG(number))
         drawing = svg2rlg(BytesIO(svg.encode("utf-8")))
         if drawing is None:
             raise EngraverNotFound(f"could not convert page {number} to PDF")
@@ -124,6 +160,12 @@ def write(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     xml_path = path.with_suffix(".musicxml")
+    # The engraver reads its MusicXML from beside the PDF, which is exactly
+    # where a MusicXML asked for in the same job already sits. Removing the
+    # intermediate afterwards then removed that too: the service offered a
+    # MusicXML download for every job that also asked for a PDF, and served a
+    # 404. Only a file this call created is its to remove.
+    keep_musicxml = keep_musicxml or xml_path.exists()
     musicxml.write(sequence, xml_path, analysis)
 
     if engraver is None:

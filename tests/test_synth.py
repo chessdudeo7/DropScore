@@ -342,6 +342,8 @@ def test_capture_theme_blooms_struck_keys_past_white() -> None:
     for index in range(0, renderer.frame_count, 10):
         band = renderer.frame(index)[renderer.strike_y : renderer.keybed_bottom]
         brightest = max(brightest, float(band.max()))
+        if brightest > unlit * 1.5:
+            break  # one blown-out key is the whole claim
 
     assert brightest > unlit * 1.5, "struck keys never blow out past the key colour"
 
