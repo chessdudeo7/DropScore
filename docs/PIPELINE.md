@@ -132,6 +132,9 @@ Now it is a symbolic-music problem, which is well-trodden:
   candidate BPMs) and allow a slow tempo curve for rubato.
 - **Quantize** to 1/16 or 1/32, with a penalty for moving a note far — never snap
   blindly, snapping is what makes machine transcriptions unreadable.
+  As built, a note that misses the steady grid is tried again against its
+  neighbours' own lateness over two beats (`score._locally_snapped`), so a
+  passage played consistently late still lands on the grid.
 - **Key signature** via Krumhansl-style pitch-class profile correlation, then spell
   accidentals accordingly (F# vs Gb). As built, each note is spelled by its scale
   degree in the key (`musicxml.spell_in_key`), so F# major gets its E# and C

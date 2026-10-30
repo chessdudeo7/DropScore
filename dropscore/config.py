@@ -583,6 +583,13 @@ class ScoreConfig:
     max_shift: float = 0.35
     min_duration: float = 0.03
 
+    # A note that misses every gridline is tried again against its neighbours'
+    # own lateness, over this many beats either side (score._locally_snapped).
+    # A passage played consistently late fits the grid by its neighbours where
+    # it does not by the piece: two pietschmann3 sixteenths 0.09 of a beat out
+    # were written as fragments. Zero turns it off.
+    local_phase_beats: float = 2.0
+
     # How hard a candidate key is penalised for the sounding weight that falls
     # outside its scale, as a fraction of total weight.
     #

@@ -1289,6 +1289,10 @@ def quantize(
     quantized: list[Note] = []
     skipped = 0
 
+    # How far each note sits from the steady grid, for _locally_snapped.
+    onsets = np.array([n.onset for n in sequence])
+    residuals = ((onsets - analysis.beat_phase + step / 2) % step) - step / 2
+
     for note in sequence:
         if in_beats:
             position = beat_position(note.onset, analysis)
@@ -1307,6 +1311,11 @@ def quantize(
                 duration = max(beat_time(position + snapped, analysis) - onset, cfg.min_duration)
         else:
             onset = _snap(note.onset, step, analysis.beat_phase, tolerance)
+            if onset is None:
+                onset = _locally_snapped(
+                    note.onset, onsets, residuals, step, analysis.beat_phase,
+                    tolerance, analysis.beat * cfg.local_phase_beats,
+                )
             if onset is None:
                 onset = note.onset
                 skipped += 1
@@ -1685,6 +1694,33 @@ def _hold_under_figures(notes: list[Note], step: float, cfg, beat: float = 0.0) 
             reach = round(reach / step) * step
         result.append(Note(note.onset, note.pitch, max(note.duration, reach), note.hand, note.velocity))
     return result
+
+
+def _locally_snapped(
+    onset: float,
+    onsets: np.ndarray,
+    residuals: np.ndarray,
+    step: float,
+    phase: float,
+    tolerance: float,
+    reach: float,
+) -> float | None:
+    """The gridline a note was aimed at, allowing for where its neighbours sit.
+
+    A steady grid fits a whole piece and not every bar of it: through one
+    passage of a Pietschmann arrangement every note landed 0.07 to 0.09 of a
+    beat late, and the two furthest out missed the 0.35-step limit by a hair
+    and were written as unsnapped fragments. Measured against its neighbours'
+    own lateness the same note is 0.01 of a step out. Only notes that failed
+    to snap are asked; anything that already lands is left exactly as it was.
+    """
+    if reach <= 0:
+        return None
+    near = (np.abs(onsets - onset) <= reach) & (onsets != onset)
+    if near.sum() < 3:
+        return None
+    local = float(np.median(residuals[near]))
+    return _snap(onset - local, step, phase, tolerance)
 
 
 def _snap(value: float, step: float, phase: float, tolerance: float) -> float | None:

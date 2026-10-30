@@ -646,6 +646,31 @@ def test_quantization_leaves_far_outliers_alone() -> None:
     assert any(n.pitch == 61 and n.onset == pytest.approx(stray.onset) for n in result)
 
 
+def test_a_note_in_a_late_passage_snaps_by_its_neighbours() -> None:
+    """Through one passage of a real arrangement every note landed late, and
+    the two furthest out missed the grid by a hair and were written as
+    fragments. Against their neighbours' lateness they are on the grid."""
+    sequence = _grid(120.0, count=64)
+    analysis = replace(analyze(sequence), beat_times=())  # the steady grid
+    step = analysis.beat / DEFAULT.score.steps_per_beat
+
+    late = []
+    for index, note in enumerate(sequence):
+        shift = 0.0
+        if 32 <= index < 48:
+            shift = step * (0.40 if index == 40 else 0.28)  # one beyond max_shift
+        late.append(replace(note, onset=note.onset + shift))
+    played = NoteSequence.of(late)
+    aimed_at = sequence.notes[40].onset
+
+    result, skipped = quantize(played, analysis)
+    assert skipped == 0
+    assert any(n.onset == pytest.approx(aimed_at, abs=1e-3) for n in result)
+
+    off = Config(score=replace(DEFAULT.score, local_phase_beats=0.0))
+    assert quantize(played, analysis, off)[1] == 1  # without it, a fragment
+
+
 def test_quantization_never_produces_a_zero_duration() -> None:
     sequence = NoteSequence.of(
         [Note(onset=i * 0.5, pitch=60, duration=0.004) for i in range(12)]
@@ -662,8 +687,13 @@ def test_tighter_tolerance_skips_more() -> None:
         [Note(n.onset + 0.03, n.pitch, n.duration, n.hand, n.velocity) for n in sequence]
     )
 
-    loose = quantize(nudged, analysis, Config(score=ScoreConfig(max_shift=0.45)))[1]
-    tight = quantize(nudged, analysis, Config(score=ScoreConfig(max_shift=0.05)))[1]
+    # Every note late by the same amount is a passage late as a whole, which
+    # local snapping re-aligns; the tolerance alone is what is tested here.
+    def skipped(shift: float) -> int:
+        cfg = Config(score=ScoreConfig(max_shift=shift, local_phase_beats=0.0))
+        return quantize(nudged, analysis, cfg)[1]
+
+    loose, tight = skipped(0.45), skipped(0.05)
     assert tight > loose
 
 
