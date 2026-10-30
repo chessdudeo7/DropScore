@@ -959,3 +959,88 @@ def test_transcribe_video_measures_what_the_two_pass_route_does() -> None:
         except TrackingError:
             continue
     assert speed.samples == len(shifts)
+
+
+# ── the scroll clock: a pause or a speed change part-way ───────────────
+
+
+def test_a_paused_video_reads_as_if_it_never_paused() -> None:
+    """A screen recording paused for a second holds one frame still. Read at
+    the one speed, the notes after it came out a second late, and the tiles
+    that stood still were notes twice."""
+    from dropscore.tracking import transcribe_video  # noqa: PLC0415
+
+    renderer = _renderer(bars=3)
+    frames = _all_frames(renderer)
+    calibration = _calibration(renderer)
+    palette = discover_palette(frames[:: max(1, len(frames) // 24)], calibration, DEFAULT)
+    fps = renderer.spec.fps
+    held = len(frames) // 2
+    pause = int(fps)  # one second
+    paused = frames[: held + 1] + [
+        Frame(held + 1 + i, (held + 1 + i) / fps, frames[held].image, 1.0) for i in range(pause)
+    ] + [
+        Frame(f.index + pause, f.time + pause / fps, f.image, 1.0) for f in frames[held + 1 :]
+    ]
+
+    sequence, _ = transcribe_video(None, calibration, palette, DEFAULT, frames=iter(paused))
+
+    _, missed, extra = _match(sequence, renderer.notes)
+    assert not missed and not extra
+
+
+def _steps(rates: list[tuple[float, float, float]], per_frame: int = 5, fps: float = 30.0,
+           wobble: float = 0.0) -> np.ndarray:
+    rng = np.random.default_rng(0)
+    rows = []
+    for start, end, rate in rates:
+        for t in np.arange(start, end, 1 / fps):
+            for _ in range(per_frame):
+                rows.append((t, t + 1 / fps, rate / fps * (1 + wobble * rng.uniform(-1, 1))))
+    return np.array(rows)
+
+
+def test_a_change_of_playback_speed_splits_the_clock() -> None:
+    from dropscore.tracking import _stretches  # noqa: PLC0415
+
+    steps = _steps([(0.0, 10.0, 150.0), (10.0, 24.0, 187.5)])
+    stretches = _stretches(steps, 0.0, 24.0, DEFAULT.tracking)
+
+    assert len(stretches) == 2
+    assert stretches[0][1] == pytest.approx(10.0)
+    assert stretches[0][2] == pytest.approx(150.0, rel=0.01)
+    assert stretches[1][2] == pytest.approx(187.5, rel=0.01)
+
+
+def test_a_capture_that_wobbles_keeps_one_speed() -> None:
+    """Dropped frames move a second's reading by a few percent either way."""
+    from dropscore.tracking import _stretches  # noqa: PLC0415
+
+    steps = _steps([(0.0, 24.0, 150.0)], wobble=0.3)
+    assert len(_stretches(steps, 0.0, 24.0, DEFAULT.tracking)) == 1
+
+
+def test_a_thin_tail_is_not_a_change_of_speed() -> None:
+    """The last held chord leaves a few slow edges after everything else has
+    gone: too few to measure, so not a stretch of its own."""
+    from dropscore.tracking import _stretches  # noqa: PLC0415
+
+    steps = _steps([(0.0, 20.0, 150.0), (20.0, 24.0, 60.0)])
+    tail = steps[:, 0] >= 20.0
+    steps = np.concatenate([steps[~tail], steps[tail][::10]])
+    assert len(_stretches(steps, 0.0, 24.0, DEFAULT.tracking)) == 1
+
+
+def test_a_held_chord_is_not_a_pause() -> None:
+    """A chord held longer than the screen is clipped at the top and stops
+    short of the strike line: nothing in the picture moves, yet the video is
+    playing. Read as a pause, 14 seconds of a recording were cut out."""
+    from dropscore.tracking import _pauses, _Stamp  # noqa: PLC0415
+
+    stamps = [_Stamp(i, i / 30) for i in range(90)]
+    held = [[_tile(55, 324.0, i / 30, height=324.0), _tile(59, 326.0, i / 30, height=326.0)]
+            for i in range(90)]
+    assert _pauses(stamps, held, (13.6, 325.4), DEFAULT.tracking) == []
+
+    still = [[_tile(55, 200.0, i / 30, height=40.0)] for i in range(90)]
+    assert _pauses(stamps, still, (13.6, 325.4), DEFAULT.tracking) == [(0.0, 89 / 30)]

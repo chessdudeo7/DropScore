@@ -115,6 +115,19 @@ Known nastiness:
 - A keyboard filmed off a screen is rarely level. `VideoReader.sample()`
   measures the tilt of the keybed's top edge and, from 0.15° up, rotates every
   frame level before anything else sees it.
+- Not every video scrolls steadily. A screen recording can pause, and a
+  re-upload can change playback speed part-way. After a first pass,
+  `tracking._scroll_clock` measures the speed a second at a time from the
+  top edges of the tracks that became notes, and finds runs of frames in
+  which no tile with its top in view moves at all. Top edges only: a held
+  note's bottom stops short of the strike line, and a held chord looks the
+  same in every frame whether the video plays or not. Where the speed holds two different values for
+  at least two seconds each, or the picture stands still, every frame is
+  re-timed by the distance fallen, and the notes come out in the music's own
+  time. A video that scrolls steadily, which is nearly all of them, is left
+  exactly as it was.
+- A board cut off at one side of the picture is placed in the one octave
+  where that many white keys fit on a piano.
 - A screen recording can show the video in a window beside other windows.
   When the whole picture will not calibrate, `calibrate.video_columns` finds
   the columns whose fall-area rows are the moving region's background colour,
@@ -146,7 +159,9 @@ Now it is a symbolic-music problem, which is well-trodden:
   written directly, with eighths and shorter beamed a beat at a time (a dotted
   quarter in compound time, the bar in 3/8), because Verovio, which engraves
   the PDF first, does not beam a file that leaves it out. A compound metre's
-  tempo mark names the dotted quarter.
+  tempo mark names the dotted quarter. In the PDF the tempo mark is written
+  as words on one line ("Dotted quarter = 48"), since the PDF step has no
+  music font and draws each piece of a line at the same spot.
 
 Important expectation-setting: **the MIDI will be excellent, the engraved sheet
 music will be mediocre.** Turning a note stream into readable notation (voicing,

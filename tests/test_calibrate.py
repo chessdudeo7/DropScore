@@ -350,3 +350,13 @@ def test_finds_the_keyboard_of_a_video_playing_in_a_window() -> None:
     for pitch in (21, 60, 61, 108):
         expected = 18 + renderer.layout.key_center(pitch) / 2
         assert result.layout.key_center(pitch) == pytest.approx(expected, abs=1.5)
+
+
+def test_a_board_cut_off_on_the_left_starts_on_the_piano() -> None:
+    """A full piano with its lowest four white keys cut off by the picture
+    shows 48 white keys from an E. Centred on middle C those would start at
+    E0, below the bottom of a piano, and the fit was thrown away: the only
+    octave they fit is from E1."""
+    from dropscore.calibrate import _first_pitch  # noqa: PLC0415
+
+    assert _first_pitch(2, 48) == 28

@@ -907,3 +907,24 @@ def test_spread_keeps_the_median_when_the_variation_carries_on_past_the_band():
     distances = np.concatenate([rng.uniform(2.2, 4.0, 410), rng.uniform(4.0, 30.0, 590)])
     assert np.median(distances) > 7.0
     assert _spread(distances) == pytest.approx(np.median(distances))
+
+
+def test_spread_ignores_smoke_on_a_30fps_encode():
+    # The same glow render at 30fps: the encoder softens the tile, so its band
+    # holds 0.38 of the members and the next 4 units 0.11 of the band. Read
+    # from the median there, the radius took in the smoke: 80 phantom notes.
+    rng = np.random.default_rng(4)
+    band = rng.uniform(3.0, 6.5, 380)
+    shoulder = rng.uniform(7.2, 10.8, 42)
+    tail = rng.uniform(11.0, 44.0, 578)
+    distances = np.concatenate([band, shoulder, tail])
+    assert np.median(distances) > 14.0
+    assert _spread(distances) < 7.0
+
+
+def test_spread_keeps_the_median_when_the_band_is_the_far_end():
+    # Distances are only gathered out to a window, so a colour can pile up at
+    # its edge. That is where the counting stopped, not a flat colour's core.
+    rng = np.random.default_rng(5)
+    distances = np.concatenate([rng.uniform(40.0, 43.5, 400), rng.uniform(0.0, 30.0, 600)])
+    assert _spread(distances) == pytest.approx(np.median(distances))

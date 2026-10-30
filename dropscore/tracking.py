@@ -28,7 +28,7 @@ a second of drift over a clip.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Iterator, Sequence
 
 import cv2
@@ -928,6 +928,176 @@ class _Stamp:
     time: float
 
 
+def _edge_steps(
+    tracks: Sequence[TileTrack], speed: float, calibration: Calibration, config: Config
+) -> np.ndarray:
+    """(start, end, pixels) for every frame-to-frame step of an unclipped top edge.
+
+    Only of tracks that become notes: static blobs and particles would
+    otherwise outvote the tiles, and most of a frame's detections are those.
+    """
+    # Top edges only. A held note's bottom stops short of the strike line by
+    # however much the renderer leaves (3px on one render, 16 on another), and
+    # those stopped edges read as the scroll slowing wherever few other notes
+    # are moving. A top in view always falls while the video plays.
+    margin = max(config.tracking.edge_margin, 0.04 * calibration.strike_y)
+    low, high = margin, calibration.strike_y - margin
+    steps: list[tuple[float, float, float]] = []
+    for track in tracks:
+        if track_to_note(track, speed, calibration, config) is None:
+            continue
+        times = track.times
+        for edges in (track.tops,):
+            for i in range(len(times) - 1):
+                if (
+                    low < edges[i] < high
+                    and low < edges[i + 1] < high
+                    and times[i + 1] > times[i]
+                ):
+                    steps.append((times[i], times[i + 1], edges[i + 1] - edges[i]))
+    return np.array(steps, dtype=float).reshape(-1, 3)
+
+
+def _pauses(
+    stamps: Sequence[_Stamp],
+    found: Sequence[Sequence[Tile]],
+    margin_rows: tuple[float, float],
+    cfg: TrackingConfig,
+) -> list[tuple[float, float]]:
+    """Spans where tiles are on screen and not one of them moves.
+
+    Only a tile whose top is in view can show that it moved: a held note's
+    top is above the picture and its bottom stops at the strike line, so it
+    looks the same in every frame whether the video plays or not.
+    """
+    low, high = margin_rows
+
+    def picture(tiles: Sequence[Tile]) -> list[tuple]:
+        return sorted(
+            (t.pitch, t.track, round(t.top, 1), round(t.bottom, 1)) for t in tiles
+        )
+
+    def movable(tiles: Sequence[Tile]) -> bool:
+        return any(low < t.top < high for t in tiles)
+
+    spans: list[tuple[float, float]] = []
+    start: int | None = None
+    for i in range(1, len(stamps) + 1):
+        still = (
+            i < len(stamps)
+            and movable(found[i])
+            and picture(found[i]) == picture(found[i - 1])
+        )
+        if still and start is None:
+            start = i - 1
+        elif not still and start is not None:
+            a, b = stamps[start].time, stamps[i - 1].time
+            if b - a >= cfg.clock_min_pause:
+                spans.append((a, b))
+            start = None
+    return spans
+
+
+def _stretches(
+    steps: np.ndarray, first: float, last: float, cfg: TrackingConfig
+) -> list[tuple[float, float, float]]:
+    """Split the clip where its scroll speed changes and holds: (start, end, px/s)."""
+    edges = np.arange(first, last + cfg.clock_window, cfg.clock_window)
+    if edges.size < 2 or steps.size == 0:
+        return [(first, last, float("nan"))]
+    pixels = np.histogram(steps[:, 0], edges, weights=steps[:, 2])[0]
+    seconds = np.histogram(steps[:, 0], edges, weights=steps[:, 1] - steps[:, 0])[0]
+    counts = np.histogram(steps[:, 0], edges)[0]
+    measured = counts >= cfg.clock_min_samples
+    rates = np.full(counts.size, np.nan)
+    rates[measured] = pixels[measured] / seconds[measured]
+    need = int(round(cfg.clock_min_stretch / cfg.clock_window))
+
+    def known(a: int, b: int) -> np.ndarray:
+        return rates[a:b][~np.isnan(rates[a:b])]
+
+    def steady(a: int, b: int) -> bool:
+        values = known(a, b)
+        if values.size < need:
+            return False
+        middle = float(np.median(values))
+        return middle > 0 and float(np.median(np.abs(values - middle))) / middle < cfg.clock_steady
+
+    def split(a: int, b: int) -> list[tuple[int, int]]:
+        best: tuple[float, int] | None = None
+        for k in range(a + need, b - need + 1):
+            if not (steady(a, k) and steady(k, b)):
+                continue
+            left, right = float(np.median(known(a, k))), float(np.median(known(k, b)))
+            if abs(left - right) / max(left, right) < cfg.clock_min_step:
+                continue
+            error = float(np.nansum([
+                (rates[j] - (left if j < k else right)) ** 2 for j in range(a, b)
+            ]))
+            if best is None or error < best[0]:
+                best = (error, k)
+        if best is None:
+            return [(a, b)]
+        return split(a, best[1]) + split(best[1], b)
+
+    def rate(a: int, b: int) -> float:
+        values = known(a, b)
+        return float(np.median(values)) if values.size else float("nan")
+
+    return [(float(edges[a]), float(edges[b]), rate(a, b)) for a, b in split(0, edges.size - 1)]
+
+
+def _scroll_clock(
+    stamps: Sequence[_Stamp],
+    found: Sequence[Sequence[Tile]],
+    tracks: Sequence[TileTrack],
+    speed: float,
+    calibration: Calibration,
+    config: Config,
+) -> tuple[list[float | None], float] | None:
+    """Each frame's time on a clock that runs with the scroll; None if it is steady.
+
+    A paused video stops the scroll and a sped-up one runs it fast, and either
+    way the music's time is the distance fallen, not the seconds that passed.
+    The times returned advance by distance at the dominant speed, which is
+    returned with them; a paused frame's time is None, and it is dropped.
+    Returns None for a video that scrolls steadily, which is nearly every one,
+    so those are left exactly as they were.
+    """
+    cfg = config.tracking
+    if len(stamps) < 2:
+        return None
+    margin = max(cfg.edge_margin, 0.04 * calibration.strike_y)
+    pauses = _pauses(stamps, found, (margin, calibration.strike_y - margin), cfg)
+    steps = _edge_steps(tracks, speed, calibration, config)
+    for a, b in pauses:
+        steps = steps[~((steps[:, 0] >= a) & (steps[:, 0] < b))]
+    stretches = _stretches(steps, stamps[0].time, stamps[-1].time, cfg)
+    if len(stretches) == 1:
+        if not pauses:
+            return None
+        stretches = [(stretches[0][0], stretches[0][1], speed)]
+    reference = max(stretches, key=lambda s: s[1] - s[0])[2]
+    log.info(
+        "scroll changes: %s; paused %s",
+        ", ".join(f"{a:.1f}-{b:.1f}s at {v:.0f}px/s" for a, b, v in stretches),
+        ", ".join(f"{a:.1f}-{b:.1f}s" for a, b in pauses) or "never",
+    )
+
+    times: list[float | None] = [stamps[0].time]
+    clock = stamps[0].time
+    for previous, current in zip(stamps, stamps[1:]):
+        a, b = previous.time, current.time
+        if any(start <= a and b <= end for start, end in pauses):
+            times.append(None)
+            continue
+        middle = (a + b) / 2
+        rate = next((v for s, e, v in stretches if s <= middle < e), stretches[-1][2])
+        clock += (b - a) * rate / reference
+        times.append(clock)
+    return times, reference
+
+
 def transcribe_video(
     reader: VideoReader,
     calibration: Calibration,
@@ -988,6 +1158,14 @@ def transcribe_video(
         raise TrackingError(f"scroll speed must be positive, got {speed.value}")
 
     tracks = build_tracks(zip(stamps, found), speed.value, calibration, config)
+    clock = _scroll_clock(stamps, found, tracks, speed.value, calibration, config)
+    if clock is not None:
+        times, reference = clock
+        kept = [i for i, time in enumerate(times) if time is not None]
+        stamps = [_Stamp(stamps[i].index, times[i]) for i in kept]
+        found = [[replace(tile, time=times[i]) for tile in found[i]] for i in kept]
+        speed = replace(speed, value=reference)
+        tracks = build_tracks(zip(stamps, found), speed.value, calibration, config)
     sequence = tracks_to_notes(tracks, speed.value, calibration, config)
     log.info("%d tracks -> %d notes", len(tracks), len(sequence))
     return sequence, speed

@@ -68,25 +68,62 @@ def available() -> bool:
 # no music font to draw them in, so each became a solid black box -- one above
 # the first bar of every page that had a tempo.
 _TEXT_GLYPH = re.compile(
-    r'<tspan([^>]*font-family="(?:Leipzig|Bravura)[^"]*"[^>]*)>([-]+)</tspan>'
+    r'<tspan([^>]*font-family="(?:Leipzig|Bravura)[^"]*"[^>]*)>([\ue000-\uf8ff]+)</tspan>'
 )
 # SMuFL's metronome marks: a note value standing for the beat.
 _METRONOME = range(0xECA0, 0xECC0)
+_BEAT_NAMES = {
+    0xECA2: "Whole", 0xECA3: "Half", 0xECA4: "Half", 0xECA5: "Quarter",
+    0xECA6: "Quarter", 0xECA7: "Eighth", 0xECA8: "Eighth", 0xECA9: "Sixteenth",
+    0xECAA: "Sixteenth",
+}
+_AUGMENTATION_DOT = 0xECB7
+
+# A text element holding one of those, with the rest of its line beside it.
+_TEXT = re.compile(r"<text([^>]*)>(.*?)</text>", re.S)
+_LEAF = re.compile(r"<tspan([^>]*)>([^<]*)</tspan>")
+_SIZE = re.compile(r'font-size="(\d+)px"')
+
+
+def _beat_name(glyphs: str) -> str:
+    """'Quarter', 'Dotted quarter': the beat a metronome mark's glyphs show."""
+    codes = [ord(g) for g in glyphs]
+    name = next((_BEAT_NAMES[c] for c in codes if c in _BEAT_NAMES), "Beat")
+    return f"Dotted {name.lower()}" if _AUGMENTATION_DOT in codes else name
+
+
+def _one_line(match: re.Match[str]) -> str:
+    """Set a text element that holds a music glyph as one plain run.
+
+    svglib draws each nested tspan at the text's own x rather than after the
+    one before, so a tempo mark written as glyph, " = ", "100" came out with
+    all three on top of each other.
+    """
+    attributes, body = match.group(1), match.group(2)
+    leaves = _LEAF.findall(body)
+    if not any(_TEXT_GLYPH.fullmatch(f"<tspan{a}>{t}</tspan>") for a, t in leaves):
+        return match.group(0)
+    words: list[str] = []
+    size = None
+    for leaf_attributes, text in leaves:
+        if _TEXT_GLYPH.fullmatch(f"<tspan{leaf_attributes}>{text}</tspan>"):
+            if all(ord(g) in _METRONOME for g in text):
+                words.append(_beat_name(text))
+            continue  # better absent than a black box
+        words.append(text)
+        found = _SIZE.search(leaf_attributes)
+        if found and size is None:
+            size = found.group(1)
+    line = "".join(words).replace("\xa0", " ").strip()
+    if size is not None:
+        attributes = _SIZE.sub(f'font-size="{size}px"', attributes)
+    return f"<text{attributes}><tspan>{line}</tspan></text>"
 
 
 def _plain_text_glyphs(svg: str) -> str:
     """Write music-font characters in text as words the PDF can draw."""
-
-    def replace(match: re.Match[str]) -> str:
-        glyphs = match.group(2)
-        if all(ord(g) in _METRONOME for g in glyphs):
-            attributes = re.sub(r'\s*font-family="[^"]*"', "", match.group(1))
-            attributes = re.sub(r'font-size="(\d+)px"',
-                                lambda m: f'font-size="{int(m.group(1)) * 9 // 16}px"', attributes)
-            return f"<tspan{attributes}>Tempo</tspan>"
-        return ""  # better absent than a black box
-
-    return _TEXT_GLYPH.sub(replace, svg)
+    svg = _TEXT.sub(_one_line, svg)
+    return _TEXT_GLYPH.sub("", svg)
 
 
 def _engrave_with_verovio(xml_path: Path, path: Path) -> Path:

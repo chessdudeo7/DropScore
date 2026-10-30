@@ -212,7 +212,7 @@ def _member_spread(distances: np.ndarray, cfg) -> float:
 
     The band must also stand apart: smoke is a separate population, so the
     distances just past the band are nearly empty (0.05 of the band's count on
-    that render). A colour whose members carry on past the band at a steady
+    that render, 0.11 on its 30fps encode). A colour whose members carry on past the band at a steady
     density is one colour drawn with real variation, and its median is the
     honest spread: Für Elise's second hand reads 0.18 there, and taking its
     band shrank the radius and lost 8 of its 104 notes.
@@ -229,7 +229,9 @@ def _member_spread(distances: np.ndarray, cfg) -> float:
     if counts[start] < cfg.spread_core_share * ordered.size:
         return median
     low, high = float(ordered[start]), float(ordered[start] + width)
-    if low <= median <= high:
+    if median <= high:
+        # In the band, or below it: a band out at the far end of the window is
+        # where the distances were cut off, not a flat colour's core.
         return median
     beyond = np.count_nonzero((ordered > high) & (ordered <= high + width))
     if beyond >= cfg.spread_core_gap * counts[start]:

@@ -185,10 +185,15 @@ class TileConfig:
     # the median lies outside that band, the spread is read from the band. A
     # gradient has no such band; a particle cloud around flat tiles does.
     spread_core_width: float = 4.0
-    spread_core_share: float = 0.4
+    # The glow render's band held 0.41 at 60fps and 0.38 at 30fps, where the
+    # encoder blurs the tile a little more. Nothing that should keep its
+    # median holds more than 0.34 with the median outside its band.
+    spread_core_share: float = 0.35
     # ...and only when the next spread_core_width past the band holds fewer than
-    # this share of the band's members: smoke stands apart, real variation does not.
-    spread_core_gap: float = 0.1
+    # this share of the band's members: smoke stands apart, real variation does
+    # not. The glow render's gap reads 0.05 at 60fps and 0.11 at 30fps; the
+    # closest colour that must keep its median, a Für Elise hand, 0.18.
+    spread_core_gap: float = 0.14
 
     # How close a pixel must sit to a palette colour to count as solid tile.
     # Bloom is a blend of tile and background, so it lands outside this and is
@@ -275,6 +280,25 @@ class TrackingConfig:
     min_scrolling_samples: int = 5
 
     correlation_lag: int = 5
+
+    # The scroll clock (`tracking._scroll_clock`). A video that pauses, or
+    # changes playback speed part-way, is not one constant fall: read at one
+    # averaged speed, a 1x -> 1.25x switch put onsets 0.1-0.2s off, and a
+    # two-second pause doubled 12 notes. Each stretch's speed is measured from
+    # the top edges of the tracks that became notes, a second at a time, and a
+    # change is believed only where both sides hold steady for
+    # `clock_min_stretch` seconds and differ by `clock_min_step`: YouTube's
+    # smallest step, 1.25x, is 20%, while a capture's dropped frames wobble a
+    # window by about 5%. A window with fewer than `clock_min_samples` edge
+    # steps (the last held chord, an intro) is not measured at all. A pause is
+    # a run of frames whose detections do not change at all, at least
+    # `clock_min_pause` long; a dropped frame repeats once or twice.
+    clock_window: float = 1.0
+    clock_min_stretch: float = 2.0
+    clock_min_step: float = 0.12
+    clock_min_samples: int = 100
+    clock_steady: float = 0.05
+    clock_min_pause: float = 0.2
 
     # Known displacements used to measure the correlator's own offset, and
     # the largest offset worth believing. Anything past this is not a

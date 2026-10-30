@@ -382,13 +382,31 @@ def test_pdf_writes_no_music_font_characters_into_text() -> None:
     from dropscore.export.pdf import _plain_text_glyphs  # noqa: PLC0415
 
     svg = (
-        '<tspan font-family="Leipzig" font-size="720px"></tspan>'
+        '<text x="10" y="20" font-size="0px">'
+        '<tspan font-family="Leipzig" font-size="720px">\ueca5</tspan>'
         '<tspan font-size="405px">\xa0=\xa0</tspan><tspan font-size="405px">130</tspan>'
+        "</text>"
     )
     plain = _plain_text_glyphs(svg)
 
-    assert not any("" <= ch <= "" for ch in plain)
-    assert "Tempo" in plain and "130" in plain
+    assert not any("\ue000" <= ch <= "\uf8ff" for ch in plain)
+    assert "130" in plain
+
+
+def test_pdf_tempo_mark_is_one_line() -> None:
+    """svglib draws every nested tspan at the text's x, so the beat's name,
+    " = " and the number were printed on top of each other."""
+    from dropscore.export.pdf import _plain_text_glyphs  # noqa: PLC0415
+
+    svg = (
+        '<text x="10" y="20" font-size="0px"><tspan class="rend"><tspan class="text">'
+        '<tspan font-family="Leipzig" font-size="720px">\ueca5\uecb7</tspan></tspan></tspan>'
+        '<tspan class="text"><tspan font-size="405px">\xa0=\xa0</tspan></tspan>'
+        '<tspan class="text"><tspan font-size="405px">48</tspan></tspan></text>'
+    )
+    plain = _plain_text_glyphs(svg)
+
+    assert plain == '<text x="10" y="20" font-size="405px"><tspan>Dotted quarter = 48</tspan></text>'
 
 
 def test_pdf_leaves_a_musicxml_it_did_not_write(

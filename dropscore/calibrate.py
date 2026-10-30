@@ -419,7 +419,10 @@ def _first_pitch(white_index_of_first: int, white_count: int) -> int:
     # Otherwise put the keyboard's centre as near middle C as possible.
     def centre_error(first: int) -> float:
         whites = [p for p in range(first, 109) if p % 12 in WHITE_PITCH_CLASSES]
-        if len(whites) < white_count:
+        if len(whites) < white_count or first < MIN_PITCH:
+            # Off either end of a piano. A board cut off at one side of the
+            # picture shows most of a piano, and the octave nearest middle C
+            # can start it below A0: 48 keys from E fit only from E1.
             return float("inf")
         return abs((first + whites[white_count - 1]) / 2 - 60)
 
