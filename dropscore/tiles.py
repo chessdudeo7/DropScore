@@ -36,7 +36,7 @@ from typing import Sequence
 import cv2
 import numpy as np
 
-from .calibrate import Calibration
+from .calibrate import Calibration, median_images
 from .config import Config, DEFAULT
 from .video import Frame
 
@@ -105,7 +105,7 @@ def discover_palette(
     if not region or region[0].size == 0:
         raise TileError("no fall area above the strike line")
 
-    background_bgr = np.median(np.stack(region), axis=0).astype(np.uint8)
+    background_bgr = median_images(region)
     background_lab = _to_lab(background_bgr)
     background = np.median(background_lab.reshape(-1, 3), axis=0)
 

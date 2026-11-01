@@ -340,10 +340,8 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
     Failures are captured rather than raised: one clip that cannot be calibrated
     should be reported as a zero, not abort the corpus run.
     """
-    from .calibrate import calibrate  # noqa: PLC0415
     from .score import ScoreError, postprocess  # noqa: PLC0415
-    from .tiles import discover_palette  # noqa: PLC0415
-    from .tracking import transcribe_video  # noqa: PLC0415
+    from .tracking import prepare_video, transcribe_video  # noqa: PLC0415
     from .video import VideoReader  # noqa: PLC0415
 
     video = Path(video)
@@ -354,9 +352,7 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
 
     try:
         with VideoReader(video, config) as reader:
-            samples = reader.sample()
-            calibration = calibrate(samples, config)
-            palette = discover_palette(samples, calibration, config)
+            calibration, palette = prepare_video(reader, config)
             estimate, speed = transcribe_video(reader, calibration, palette, config)
 
         analysis = None

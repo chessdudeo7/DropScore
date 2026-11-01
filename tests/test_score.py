@@ -1889,3 +1889,29 @@ def test_a_slow_unit_of_two_tatums_is_a_quarter_not_an_eighth() -> None:
 
     assert (beats_per_bar, beat_type) == (3, 4)
     assert beat == pytest.approx(2 * tatum, rel=0.01)
+
+
+def test_two_strikes_inside_one_step_stay_two_notes() -> None:
+    """A key struck twice 80ms apart at a sixteenth of 174ms snapped to one
+    instant, and the MIDI writer then had to drop the second: a waltz lost
+    six real repeats. The second strike keeps its measured onset."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.config import DEFAULT  # noqa: PLC0415
+    from dropscore.notes import Note, NoteSequence  # noqa: PLC0415
+    from dropscore.score import analyze, quantize  # noqa: PLC0415
+
+    beat = 60.0 / 86.0
+    notes = [Note(i * beat, 60 + (i % 7), 0.3, "R") for i in range(16)]
+    notes += [Note(8 * beat + 0.02, 71, 0.07, "R"), Note(8 * beat + 0.05, 71, 0.14, "R")]
+    sequence = NoteSequence.of(sorted(notes, key=lambda n: n.onset))
+    analysis = analyze(sequence, DEFAULT)
+
+    kept, _ = quantize(sequence, analysis, DEFAULT)
+    repeats = sorted(n.onset for n in kept if n.pitch == 71)
+    assert len(repeats) == 2 and repeats[1] - repeats[0] > 0.02
+
+    off = replace(DEFAULT, score=replace(DEFAULT.score, keep_repeats=False))
+    merged, _ = quantize(sequence, analysis, off)
+    together = sorted(n.onset for n in merged if n.pitch == 71)
+    assert together[0] == together[1]

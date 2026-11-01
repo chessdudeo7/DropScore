@@ -189,6 +189,10 @@ def create_app(
             # goes — Windows will not unlink a file that is still open.
             store.discard(job)
             raise HTTPException(413, _too_large())
+        if written == 0:
+            # Told to re-export an empty file as H.264, a visitor would try.
+            store.discard(job)
+            raise HTTPException(400, "That file is empty. Upload the video itself.")
 
         job.say(f"received {job.label}{suffix} ({written / 1e6:.1f} MB)")
         store.submit(

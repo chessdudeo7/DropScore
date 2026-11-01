@@ -288,6 +288,52 @@ def test_two_tiles_on_one_key_do_not_share_a_track() -> None:
         assert track.bottoms[1] - track.bottoms[0] == pytest.approx(10.0)
 
 
+def _frame(time: float) -> Frame:
+    return Frame(int(time * 100), time, np.zeros((1, 1, 3), np.uint8), 1.0)
+
+
+def test_a_tile_joined_from_below_is_matched_by_its_top() -> None:
+    """Smoke under a tile moves its bottom edge ahead of the scroll in one
+    frame. Matched by bottom alone, the tile began a fresh track whose onset
+    came out early by the depth of the smoke, and a phantom note with it."""
+    from dropscore.tracking import build_tracks  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    speed = 100.0
+    # A 20px tile falls 10px a frame; on the third frame smoke joins it from
+    # below, so its blob reaches 40px further down while its top is on course.
+    detections = [
+        (_frame(0.0), [_tile(60, 100, 0.0)]),
+        (_frame(0.1), [_tile(60, 110, 0.1)]),
+        (_frame(0.2), [_tile(60, 160, 0.2, height=60.0)]),
+    ]
+
+    tracks = build_tracks(detections, speed, calibration)
+
+    assert len(tracks) == 1, "the smoke-joined tile started a track of its own"
+    assert tracks[0].tops == pytest.approx([80.0, 90.0, 100.0])
+    # Its bottom is the track's, not the smoke's.
+    assert tracks[0].bottoms[-1] == pytest.approx(120.0)
+
+
+def test_a_one_frame_blob_is_not_known_by_its_top() -> None:
+    """A spark seen once has no course for a top to be on. Matching by its
+    top anyway let a rising spark cloud join it, frame by frame, into a
+    0.14s phantom on the `sparks` corpus clip."""
+    from dropscore.tracking import build_tracks  # noqa: PLC0415
+
+    calibration = _plain_calibration()
+    speed = 100.0
+    detections = [
+        (_frame(0.0), [_tile(60, 100, 0.0)]),
+        (_frame(0.1), [_tile(60, 150, 0.1, height=60.0)]),
+    ]
+
+    tracks = build_tracks(detections, speed, calibration)
+
+    assert len(tracks) == 2, "a one-frame blob was continued by its top"
+
+
 def test_the_closer_pairing_wins_regardless_of_tile_order() -> None:
     """Assignment is by agreement, not by whichever tile was listed first."""
     from dropscore.tracking import build_tracks  # noqa: PLC0415
@@ -1044,3 +1090,59 @@ def test_a_held_chord_is_not_a_pause() -> None:
 
     still = [[_tile(55, 200.0, i / 30, height=40.0)] for i in range(90)]
     assert _pauses(stamps, still, (13.6, 325.4), DEFAULT.tracking) == [(0.0, 89 / 30)]
+
+
+def test_calibration_samples_are_dropped_before_the_main_pass(monkeypatch) -> None:
+    """Sixty sample frames at 720p are 170MB. Every caller used to keep them
+    in a local while the whole video was read, a quarter of the peak."""
+    import gc  # noqa: PLC0415
+    import weakref  # noqa: PLC0415
+
+    import dropscore.tracking as tracking  # noqa: PLC0415
+
+    image = np.zeros((4, 4, 3), np.uint8)
+    frames = [Frame(0, 0.0, image, 1.0)]
+    gone = weakref.ref(image)
+    del image
+
+    class Reader:
+        def sample(self):
+            return frames
+
+    seen: list[int] = []
+    monkeypatch.setattr(tracking, "calibrate", lambda samples, config: seen.append(len(samples)) or "cal")
+    monkeypatch.setattr(tracking, "discover_palette", lambda samples, cal, config: "pal")
+
+    reader = Reader()
+    result = tracking.prepare_video(reader)
+    del frames
+    gc.collect()
+
+    assert result == ("cal", "pal") and seen == [1]
+    assert gone() is None, "the sample frames were still referenced after setup"
+
+
+def test_a_top_clipped_at_the_picture_edge_times_nothing() -> None:
+    """On a vertical copy of the probe the picture began at row 471, and a
+    tile whose top was held there while its bottom fell was read as ending
+    where the picture began: a 2.4s note became two."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.tracking import TileTrack  # noqa: PLC0415
+
+    speed = 100.0
+    clipped = TileTrack(pitch=60, track=0)
+    whole = TileTrack(pitch=60, track=0)
+    for i in range(12):
+        time = i * 0.1
+        bottom = 250.0 + speed * time  # reaches the strike line at 1.5s
+        # Its top is clipped at row 200 until 0.7s, then falls into view.
+        clipped.observe(_tile(60, bottom, time, height=bottom - max(200.0, 130.0 + speed * time)))
+        whole.observe(_tile(60, bottom, time, height=bottom - (130.0 + speed * time)))
+
+    calibration = replace(_plain_calibration(strike_y=400), picture_top=200)
+    seen = track_to_note(clipped, speed, calibration)
+    truth = track_to_note(whole, speed, _plain_calibration(strike_y=400))
+
+    assert seen is not None and truth is not None
+    assert seen.duration == pytest.approx(truth.duration, abs=0.02)

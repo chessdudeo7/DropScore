@@ -43,6 +43,10 @@ class VideoError(RuntimeError):
     """Raised when a video cannot be opened, decoded or written."""
 
 
+class NoVideoStream(VideoError):
+    """Raised for a file with sound but no picture."""
+
+
 def open_writer(
     path: "str | Path", fps: float, size: tuple[int, int]
 ) -> tuple[cv2.VideoWriter, "Path"]:
@@ -235,6 +239,15 @@ class VideoReader:
         src_h = int(_positive(cap.get(cv2.CAP_PROP_FRAME_HEIGHT), 0))
 
         if not src_w or not src_h:
+            # A sound file opens too: the Media Foundation backend takes an
+            # audio-only file, reports no picture and no frame count, and
+            # then decodes forever when asked for a frame. Nothing with a
+            # picture reports neither.
+            if _positive(cap.get(cv2.CAP_PROP_FRAME_COUNT), 0) <= 0:
+                raise NoVideoStream(
+                    f"{self.path.name} has no video stream. DropScore reads the "
+                    f"falling tiles, so it needs the video, not just the sound."
+                )
             # Some containers only report dimensions once a frame is decoded.
             ok, probe_frame = cap.read()
             if not ok or probe_frame is None:

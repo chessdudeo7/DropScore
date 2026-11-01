@@ -1326,6 +1326,23 @@ def quantize(
 
         quantized.append(Note(max(0.0, onset), note.pitch, duration, note.hand, note.velocity))
 
+    # A key struck twice inside one step is two notes, and snapped to the
+    # same instant it becomes one: the MIDI writer must drop a second strike
+    # on the same tick, and a waltz lost six real repeats that way. The
+    # second is left where it was measured, which is at least as true as the
+    # grid, and counted as unquantized.
+    if cfg.keep_repeats:
+        last: dict[int, float] = {}
+        notes = list(sequence)
+        for index in sorted(range(len(notes)), key=lambda i: (notes[i].onset, notes[i].pitch)):
+            note, snapped_note = notes[index], quantized[index]
+            before = last.get(snapped_note.pitch)
+            if before is not None and abs(snapped_note.onset - before) < 1e-6:
+                onset = max(note.onset, before + cfg.min_duration)
+                quantized[index] = replace(snapped_note, onset=onset)
+                skipped += 1
+            last[snapped_note.pitch] = quantized[index].onset
+
     return (
         NoteSequence.of(
             quantized, tempo=analysis.tempo, key=analysis.key, source=sequence.source

@@ -34,10 +34,10 @@ from typing import Iterable, Iterator, Sequence
 import cv2
 import numpy as np
 
-from .calibrate import Calibration
+from .calibrate import Calibration, calibrate
 from .config import Config, DEFAULT, TrackingConfig
 from .notes import Hand, Note, NoteSequence
-from .tiles import Palette, Tile, detect_in_frame
+from .tiles import Palette, Tile, detect_in_frame, discover_palette
 from .video import Frame, VideoReader
 
 log = logging.getLogger(__name__)
@@ -73,6 +73,13 @@ class TileTrack:
     @property
     def last_bottom(self) -> float:
         return self.bottoms[-1]
+
+    def predicted_top(self, time: float, speed: float, recent: int = 8) -> float:
+        """Where the top edge should be at ``time``, from the recent tops."""
+        intercept = float(np.median([
+            top - speed * t for t, top in zip(self.times[-recent:], self.tops[-recent:])
+        ]))
+        return intercept + speed * time
 
     def predicted_bottom(self, time: float, speed: float, strike_y: float, recent: int = 8) -> float:
         """Where the bottom edge should be at ``time``.
@@ -551,6 +558,46 @@ def build_tracks(
                 used_tracks.add(track_index)
                 seen.add(id(candidate))
 
+            # A tile is also known by its top. Smoke or glow joining a tile
+            # from below moves its bottom edge ahead of the scroll in one
+            # frame, and matched by bottom alone it began a fresh track whose
+            # onset came out early by the depth of the smoke: 0.3-0.4s on a
+            # render with particle smoke over the strike line, and a phantom
+            # note each time. Where a track found nothing by its bottom, a
+            # tile whose top is where that track's top should be, and which
+            # reaches further down than the track's bottom should, is the
+            # same tile with something under it. Its bottom is taken from the
+            # track, since what lies below is not the tile.
+            if cfg.match_by_top:
+                late: list[tuple[float, int, int]] = []
+                for tile_index, tile in enumerate(lane_tiles):
+                    if tile_index in used_tiles:
+                        continue
+                    for track_index, candidate in enumerate(candidates):
+                        if track_index in used_tracks or len(candidate.times) < cfg.match_by_top_seen:
+                            continue
+                        dt = frame.time - candidate.last_time
+                        if dt <= 0:
+                            continue
+                        bottom = candidate.predicted_bottom(frame.time, speed, calibration.strike_y)
+                        if tile.bottom <= bottom:
+                            continue
+                        error = abs(tile.top - candidate.predicted_top(frame.time, speed))
+                        tolerance = cfg.min_match_px / 2
+                        if error < tolerance:
+                            late.append((error, tile_index, track_index))
+                late.sort()
+                for _error, tile_index, track_index in late:
+                    if tile_index in used_tiles or track_index in used_tracks:
+                        continue
+                    candidate = candidates[track_index]
+                    tile = lane_tiles[tile_index]
+                    bottom = candidate.predicted_bottom(frame.time, speed, calibration.strike_y)
+                    candidate.observe(replace(tile, bottom=bottom))
+                    used_tiles.add(tile_index)
+                    used_tracks.add(track_index)
+                    seen.add(id(candidate))
+
             # Whatever is left is a tile that just appeared.
             for tile_index, tile in enumerate(lane_tiles):
                 if tile_index in used_tiles:
@@ -704,7 +751,7 @@ def track_to_note(
         if top < lowest_top - rising:
             arrived = True
         lowest_top = max(lowest_top, top)
-        if top > margin and not arrived:
+        if top > calibration.picture_top + margin and not arrived:
             top_times.append(time)
             top_edges.append(top)
 
@@ -941,7 +988,7 @@ def _edge_steps(
     # those stopped edges read as the scroll slowing wherever few other notes
     # are moving. A top in view always falls while the video plays.
     margin = max(config.tracking.edge_margin, 0.04 * calibration.strike_y)
-    low, high = margin, calibration.strike_y - margin
+    low, high = calibration.picture_top + margin, calibration.strike_y - margin
     steps: list[tuple[float, float, float]] = []
     for track in tracks:
         if track_to_note(track, speed, calibration, config) is None:
@@ -1068,7 +1115,9 @@ def _scroll_clock(
     if len(stamps) < 2:
         return None
     margin = max(cfg.edge_margin, 0.04 * calibration.strike_y)
-    pauses = _pauses(stamps, found, (margin, calibration.strike_y - margin), cfg)
+    pauses = _pauses(
+        stamps, found, (calibration.picture_top + margin, calibration.strike_y - margin), cfg
+    )
     steps = _edge_steps(tracks, speed, calibration, config)
     for a, b in pauses:
         steps = steps[~((steps[:, 0] >= a) & (steps[:, 0] < b))]
@@ -1096,6 +1145,19 @@ def _scroll_clock(
         clock += (b - a) * rate / reference
         times.append(clock)
     return times, reference
+
+
+def prepare_video(reader: VideoReader, config: Config = DEFAULT) -> tuple[Calibration, Palette]:
+    """Fit the keyboard and find the tile colours from a sample of frames.
+
+    The sample is dropped before this returns. Sixty frames at 720p are
+    170MB, and every caller that kept them in a local while the main pass
+    ran held that through the whole transcription -- a quarter of its peak.
+    """
+    samples = reader.sample()
+    calibration = calibrate(samples, config)
+    palette = discover_palette(samples, calibration, config)
+    return calibration, palette
 
 
 def transcribe_video(

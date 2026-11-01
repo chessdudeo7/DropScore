@@ -90,6 +90,11 @@ _NOT_TILES = (
     "keyboard visible along the bottom of the frame with tiles falling onto it."
 )
 _EXPLANATIONS: tuple[tuple[str, str], ...] = (
+    (
+        "NoVideoStream",
+        "This file has sound but no picture. DropScore reads the falling tiles, "
+        "so it needs the video itself.",
+    ),
     ("VideoError", "This video could not be read. Try exporting it again as an H.264 MP4."),
     ("CalibrationError", _NOT_TILES),
     ("TileError", "No falling tiles were found in this video. " + _NOT_TILES.split(". ", 1)[1]),
@@ -537,6 +542,8 @@ def transcribe_job(
         palette = discover_palette(samples, calibration, config)
         job.say(f"{palette.track_count} tile colour(s) discovered")
         job.finish("tiles")
+        # 60 frames at 720p are 170MB; the main pass does not need them.
+        del samples
 
         job.begin("notes")
         frames = until_cancelled(reader.frames(), job, total=info.frame_count or 0)

@@ -9,10 +9,9 @@
 # proxy's.
 FROM python:3.11-slim
 
-# OpenCV's headless wheel still needs these shared libraries at runtime.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libglib2.0-0 libgl1 \
-    && rm -rf /var/lib/apt/lists/*
+# OpenCV's headless wheel brings its own shared libraries, and nothing it
+# links is missing from the slim base. The libgl1 and libglib2.0-0 that an
+# OpenCV image usually installs are for the GUI build; here they cost 216MB.
 
 RUN useradd --create-home dropscore
 WORKDIR /app

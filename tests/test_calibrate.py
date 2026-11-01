@@ -18,6 +18,7 @@ from dropscore.calibrate import (
     estimate_period,
     find_keybed,
     median_frame,
+    median_images,
 )
 from dropscore.config import DEFAULT
 from dropscore.keyboard import COMMON_RANGES
@@ -360,3 +361,53 @@ def test_a_board_cut_off_on_the_left_starts_on_the_piano() -> None:
     from dropscore.calibrate import _first_pitch  # noqa: PLC0415
 
     assert _first_pitch(2, 48) == 28
+
+
+def test_the_picture_top_is_the_first_row_that_moves() -> None:
+    """A vertical phone video holds the picture under a blank band. A tile
+    top at the band's edge is clipped there, not a top, so the calibration
+    says where the picture begins."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.calibrate import picture_top  # noqa: PLC0415
+    from dropscore.video import Frame  # noqa: PLC0415
+
+    frames = []
+    for i in range(6):
+        image = np.zeros((300, 200, 3), np.uint8)
+        image[120 + 10 * i : 140 + 10 * i, 50:80] = 200  # a tile falling below row 120
+        frames.append(Frame(i, i / 30.0, image, 1.0))
+
+    assert picture_top(frames) == 120
+    assert picture_top([frames[0]]) == 0
+
+    # A player's own bar, a few rows deep, is not the picture's edge: the
+    # tops clipped under one timed long notes right on two recordings.
+    shallow = [replace(f, image=np.roll(f.image, -110, axis=0)) for f in frames]
+    assert picture_top(shallow) == 0
+
+
+def test_the_temporal_median_is_taken_a_band_at_a_time() -> None:
+    """Sixty 720p frames stacked whole are 170MB, and np.median copies the
+    stack to partition it; the same median a band at a time holds a twentieth
+    of that. The bands must not change a single pixel, including where the
+    frame's height is not a multiple of the band."""
+    import tracemalloc  # noqa: PLC0415
+
+    from dropscore.calibrate import MEDIAN_BAND_ROWS  # noqa: PLC0415
+
+    rng = np.random.default_rng(0)
+    images = [rng.integers(0, 256, (201, 160, 3), dtype=np.uint8) for _ in range(9)]
+    tracemalloc.start()
+    try:
+        expected = np.median(np.stack(images), axis=0).astype(np.uint8)
+        whole = tracemalloc.get_traced_memory()[1]
+        tracemalloc.reset_peak()
+        banded = median_images(images)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert np.array_equal(banded, expected)
+    assert peak < whole / 2, (peak, whole)
+    assert MEDIAN_BAND_ROWS < 201

@@ -122,6 +122,18 @@ def test_rejects_a_non_video_upload(client: TestClient) -> None:
     assert response.status_code == 415
 
 
+def test_an_empty_upload_is_refused_and_leaves_no_job(client: TestClient, tmp_path: Path) -> None:
+    """A 0-byte file used to be accepted, fail to open, and tell the visitor
+    to export it again as an H.264 MP4, which would not have helped."""
+    response = client.post(
+        "/api/jobs/upload", files={"file": ("empty.mp4", b"", "video/mp4")}
+    )
+
+    assert response.status_code == 400
+    assert "empty" in response.json()["detail"]
+    assert not any((tmp_path / "jobs").glob("*/source.mp4"))
+
+
 def test_rejects_a_non_youtube_url(client: TestClient) -> None:
     response = client.post("/api/jobs/url", json={"url": "https://vimeo.com/12345678"})
     assert response.status_code == 400
@@ -858,6 +870,19 @@ def test_a_pipeline_failure_is_explained_in_plain_words() -> None:
 
     assert "falling-tile" in message
     assert "keybed" not in message
+
+
+def test_a_sound_file_is_explained_as_such() -> None:
+    """A sound file opened as a video used to decode forever; now it is
+    refused, and the visitor is told what to upload instead of being told
+    to re-export it as an MP4."""
+    from dropscore.service.jobs import explain  # noqa: PLC0415
+    from dropscore.video import NoVideoStream  # noqa: PLC0415
+
+    message = explain(NoVideoStream("tone.wav has no video stream."))
+
+    assert "sound" in message and "video" in message
+    assert "MP4" not in message
 
 
 def test_a_failed_job_keeps_the_technical_reason_in_its_log(tmp_path: Path) -> None:

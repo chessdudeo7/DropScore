@@ -548,17 +548,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 def cmd_transcribe(args: argparse.Namespace) -> int:
     """Calibrate, detect, track and time — the pipeline as far as it goes."""
-    from .calibrate import calibrate  # noqa: PLC0415
-    from .tiles import discover_palette  # noqa: PLC0415
-    from .tracking import transcribe_video  # noqa: PLC0415
+    from .tracking import prepare_video, transcribe_video  # noqa: PLC0415
 
     source = resolve(args.source)
     config = _config_from_args(args)
 
     with VideoReader(source.path, config) as reader:
-        samples = reader.sample()
-        calibration = calibrate(samples, config)
-        palette = discover_palette(samples, calibration, config)
+        calibration, palette = prepare_video(reader, config)
         log.info("%s", calibration)
 
         # Speed needs consecutive frames, and several probes rather than one:

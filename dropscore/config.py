@@ -108,6 +108,12 @@ class CalibrationConfig:
     # to the video when this share of its fall-area rows is within the
     # tolerance of the fall area's background.
     video_motion_level: float = 8.0
+    # A blank band above the picture counts as the picture's edge only from
+    # this share of the frame's height. A phone's vertical video has 37%, a
+    # letterbox 12%; a player's own bar is 4-17px, and the tops clipped
+    # under it time long notes right (two recordings lost three written
+    # values when it counted).
+    picture_band_min: float = 0.05
     video_colour_tolerance: float = 20.0
     video_plain_share: float = 0.5
 
@@ -320,6 +326,13 @@ class TrackingConfig:
     min_match_px: float = 8.0
     match_ratio: float = 0.60
     max_gap: float = 0.12  # seconds a track survives unmatched
+    # Match a track by its top edge when its bottom found nothing
+    # (build_tracks): smoke joining a tile from below moves its bottom ahead
+    # of the scroll. Only a track seen `match_by_top_seen` times has a course
+    # for a top to be on; a spark seen once, matched by its top, was joined
+    # frame by frame by a rising spark cloud into a 0.14s phantom.
+    match_by_top: bool = True
+    match_by_top_seen: int = 2
 
     # Timing. Edges within this many pixels of a frame boundary or the strike
     # line are clipped, so they carry no usable position.
@@ -686,6 +699,11 @@ class ScoreConfig:
     figure_overshoot: float = 1.75
     fill_whole_bars: bool = True
     fill_last_of_figure: bool = True
+    # Two strikes of one key that snap to the same step stay two notes: the
+    # second keeps its measured onset. Snapped together they are one note to
+    # the MIDI writer, which lost a waltz six real repeats played faster
+    # than a sixteenth.
+    keep_repeats: bool = True
 
     # How near a whole bar a length must be to count as one.
     whole_bar_tolerance: float = 0.1

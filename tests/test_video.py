@@ -187,3 +187,21 @@ def test_nothing_past_the_end_is_read(clip: Path) -> None:
         assert max(f.index for f in reader.sample(20)) < last
         assert max(f.index for f in reader.frames()) == last - 1
         assert max(f.index for f in reader.frames(stop=CLIP_FRAMES)) == last - 1
+
+
+def test_a_sound_file_is_refused_before_it_is_decoded(tmp_path) -> None:
+    """OpenCV's Media Foundation backend opens an audio-only file, reports no
+    picture and no frame count, and then decodes forever when read. The
+    reader refuses it from those two facts, without reading a frame."""
+    import struct  # noqa: PLC0415
+    import wave  # noqa: PLC0415
+
+    sound = tmp_path / "tone.wav"
+    with wave.open(str(sound), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(8000)
+        out.writeframes(b"".join(struct.pack("<h", (i % 50) * 100) for i in range(8000)))
+
+    with pytest.raises(VideoError, match="no video stream"):
+        VideoReader(sound)

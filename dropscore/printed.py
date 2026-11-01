@@ -576,9 +576,7 @@ def score_sequence(
 
 def score(piece: PrintedPiece, config: Config = DEFAULT) -> PrintedResult:
     """Transcribe the recording and score it against the printed music."""
-    from .calibrate import calibrate  # noqa: PLC0415
-    from .tiles import discover_palette  # noqa: PLC0415
-    from .tracking import transcribe_video  # noqa: PLC0415
+    from .tracking import prepare_video, transcribe_video  # noqa: PLC0415
     from .video import VideoReader  # noqa: PLC0415
 
     if not piece.video.exists():
@@ -586,9 +584,7 @@ def score(piece: PrintedPiece, config: Config = DEFAULT) -> PrintedResult:
                              error=f"recording not found at {piece.video}")
     try:
         with VideoReader(piece.video, config, end=piece.end) as reader:
-            samples = reader.sample()
-            calibration = calibrate(samples, config)
-            palette = discover_palette(samples, calibration, config)
+            calibration, palette = prepare_video(reader, config)
             sequence, _ = transcribe_video(reader, calibration, palette, config)
     except Exception as exc:  # noqa: BLE001 -- reported, not raised
         log.exception("could not transcribe %s", piece.video)

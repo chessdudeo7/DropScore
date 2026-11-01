@@ -1,7 +1,7 @@
 # DropScore — how to actually read a falling-tile piano video
 
-Notes on the processing plan. Nothing here is implemented yet; the frontend in
-`web/` simulates these stages so the UI and the eventual API line up.
+The processing plan, with what was built written under each stage as "as
+built". Every stage is implemented; the plan is kept because it says why.
 
 ---
 
@@ -112,6 +112,15 @@ Known nastiness:
   measured from them at eight windows across the clip, and only then are tracks
   built. Measuring the speed from its own decode first used to cost two fifths
   of the runtime.
+  The calibration sample (60 frames, 170MB at 720p) is dropped before that
+  pass begins (`tracking.prepare_video`); kept in a local, it was a quarter
+  of the peak.
+  The sample's temporal medians, and the deviation map that finds a video
+  inside a screen recording, are taken 32 rows at a time
+  (`calibrate.median_images`): stacked whole, each copy of the sample was
+  as large as the sample itself, and `np.median` makes one more to
+  partition. The result is the same to the pixel at a twentieth of the
+  memory.
 - A keyboard filmed off a screen is rarely level. `VideoReader.sample()`
   measures the tilt of the keybed's top edge and, from 0.15° up, rotates every
   frame level before anything else sees it.
@@ -126,6 +135,18 @@ Known nastiness:
   re-timed by the distance fallen, and the notes come out in the music's own
   time. A video that scrolls steadily, which is nearly all of them, is left
   exactly as it was.
+- A tile is known by its top as well as its bottom. Smoke or glow joining a
+  tile from below moves its bottom edge ahead of the scroll in one frame,
+  and matched by bottom alone the tile began a fresh track, timed early by
+  the depth of the smoke. A track that found nothing by its bottom takes a
+  tile whose top is on its course, keeping its own bottom; only a track seen
+  at least twice has a course.
+- A phone's vertical video, or a letterboxed one, holds the picture under a
+  blank band. The calibration records the first row in which anything moves
+  (`picture_top`), and a tile top at that row is clipped, not a top: read as
+  one, it timed a 2.4s note as two. A band shallower than 5% of the frame is
+  a player's own bar, and is left alone: the tops clipped under one timed
+  long notes right on two recordings.
 - A board cut off at one side of the picture is placed in the one octave
   where that many white keys fit on a piano.
 - A screen recording can show the video in a window beside other windows.
@@ -148,6 +169,10 @@ Now it is a symbolic-music problem, which is well-trodden:
   As built, a note that misses the steady grid is tried again against its
   neighbours' own lateness over two beats (`score._locally_snapped`), so a
   passage played consistently late still lands on the grid.
+  Two strikes of one key that would snap to the same step stay two notes,
+  the second at its measured onset (`keep_repeats`): snapped together they
+  were one note to the MIDI writer, and a waltz lost six repeats played
+  faster than a sixteenth.
 - **Key signature** via Krumhansl-style pitch-class profile correlation, then spell
   accidentals accordingly (F# vs Gb). As built, each note is spelled by its scale
   degree in the key (`musicxml.spell_in_key`), so F# major gets its E# and C

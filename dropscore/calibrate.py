@@ -54,6 +54,10 @@ class Calibration:
     keybed_bottom: int
     white_width: float
     confidence: float  # 0-1, the black-key pattern match rate
+    # The first row in which anything moves: the top of the picture when the
+    # video sits inside a larger frame (a phone's vertical video, a letterbox).
+    # A tile top at that row is clipped, not a top.
+    picture_top: int = 0
     diagnostics: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
@@ -69,10 +73,43 @@ def _gray(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
+# Rows of the sample taken at once for a temporal median. Sixty 720p frames
+# stacked whole are 170MB, and np.median copies the stack to partition it;
+# the same median a band at a time holds a twentieth of that.
+MEDIAN_BAND_ROWS = 32
+
+
+def median_images(images: Sequence[np.ndarray]) -> np.ndarray:
+    """Per-pixel median over images of one shape, a band of rows at a time."""
+    first = images[0]
+    out = np.empty(first.shape, dtype=np.uint8)
+    for start in range(0, first.shape[0], MEDIAN_BAND_ROWS):
+        stop = start + MEDIAN_BAND_ROWS
+        band = np.stack([image[start:stop] for image in images])
+        out[start:stop] = np.median(band, axis=0).astype(np.uint8)
+    return out
+
+
+def _banded_std_and_median(grays: Sequence[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """Per-pixel float32 deviation and median over gray images, a band at a time.
+
+    Both reduce each pixel over the images on its own, so the bands give the
+    same float32 values as the whole stack would, at a twentieth of the memory.
+    """
+    first = grays[0]
+    deviation = np.empty(first.shape, dtype=np.float32)
+    median = np.empty(first.shape, dtype=np.float32)
+    for start in range(0, first.shape[0], MEDIAN_BAND_ROWS):
+        stop = start + MEDIAN_BAND_ROWS
+        band = np.stack([gray[start:stop] for gray in grays]).astype(np.float32)
+        deviation[start:stop] = band.std(axis=0)
+        median[start:stop] = np.median(band, axis=0)
+    return deviation, median
+
+
 def median_frame(frames: Sequence[Frame]) -> np.ndarray:
     """Temporal median — the static background with the tiles removed."""
-    stack = np.stack([f.image for f in frames])
-    return np.median(stack, axis=0).astype(np.uint8)
+    return median_images([f.image for f in frames])
 
 
 def row_activity(frames: Sequence[Frame], background: np.ndarray) -> np.ndarray:
@@ -501,8 +538,9 @@ def video_columns(frames: Sequence[Frame], config: Config = DEFAULT) -> tuple[in
     or there is nothing to go on.
     """
     cfg = config.calibration
-    stack = np.stack([_gray(frame.image) for frame in frames]).astype(np.float32)
-    moving = stack.std(axis=0) > cfg.video_motion_level
+    grays = [_gray(frame.image) for frame in frames]
+    deviation, background = _banded_std_and_median(grays)
+    moving = deviation > cfg.video_motion_level
     rows, columns = np.nonzero(moving)
     if rows.size < cfg.min_key_px ** 2:
         return None
@@ -511,7 +549,6 @@ def video_columns(frames: Sequence[Frame], config: Config = DEFAULT) -> tuple[in
     if r1 <= r0 or c1 <= c0:
         return None
 
-    background = np.median(stack, axis=0)
     colour = float(np.median(background[moving]))
     plain = np.abs(background[r0 : r1 + 1] - colour) <= cfg.video_colour_tolerance
     inside = plain.mean(axis=0) >= cfg.video_plain_share
@@ -538,6 +575,37 @@ def video_columns(frames: Sequence[Frame], config: Config = DEFAULT) -> tuple[in
     return int(lo), int(hi + 1)
 
 
+def picture_top(frames: Sequence[Frame], config: Config = DEFAULT) -> int:
+    """The first row in which anything moves.
+
+    A vertical phone video, or a letterboxed one, holds the picture inside a
+    frame with blank bands above it. A tile top at the picture's edge is
+    clipped there as surely as at row 0, and read as a real top it timed a
+    2.4s note on a vertical copy of the probe as two: the first ended where
+    the picture began, the second was its remainder.
+
+    Summed a frame at a time: stacking sixty frames to take their deviation
+    would cost 220MB at 720p for a number that two running sums give.
+    """
+    total: np.ndarray | None = None
+    squares: np.ndarray | None = None
+    for frame in frames:
+        gray = _gray(frame.image).astype(np.float64)
+        if total is None or squares is None:
+            total, squares = np.zeros_like(gray), np.zeros_like(gray)
+        total += gray
+        squares += gray * gray
+    if total is None or squares is None or len(frames) < 2:
+        return 0
+    count = len(frames)
+    variance = squares / count - (total / count) ** 2
+    moving = variance > config.calibration.video_motion_level ** 2
+    rows = np.flatnonzero(moving.any(axis=1))
+    if not rows.size or rows[0] < config.calibration.picture_band_min * moving.shape[0]:
+        return 0
+    return int(rows[0])
+
+
 def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
     """Fit a keyboard to sampled frames.
 
@@ -546,7 +614,7 @@ def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
     the columns the video occupies, and placed back in the full frame.
     """
     try:
-        return _calibrate(frames, config)
+        return replace(_calibrate(frames, config), picture_top=picture_top(frames, config))
     except CalibrationError as first:
         if len(frames) < 2:
             raise
@@ -565,6 +633,7 @@ def calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration:
             inner,
             layout=replace(inner.layout, x0=inner.layout.x0 + lo),
             diagnostics=diagnostics,
+            picture_top=picture_top(frames, config),
         )
 
 
