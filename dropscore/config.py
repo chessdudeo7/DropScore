@@ -102,6 +102,16 @@ class CalibrationConfig:
     # Columns quieter than this fraction of the busiest are outside the keyboard.
     extent_ratio: float = 0.08
 
+    # A keyboard filmed off a screen with a phone is wider at one end than the
+    # other, and no evenly spaced grid fits it. A grid whose key width grows
+    # steadily across the board is tried as well, and believed only when it
+    # explains at least this many times the edge per gridline (geometric mean)
+    # that the flat grid does: the phone copy scores 2.2, every flat copy under
+    # 1.04.
+    bend_ratio: float = 1.25
+    # Largest change in key width per key per key tried, in pixels.
+    max_bend_px: float = 0.06
+
     # Finding a video playing inside a larger picture (calibrate.video_columns),
     # tried only when the whole picture will not fit: a pixel moves when its
     # brightness varies by more than this across the samples; a column belongs

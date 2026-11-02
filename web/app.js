@@ -550,8 +550,8 @@ function log(text, dim = false) {
   c.scrollTop = c.scrollHeight;
 }
 
-function startElapsed() {
-  state.t0 = Date.now();
+function startElapsed(t0 = Date.now()) {
+  state.t0 = t0;
   state.timer = setInterval(() => {
     const s = Math.floor((Date.now() - state.t0) / 1000);
     $('#elapsed').textContent =
@@ -657,7 +657,79 @@ async function runRemoteJob(src) {
   }
 
   api.jobId = submitted.id;
+  rememberJob(submitted.id, src.kind);
   log(`job ${submitted.id.slice(0, 8)} queued`, true);
+  pollJob();
+}
+
+// ── surviving a reload ───────────────────────────────────────────────
+//
+// The server keeps running the job whether or not anyone is watching, so a
+// reload mid-job used to come back to an empty form while the worker finished
+// unseen. The tab remembers which job it was following and picks it up again.
+// Session storage is per tab and dies with it, which is the right scope: a
+// second tab is a second user, and a closed tab should not resurrect a job
+// days later.
+
+const JOB_KEY = 'dropscore.job';
+
+function rememberJob(id, kind) {
+  try {
+    sessionStorage.setItem(JOB_KEY, JSON.stringify({ id, kind, t0: Date.now() }));
+  } catch {
+    // Storage blocked (private window, quota): the job still runs, it is just
+    // not resumable.
+  }
+}
+
+function forgetJob() {
+  try {
+    sessionStorage.removeItem(JOB_KEY);
+  } catch {
+    // nothing to forget
+  }
+}
+
+/** On load: if this tab was following a job, show it where it is now. */
+async function resumeJob() {
+  await api.ready;
+  if (!api.available) return;
+  let saved;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(JOB_KEY) || 'null');
+  } catch {
+    saved = null;
+  }
+  if (!saved || !saved.id) return;
+
+  let job;
+  try {
+    job = await postJson(`/api/jobs/${saved.id}`, { cache: 'no-store' });
+  } catch {
+    // Expired, evicted, or the server restarted: the form is the honest place
+    // to land, and there is nothing to say about a job the server never saw.
+    forgetJob();
+    return;
+  }
+
+  state.cancelled = false;
+  $('#console').innerHTML = '';
+  renderSteps({ kind: saved.kind || 'youtube' });
+
+  if (job.status === 'done') {
+    forgetJob();
+    finishRemote(job);
+    return;
+  }
+  if (job.status === 'error' || job.status === 'cancelled') {
+    forgetJob();
+    return failJob(job.error || 'Transcription was cancelled');
+  }
+
+  api.jobId = job.id;
+  show(procStage);
+  startElapsed(saved.t0);
+  log(`picking job ${job.id.slice(0, 8)} back up`, true);
   pollJob();
 }
 
@@ -711,10 +783,12 @@ function pollJob() {
       clearInterval(api.poll);
       clearInterval(state.timer);
       api.jobId = null;
+      forgetJob();
       finishRemote(job);
     } else if (job.status === 'error' || job.status === 'cancelled') {
       clearInterval(api.poll);
       api.jobId = null;
+      forgetJob();
       failJob(job.error || 'Transcription was cancelled');
     }
   }, 700);
@@ -739,6 +813,7 @@ function abandonJob() {
     fetch(`/api/jobs/${api.jobId}`, { method: 'DELETE' }).catch(() => {});
     api.jobId = null;
   }
+  forgetJob();
 }
 
 function failJob(message) {
@@ -1085,6 +1160,7 @@ function showResult({ notes, confidence, stats: rows, downloads, missing = {} })
 }
 
 api.ready = detectApi();
+resumeJob();
 
 // roundRect polyfill for older engines
 if (!CanvasRenderingContext2D.prototype.roundRect) {

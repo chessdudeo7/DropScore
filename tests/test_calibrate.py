@@ -13,6 +13,8 @@ import pytest
 from dropscore.calibrate import (
     BLACK_PATTERN,
     CalibrationError,
+    _bend_grid,
+    _boundary_positions,
     anchor_pitch,
     calibrate,
     estimate_period,
@@ -64,6 +66,54 @@ def test_estimate_period_recovers_a_known_grid() -> None:
     assert got_period == pytest.approx(period, rel=0.02)
     # Offset should land on a spike, i.e. near 0 modulo the period.
     assert min(offset % period, period - offset % period) < 1.5
+
+
+def _ramped_profile(length: int, left: float, right: float) -> tuple[np.ndarray, np.ndarray]:
+    """Separator spikes whose spacing grows steadily from ``left`` to ``right``."""
+    positions = [12.0]
+    while positions[-1] < length - 12:
+        u = positions[-1] / length
+        positions.append(positions[-1] + left + (right - left) * u)
+    separators = np.array(positions[:-1])
+    profile = np.zeros(length, dtype=np.float32)
+    for x in separators:
+        profile[int(round(x))] = 1.0
+    return np.convolve(profile, np.ones(3, dtype=np.float32) / 3.0, mode="same"), separators
+
+
+def test_bend_grid_fits_a_keyboard_wider_at_one_end() -> None:
+    """A phone's view of a screen: keys 22.5px wide at one end, 26px at the other.
+
+    No evenly spaced grid fits that; the best one is half a key off somewhere.
+    The bent grid lands every separator.
+    """
+    profile, separators = _ramped_profile(1280, 22.5, 26.0)
+    x_lo, x_hi = int(separators[0]), int(separators[-1])
+    period, offset = estimate_period(profile, 4.0, 80.0)
+    flat = _boundary_positions(offset, period, x_lo, x_hi)
+    flat_miss = max(min(abs(flat - x)) for x in separators)
+    assert flat_miss > period / 3, "a flat grid should not be able to fit this profile"
+
+    bent = _bend_grid(profile, period, offset, x_lo, x_hi, DEFAULT)
+    assert bent is not None, "the bent grid was not believed"
+    lines, bend = bent
+    assert bend > 0
+    assert max(min(abs(lines - x)) for x in separators) < period / 10
+    # One line per separator, plus the bracketing line past the last one.
+    assert lines.size in (separators.size, separators.size + 1)
+
+    # With the margin out of reach the flat grid is kept, which is the bug.
+    from dataclasses import replace  # noqa: PLC0415
+
+    strict = replace(DEFAULT, calibration=replace(DEFAULT.calibration, bend_ratio=100.0))
+    assert _bend_grid(profile, period, offset, x_lo, x_hi, strict) is None
+
+
+def test_bend_grid_leaves_an_even_keyboard_alone() -> None:
+    profile, separators = _ramped_profile(1280, 24.5, 24.5)
+    x_lo, x_hi = int(separators[0]), int(separators[-1])
+    period, offset = estimate_period(profile, 4.0, 80.0)
+    assert _bend_grid(profile, period, offset, x_lo, x_hi, DEFAULT) is None
 
 
 def test_estimate_period_rejects_a_flat_profile() -> None:

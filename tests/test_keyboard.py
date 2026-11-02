@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from itertools import pairwise
 
 import pytest
 
@@ -41,6 +42,39 @@ def test_black_key_shares_ordinal_with_white_below() -> None:
 def test_layout_rejects_black_endpoints() -> None:
     with pytest.raises(ValueError, match="starts and ends on white keys"):
         KeyboardLayout(first_pitch=22, last_pitch=108)
+
+
+def test_taper_keeps_the_ends_and_ramps_the_key_width() -> None:
+    flat = KeyboardLayout(x0=10.0, width=1274.0)
+    bent = replace(flat, taper=0.07)
+    assert bent.boundary(0) == flat.boundary(0)
+    assert bent.boundary(bent.white_count) == pytest.approx(flat.boundary(flat.white_count))
+    widths = [bent.boundary(i + 1) - bent.boundary(i) for i in range(bent.white_count)]
+    assert all(b > a for a, b in pairwise(widths))
+    assert widths[0] == pytest.approx(flat.white_width * (1 - 0.07), rel=0.02)
+    assert widths[-1] == pytest.approx(flat.white_width * (1 + 0.07), rel=0.02)
+    # No taper is the evenly spaced board, to the bit.
+    for pitch in flat.pitches:
+        assert flat.key_span(pitch) == replace(flat, taper=0.0).key_span(pitch)
+
+
+def test_tapered_layout_maps_every_key_centre_back_to_its_pitch() -> None:
+    layout = replace(KeyboardLayout(x0=3.0, width=1270.0), taper=-0.08, black_offsets=(-0.13, 0.19, -0.23, 0.0, 0.23))
+    for pitch in layout.pitches:
+        x = layout.key_center(pitch)
+        assert layout.pitch_at(x) == pitch, pitch
+        assert layout.nearest_key(x) == pitch, pitch
+        left, right = layout.key_span(pitch)
+        assert left < x < right
+    # A black key is as wide as its neighbours, not as the board's mean key.
+    low = layout.key_span(22)
+    high = layout.key_span(106)
+    assert (low[1] - low[0]) > (high[1] - high[0])
+
+
+def test_layout_rejects_a_taper_that_empties_a_key() -> None:
+    with pytest.raises(ValueError, match="taper"):
+        KeyboardLayout(taper=1.0)
 
 
 def test_layout_rejects_inverted_range() -> None:

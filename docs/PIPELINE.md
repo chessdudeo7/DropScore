@@ -49,7 +49,10 @@ this wrong by one key and the entire transcription is transposed garbage.
    and bottom edges.
 2. **Find the white-key boundaries.** Column-wise gradient of the keybed band gives
    a near-periodic spike train. FFT / autocorrelation over that gives white-key
-   pitch (px per white key), and phase gives the offset.
+   pitch (px per white key), and phase gives the offset. A board filmed off a
+   screen with a phone is wider at one end than the other, so a grid whose key
+   width grows steadily across the board is tried too, and kept only when it
+   explains clearly more edge per gridline than the evenly spaced one.
 3. **Anchor pitch using the black-key pattern.** Black keys come in groups of 2 and
    3. Detect dark blobs in the upper half of the keybed, look at the gap sequence,
    and find the unique alignment — this pins C. That converts "white key #17" into

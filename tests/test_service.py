@@ -329,6 +329,21 @@ def test_stage_keys_match_the_frontend_step_list(client: TestClient, clip: Path)
         assert f"key: '{key}'" in app_js, f"frontend has no step for stage {key!r}"
 
 
+def test_frontend_resumes_a_job_across_a_reload() -> None:
+    """A reload mid-job must come back to the job, not to an empty form.
+
+    The server keeps the job; the tab has to remember which one it was
+    following. A GET of a finished job must therefore carry everything the
+    result panel needs, which the service tests above already pin down.
+    """
+    app_js = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+    assert "sessionStorage.setItem(JOB_KEY" in app_js, "the job id is never remembered"
+    assert "resumeJob();" in app_js, "nothing picks the job back up on load"
+    # A remembered id must be dropped once the job settles or is walked away
+    # from, or the next load would resurrect a job the user already saw.
+    assert app_js.count("forgetJob();") >= 4
+
+
 def test_result_carries_notes_the_roll_can_draw(finished) -> None:
     _, _, job = finished
     result = job["result"]

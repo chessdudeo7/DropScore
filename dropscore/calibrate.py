@@ -372,6 +372,92 @@ def _boundary_positions(offset: float, period: float, x_lo: float, x_hi: float) 
     return first + np.arange(max(count, 0)) * period
 
 
+def _edge_log_score(
+    weights: np.ndarray, positions: np.ndarray, x_lo: int, x_hi: int, floor: float
+) -> np.ndarray:
+    """Geometric-mean edge weight under each row of gridlines, inside the extent.
+
+    The flat search scores a grid by the *sum* of edge under its lines, and
+    that is what lets it alias: a grid a pixel a key too wide realigns with the
+    next separator after twenty-odd keys and collects as much edge as the true
+    one. The geometric mean cannot be bought that way — a gridline sitting on
+    bare key earns next to nothing, and one such line costs more than a dozen
+    well-placed ones gain.
+    """
+    index = np.round(positions).astype(int)
+    inside = (index >= x_lo) & (index <= x_hi)
+    index = np.clip(index, 0, weights.shape[0] - 1)
+    count = inside.sum(axis=1)
+    scores = np.where(inside, np.log(weights[index] + floor), 0.0).sum(axis=1)
+    scores = scores / np.maximum(count, 1)
+    scores[count < 3] = -np.inf
+    return scores
+
+
+def _bend_grid(
+    profile: np.ndarray,
+    period: float,
+    offset: float,
+    x_lo: int,
+    x_hi: int,
+    config: Config,
+    span: float = 0.04,
+    steps: int = 48,
+) -> tuple[np.ndarray, float] | None:
+    """A grid whose key width grows steadily across the board, if one fits better.
+
+    A keyboard filmed off a screen with a phone is wider at one end than the
+    other: on the phone copy the separators run 22.5px apart at one end and
+    26px at the other, and the best evenly spaced grid is half a key off in the
+    middle or a whole key off at one end. Gridline ``i`` of the bent grid sits
+    at ``mid + offset + period * i + bend * i²`` with ``i`` counted from the
+    middle of the keyboard, so ``period`` stays the mean key width.
+
+    The bent grid replaces the flat one only when it explains
+    ``bend_ratio`` times the edge per gridline (geometric mean), so an evenly
+    spaced board keeps the fit it has today to the pixel. Returns the gridlines
+    bracketing the extent and the bend, or None to keep the flat grid.
+    """
+    cfg = config.calibration
+    length = profile.shape[0]
+    weights = np.clip(profile - float(np.median(profile)), 0, None)
+    floor = 0.05 * float(weights[x_lo : x_hi + 1].max())
+    if floor <= 0:
+        return None
+    mid = (x_lo + x_hi) / 2.0
+
+    flat = _boundary_positions(offset, period, x_lo, x_hi)
+    flat_score = float(_edge_log_score(weights, flat[None, :], x_lo, x_hi, floor)[0])
+
+    phases = np.linspace(0.0, 1.0, steps, endpoint=False)
+    bends = np.linspace(-cfg.max_bend_px, cfg.max_bend_px, 13)
+    best_score, best = -np.inf, None
+    for width in np.linspace(period * (1 - span), period * (1 + span), steps):
+        reach = int(length / width) + 2
+        i = np.arange(-reach, reach + 1)
+        for bend in bends:
+            if bend == 0.0:
+                continue
+            base = mid + width * i + bend * i * i
+            positions = base[None, :] + (phases * width)[:, None]
+            scores = _edge_log_score(weights, positions, x_lo, x_hi, floor)
+            j = int(np.argmax(scores))
+            if scores[j] > best_score:
+                best_score, best = float(scores[j]), (float(width), float(phases[j] * width), float(bend))
+
+    if best is None or best_score - flat_score < np.log(cfg.bend_ratio):
+        return None
+    width, phase, bend = best
+    reach = int(length / width) + 2
+    i = np.arange(-reach, reach + 1)
+    lines = mid + phase + width * i + bend * i * i
+    # Bracket the extent the way the flat grid does: from the last line at or
+    # before x_lo to the first at or after x_hi.
+    first = int(np.flatnonzero(lines <= x_lo)[-1]) if np.any(lines <= x_lo) else 0
+    last = int(np.flatnonzero(lines >= x_hi)[0]) if np.any(lines >= x_hi) else lines.size - 1
+    return lines[first : last + 1], bend
+
+
 def _keyboard_extent(
     keybed: np.ndarray, background_level: float, config: Config
 ) -> tuple[int, int]:
@@ -661,6 +747,10 @@ def _calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration
     )
     period, offset = estimate_period(edges, cfg.min_key_px, cfg.max_key_px)
     boundaries = _boundary_positions(offset, period, x_lo, x_hi)
+    bend = 0.0
+    bent = _bend_grid(edges, period, offset, x_lo, x_hi, config)
+    if bent is not None:
+        boundaries, bend = bent
     if boundaries.size < 2:
         raise CalibrationError("not enough key boundaries to fit a keyboard")
 
@@ -714,11 +804,19 @@ def _calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration
     boundaries = boundaries[kept]
 
     x0 = float(boundaries[0])
+    width = float(boundaries[-1] - boundaries[0])
+    if bend:
+        # The flat period was the grid that did not fit; report the mean key.
+        period = width / white_count
+    # Gridline i sits at c + p*i + bend*i²; counted from the kept board's left
+    # end over n keys that is x0 + width*u + bend*n²*u*(u-1) with u = j/n, so
+    # the layout's taper is bend*n²/width whichever lines were trimmed.
     layout = KeyboardLayout(
         first_pitch=first_pitch,
         last_pitch=last_pitch,
         x0=x0,
-        width=float(boundaries[-1] - boundaries[0]),
+        width=width,
+        taper=bend * white_count**2 / width,
     )
     layout = replace(layout, black_offsets=_measure_black_offsets(upper, layout))
 
@@ -744,6 +842,7 @@ def _calibrate(frames: Sequence[Frame], config: Config = DEFAULT) -> Calibration
             "black_boundaries": black.tolist(),
             "rotation": rotation,
             "extent": [x_lo, x_hi],
+            "bend": bend,
             "white_reference": white_reference,
         },
     )

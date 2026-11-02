@@ -14,6 +14,7 @@ the renderer is what matters here.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -82,6 +83,15 @@ class KeyboardLayout:
     # beside it. Zero draws them centred, as the synthetic renderer does.
     black_offsets: tuple[float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0)
 
+    # How much the key width grows across the board. A keyboard filmed off a
+    # screen at an angle is wider at one end than the other, so its separators
+    # are not evenly spaced: the boundary of white key ``i`` sits at
+    # ``x0 + width * (u + taper * u * (u - 1))`` with ``u = i / white_count``,
+    # which keeps ``x0`` and ``x0 + width`` as the two ends and ramps the key
+    # width from ``(1 - taper)`` to ``(1 + taper)`` of the mean. Zero is an
+    # evenly spaced board, which every screen recording is.
+    taper: float = 0.0
+
     def __post_init__(self) -> None:
         if self.first_pitch >= self.last_pitch:
             raise ValueError("first_pitch must be below last_pitch")
@@ -92,6 +102,9 @@ class KeyboardLayout:
             )
         if self.width <= 0:
             raise ValueError(f"width must be positive, got {self.width}")
+        if not abs(self.taper) < 1.0:
+            # At 1.0 the narrow end's keys would have no width at all.
+            raise ValueError(f"taper must be within (-1, 1), got {self.taper}")
 
     # ── counts ───────────────────────────────────────────────────────
 
@@ -120,13 +133,38 @@ class KeyboardLayout:
         """Index of ``pitch`` among this keyboard's white keys, from 0."""
         return white_ordinal(pitch) - white_ordinal(self.first_pitch)
 
+    def boundary(self, index: int) -> float:
+        """Column of the boundary to the left of white key ``index``.
+
+        ``index`` runs from 0 (the board's left edge) to ``white_count`` (its
+        right edge). With no taper the boundaries are evenly spaced.
+        """
+        u = index / self.white_count
+        return self.x0 + self.width * (u + self.taper * u * (u - 1.0))
+
+    @cached_property
+    def _boundaries(self) -> tuple[float, ...]:
+        return tuple(self.boundary(i) for i in range(self.white_count + 1))
+
     def white_span(self, pitch: int) -> tuple[float, float]:
         """Left and right edges of a white key."""
         if is_black(pitch):
             raise ValueError(f"{pitch} is a black key")
         index = self.white_index(pitch)
-        left = self.x0 + index * self.white_width
-        return left, left + self.white_width
+        return self.boundary(index), self.boundary(index + 1)
+
+    def _black_width_at(self, boundary_index: int) -> float:
+        """Width of a black key sitting on ``boundary_index``, in local terms.
+
+        On a tapered board a black key is as wide as the keys around it, not
+        as wide as the board's mean key.
+        """
+        if self.taper == 0.0:
+            return self.black_width
+        lo = max(boundary_index - 1, 0)
+        hi = min(boundary_index + 1, self.white_count)
+        local = (self.boundary(hi) - self.boundary(lo)) / (hi - lo)
+        return local * self.black_width_ratio
 
     def key_center(self, pitch: int) -> float:
         """Centre column of any key.
@@ -141,7 +179,7 @@ class KeyboardLayout:
         # white_ordinal() already resolved to the white key below.
         boundary_index = self.white_index(pitch) + 1
         offset = self.black_offsets[BLACK_PITCH_CLASSES.index(pitch % 12)]
-        return self.x0 + boundary_index * self.white_width + offset * self.black_width
+        return self.boundary(boundary_index) + offset * self._black_width_at(boundary_index)
 
     @cached_property
     def _centers(self) -> tuple[float, ...]:
@@ -154,7 +192,7 @@ class KeyboardLayout:
         if is_white(pitch):
             return self.white_span(pitch)
         center = self.key_center(pitch)
-        half = self.black_width / 2
+        half = self._black_width_at(self.white_index(pitch) + 1) / 2
         return center - half, center + half
 
     def nearest_key(self, x: float) -> int | None:
@@ -188,8 +226,11 @@ class KeyboardLayout:
                     if left <= x <= right:
                         return pitch
 
-        index = int((x - self.x0) // self.white_width)
-        index = min(index, self.white_count - 1)  # right edge lands one past
+        if self.taper == 0.0:
+            index = int((x - self.x0) // self.white_width)
+        else:
+            index = bisect_right(self._boundaries, x) - 1
+        index = max(0, min(index, self.white_count - 1))  # right edge lands one past
         whites = white_pitches(self.first_pitch, self.last_pitch)
         return whites[index]
 
