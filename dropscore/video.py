@@ -47,6 +47,13 @@ class NoVideoStream(VideoError):
     """Raised for a file with sound but no picture."""
 
 
+# Sound-only containers. Which backend OpenCV built with decides whether one
+# opens (Media Foundation) or is refused outright (FFmpeg).
+_SOUND_SUFFIXES = frozenset(
+    {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".oga", ".opus", ".wma", ".aiff", ".aif"}
+)
+
+
 def open_writer(
     path: "str | Path", fps: float, size: tuple[int, int]
 ) -> tuple[cv2.VideoWriter, "Path"]:
@@ -197,6 +204,13 @@ class VideoReader:
 
         self._capture = cv2.VideoCapture(str(self.path))
         if not self._capture.isOpened():
+            # The FFmpeg backend will not open a sound file at all, so it never
+            # reaches the no-picture check below; say the same thing here.
+            if self.path.suffix.lower() in _SOUND_SUFFIXES:
+                raise NoVideoStream(
+                    f"{self.path.name} has no video stream. DropScore reads the "
+                    f"falling tiles, so it needs the video, not just the sound."
+                )
             raise VideoError(
                 f"Could not open {self.path.name}. The container or codec may be "
                 f"unsupported by this OpenCV build."

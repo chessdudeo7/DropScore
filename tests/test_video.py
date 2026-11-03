@@ -205,3 +205,19 @@ def test_a_sound_file_is_refused_before_it_is_decoded(tmp_path) -> None:
 
     with pytest.raises(VideoError, match="no video stream"):
         VideoReader(sound)
+
+
+def test_a_sound_file_the_backend_refuses_is_still_named_as_sound(tmp_path, monkeypatch) -> None:
+    """The FFmpeg backend will not open a sound file at all; the reader still
+    says it has no video stream rather than blaming the codec."""
+    import cv2  # noqa: PLC0415
+
+    class Shut:
+        def isOpened(self) -> bool:
+            return False
+
+    monkeypatch.setattr(cv2, "VideoCapture", lambda *_: Shut())
+    sound = tmp_path / "tone.mp3"
+    sound.write_bytes(b"ID3")
+    with pytest.raises(VideoError, match="no video stream"):
+        VideoReader(sound)
