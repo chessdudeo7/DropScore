@@ -400,6 +400,22 @@ def beat_position(when: float, analysis: Analysis) -> float:
     return float(np.interp(when, grid, indices))
 
 
+def _join_shift(when: float, analysis: Analysis) -> float:
+    """How far a section's beats sit off the whole numbers, in beats.
+
+    Zero for the first section and for an analysis without sections; for a
+    later one, the fraction of a beat the count ran over at the join.
+    """
+    if not analysis.sections:
+        return 0.0
+    section = analysis.at(when)
+    if section is analysis.sections[0]:
+        return 0.0
+    grid = replace(section, sections=())
+    joined = analysis.beats_before(section) - beat_position(section.start, grid)
+    return joined - round(joined)
+
+
 def beat_time(position: float, analysis: Analysis) -> float:
     """The moment a beat position falls at: ``beat_position`` reversed."""
     if analysis.sections:
@@ -1282,7 +1298,10 @@ def quantize(
     # The two are the same for a metronome and part company for a person: a
     # grid laid down at one tempo walks away from playing that drifts, and
     # after a few bars it is snapping notes to the wrong subdivision.
-    in_beats = bool(analysis.beat_times)
+    # A piece in declared sections is always read in positions: the section's
+    # beat and phase live in beat_position, and the plain path below would
+    # snap every section to the first one's step.
+    in_beats = bool(analysis.beat_times) or bool(analysis.sections)
     grid = 1.0 / cfg.steps_per_beat
     allowed = grid * cfg.max_shift
 
@@ -1296,7 +1315,18 @@ def quantize(
     for note in sequence:
         if in_beats:
             position = beat_position(note.onset, analysis)
-            landed = _snap(position, grid, 0.0, allowed)
+            # Snapped to the section's own beats. A later section carries on
+            # the count from where the one before left off, and that is a
+            # fraction of a beat: counted through a first section read at 80
+            # BPM, a page's own beats sat at .22 of a step, and read at 156
+            # BPM after one note changed twenty seconds before the page, at
+            # .39 -- past the shift allowed, so 96 of 266 notes went unsnapped
+            # and three written values with them. The gridlines are where this
+            # stretch's beats are, whatever number the join gave the first.
+            shift = _join_shift(note.onset, analysis)
+            landed = _snap(position - shift, grid, 0.0, allowed)
+            if landed is not None:
+                landed += shift
             if landed is None:
                 onset = note.onset
                 skipped += 1

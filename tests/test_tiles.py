@@ -23,6 +23,8 @@ from dropscore.tiles import (
     _looks_outlined,
     detect_in_frame,
     discover_palette,
+    measure_lanes,
+    straighten_lanes,
 )
 from dropscore.video import Frame
 
@@ -288,6 +290,35 @@ def test_a_second_hand_of_another_hue_is_not_folded() -> None:
     background = np.array([18.0, 128.0, 126.0])
     green, blue = np.array([170.0, 80.0, 170.0]), np.array([140.0, 150.0, 70.0])
     kept, _ = _fold_blends(np.stack([green, blue]), np.array([9000, 7000]), background, DEFAULT.tiles)
+    assert len(kept) == 2
+
+
+def test_two_shades_joined_by_a_ramp_are_one_colour() -> None:
+    """A tile shaded through more hue than the merge tolerance clusters into
+    two colours either side of its ramp. On one recording a green ran to
+    yellow-green, 51 degrees apart, and split every tile across two masks.
+    Its pixels run unbroken between the two; two hands' colours leave a gap.
+    """
+    from dropscore.tiles import _merge_ramps  # noqa: PLC0415
+
+    rng = np.random.default_rng(3)
+    background = np.array([20.0, 128.0, 128.0])
+    green, yellow_green = np.array([200.0, 92.0, 122.0]), np.array([185.0, 87.0, 160.0])
+    colors = np.stack([green, yellow_green])
+    counts = np.array([5000, 4000])
+
+    # One ramp: pixels spread evenly along the segment between the two.
+    along = rng.uniform(-0.1, 1.1, size=9000)[:, None]
+    ramp = green + along * (yellow_green - green) + rng.normal(0.0, 2.0, size=(9000, 3))
+    kept, merged = _merge_ramps(colors, counts, ramp, background, DEFAULT.tiles)
+    assert len(kept) == 1 and merged[0] == 9000
+
+    # Two voices: pixels sit at the ends and nowhere between.
+    ends = np.concatenate([
+        green + rng.normal(0.0, 2.0, size=(5000, 3)),
+        yellow_green + rng.normal(0.0, 2.0, size=(4000, 3)),
+    ])
+    kept, _ = _merge_ramps(colors, counts, ends, background, DEFAULT.tiles)
     assert len(kept) == 2
 
 
@@ -928,3 +959,96 @@ def test_spread_keeps_the_median_when_the_band_is_the_far_end():
     rng = np.random.default_rng(5)
     distances = np.concatenate([rng.uniform(40.0, 43.5, 400), rng.uniform(0.0, 30.0, 600)])
     assert _spread(distances) == pytest.approx(np.median(distances))
+
+
+def _leaning(image: np.ndarray, strike_y: int, a: float, b: float) -> np.ndarray:
+    """The picture above the strike line sheared so a lane that meets the
+    strike line at column x runs at dx/dy = a + b * x, as a board filmed at
+    an angle does."""
+    import cv2  # noqa: PLC0415
+
+    height, width = image.shape[:2]
+    columns = np.arange(width, dtype=np.float32)[None, :]
+    rows = np.arange(strike_y, dtype=np.float32)[:, None]
+    # A leaning lane's column x' at row y came from column x at the strike
+    # line: x' = x - (strike_y - y)(a + b x), so x = (x' + (strike_y - y) a)
+    # / (1 - (strike_y - y) b).
+    map_x = (columns + (strike_y - rows) * a) / (1.0 - (strike_y - rows) * b)
+    map_y = np.broadcast_to(rows, (strike_y, width)).astype(np.float32)
+    out = image.copy()
+    out[:strike_y] = cv2.remap(
+        image[:strike_y], map_x.astype(np.float32), map_y, cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    return out
+
+
+def _lean_fixture(a: float, b: float):
+    # Long notes right across the board, so every lane's lean is measurable
+    # and the fit has the width to tell a ramp from a constant.
+    rng = np.random.default_rng(3)
+    notes = [
+        Note(onset=i * 0.5, pitch=int(rng.integers(24, 106)), duration=1.5 + (i % 3))
+        for i in range(60)
+    ]
+    renderer = _renderer("classic", NoteSequence.of(notes))
+    calibration = _truth_calibration(renderer)
+    straight = _frames(renderer, 24)
+    leaning = [
+        Frame(f.index, f.time, _leaning(f.image, calibration.strike_y, a, b), 1.0)
+        for f in straight
+    ]
+    palette = discover_palette(leaning, calibration)
+    return calibration, straight, leaning, palette
+
+
+def test_leaning_lanes_are_measured_and_straightened() -> None:
+    """A board filmed at an angle: lanes lean out at both ends, so a tall
+    tile's bounding box reaches over the key beside it and a phantom is read
+    there. Measured from the sample frames and corrected, detection on the
+    leaning picture reads the same keys as on the straight one."""
+    a, b = -0.045, 9.0e-5  # leans left at the left edge, right at the right
+    calibration, straight, leaning, palette = _lean_fixture(a, b)
+
+    measured_a, measured_b = measure_lanes(leaning, palette, calibration)
+    width = straight[0].image.shape[1]
+    assert measured_a == pytest.approx(a, abs=0.006)
+    assert measured_a + measured_b * width == pytest.approx(a + b * width, abs=0.006)
+
+    corrected = replace(calibration, lane_slope=(measured_a, measured_b))
+    wrong = right = 0
+    for before, after in zip(straight, leaning):
+        truth = {t.pitch for t in detect_in_frame(before, palette, calibration)}
+        naive = {t.pitch for t in detect_in_frame(after, palette, calibration)}
+        fixed = {t.pitch for t in detect_in_frame(after, palette, corrected)}
+        wrong += len(naive ^ truth)
+        right += len(fixed ^ truth)
+    assert wrong > 10, "the lean should have hurt the uncorrected read"
+    assert right <= wrong // 10
+
+
+def test_straight_lanes_are_left_alone() -> None:
+    """A screen recording measures a hundredth of a pixel of lean and must
+    keep its detections to the pixel."""
+    calibration, straight, _, _ = _lean_fixture(0.0, 0.0)
+    palette = discover_palette(straight, calibration)
+    assert measure_lanes(straight, palette, calibration) == (0.0, 0.0)
+    assert straighten_lanes(straight, palette, calibration) == calibration
+
+
+def test_a_black_key_struck_with_its_white_neighbour_is_found() -> None:
+    """C#4 and D4 together: one blob a key and a third wide. The old rules
+    gave it all to D4, since the black lane had no row of its own; the blob's
+    far edge, straight down C#4's outer edge, says the black key is there."""
+    sequence = NoteSequence.of([Note(onset=0.0, pitch=p, duration=1.0) for p in (61, 62)])
+    renderer = _renderer(sequence=sequence)
+    calibration = _truth_calibration(renderer)
+    palette = discover_palette(_frames(renderer), calibration)
+
+    frame = _frame_at(renderer, renderer.notes[0].onset - 0.5)
+    found = {tile.pitch for tile in detect_in_frame(frame, palette, calibration)}
+    assert found == {61, 62}, found
+
+    off = replace(DEFAULT, tiles=replace(DEFAULT.tiles, black_edge_px=0.0))
+    found = {tile.pitch for tile in detect_in_frame(frame, palette, calibration, off)}
+    assert found == {62}, found

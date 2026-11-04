@@ -1042,3 +1042,39 @@ def test_max_age_none_keeps_results(tmp_path: Path) -> None:
     job.finished = 0.0
     assert store.get(job.id) is job
     store.shutdown()
+
+
+def test_a_cancelled_job_frees_its_place_in_the_queue_at_once(tmp_path: Path) -> None:
+    """The refusal tells the client to cancel a job before starting another,
+    so cancelling must count straight away -- not once a worker reaches the
+    cancelled job and retires it, which for a job still queued behind others
+    could be minutes."""
+    app = create_app(workdir=tmp_path / "jobs", serve_frontend=False, max_active_per_client=1)
+    store = app.state.store
+    queued = store.create("queued")
+    queued.client = "testclient"
+    queued.cancel()
+    with TestClient(app) as served:
+        response = served.post(
+            "/api/jobs/upload", files={"file": ("a.mp4", b"0" * 64, "video/mp4")}
+        )
+    assert response.status_code == 200, response.text
+
+
+def test_everyone_is_told_when_the_service_is_full(tmp_path: Path) -> None:
+    release = threading.Event()
+    app = create_app(workdir=tmp_path / "jobs", serve_frontend=False, max_active_total=1)
+    store = app.state.store
+    blocker = store.create("held")
+    blocker.client = "someone-else"
+    store.submit(blocker, lambda _j: release.wait(10))
+    try:
+        with TestClient(app) as served:
+            response = served.post(
+                "/api/jobs/upload", files={"file": ("a.mp4", b"0" * 64, "video/mp4")}
+            )
+        assert response.status_code == 503
+        assert "busy" in response.json()["detail"]
+        assert not any(p.is_dir() for p in (tmp_path / "jobs").iterdir() if p.name != blocker.id)
+    finally:
+        release.set()

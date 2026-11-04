@@ -676,6 +676,79 @@ def test_a_fragment_with_a_pinned_top_edge_is_still_a_note() -> None:
     assert track_to_note(track, 100.0, calibration) is not None
 
 
+def test_a_top_pinned_under_a_bar_does_not_time_the_end() -> None:
+    """A clipped top is found by where it stops, not by ``picture_top``.
+
+    A player's bar inside the edge margin is not promoted to the picture's
+    edge, so a tile under it sits with its top pinned at the bar's row while
+    its bottom falls, and ``picture_top`` is still zero. On a real page those
+    pinned samples outnumbered the real ones 45 to 16 and the median of them
+    timed a 1.65s note at 1.04s -- and one frame more or less moved it.
+    """
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    strike, speed, fps, bar = 400, 100.0, 20.0, 17.0
+    length = 1.6  # seconds: the tile is 160px tall
+    track = TileTrack(pitch=60, track=0)
+    time = 0.0
+    while time < 3.0:
+        bottom = min(strike - 4.0, bar + time * speed)
+        top = max(bar, bottom - length * speed)
+        if top >= 150.0:
+            break  # lost to the strike line's glow, as on that page
+        track.times.append(time)
+        track.bottoms.append(bottom)
+        track.tops.append(top)
+        time += 1 / fps
+    calibration = _plain_calibration(strike_y=strike)
+
+    note = track_to_note(track, speed, calibration, DEFAULT)
+
+    assert note is not None
+    assert note.duration == pytest.approx(length, abs=0.1), (
+        f"duration {note.duration:.2f}s; the pinned top samples timed the end"
+    )
+
+
+def test_a_top_emerging_from_under_a_header_is_not_an_arrival() -> None:
+    """A top that climbs while the tile is still falling is the tile coming
+    out from under an overlay, not a later tile reaching it.
+
+    On a real recording a header dimmed the first hundred rows: the top read
+    98, 58, then clipped at 4 as the tile emerged, and taken for an arrival
+    that threw away every real top sample after it. A six-beat note was timed
+    by the one sample before, at 0.4s.
+    """
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    strike, speed, fps, bar = 336, 160.0, 30.0, 4.0
+    length = 3.5  # seconds
+    track = TileTrack(pitch=71, track=0)
+    time = 0.0
+    while True:
+        fall = 100.0 + time * speed
+        bottom = min(strike - 2.0, fall)
+        top = max(bar, fall - length * speed)
+        if top >= strike - 2.0:
+            break
+        if time < 0.1:
+            top = 98.0  # dimmed under the header: only the lower rows pass
+        elif time < 0.15:
+            top = 58.0
+        track.times.append(time)
+        track.bottoms.append(bottom)
+        track.tops.append(top)
+        time += 1 / fps
+    calibration = _plain_calibration(strike_y=strike)
+
+    note = track_to_note(track, speed, calibration, DEFAULT)
+
+    assert note is not None
+    assert note.duration == pytest.approx(length, abs=0.15), (
+        f"duration {note.duration:.2f}s; the climb at entry was read as an arrival"
+    )
+
+
 def test_a_tile_too_tall_to_show_its_top_is_not_asked_to_fall() -> None:
     """A tile taller than the fall area never shows an unclipped top edge, so
     the fall test has nothing to measure — and must not read that as a no."""
@@ -1112,6 +1185,7 @@ def test_calibration_samples_are_dropped_before_the_main_pass(monkeypatch) -> No
     seen: list[int] = []
     monkeypatch.setattr(tracking, "calibrate", lambda samples, config: seen.append(len(samples)) or "cal")
     monkeypatch.setattr(tracking, "discover_palette", lambda samples, cal, config: "pal")
+    monkeypatch.setattr(tracking, "straighten_lanes", lambda samples, pal, cal, config: cal)
 
     reader = Reader()
     result = tracking.prepare_video(reader)

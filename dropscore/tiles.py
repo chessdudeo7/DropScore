@@ -30,7 +30,8 @@ at which point it discriminates nothing and matches the whole frame.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Sequence
 
 import cv2
@@ -140,6 +141,7 @@ def discover_palette(
         cfg.source_near_tie,
     )
     colors, counts = _fold_blends(colors, counts, background, cfg)
+    colors, counts = _merge_ramps(colors, counts, pixels, background, cfg)
 
     # Drop colours too rare to be a hand; they are usually antialiasing.
     keep = counts >= counts.sum() * cfg.min_palette_share
@@ -367,6 +369,68 @@ PALETTE_ATTEMPTS = 30
 #: Below this Lab chroma a colour has no meaningful hue — greys and near-whites.
 #: Such colours are compared by lightness rather than merged by hue.
 MIN_CHROMA = 12.0
+
+
+def _merge_ramps(
+    colors: np.ndarray, counts: np.ndarray, pixels: np.ndarray, background: np.ndarray, cfg
+) -> tuple[np.ndarray, np.ndarray]:
+    """Merge two chromatic colours whose own pixels run unbroken between them.
+
+    Hue decides most merges, and a tile shaded through more hue than the
+    tolerance allows clusters into two colours either side of its ramp: on
+    one recording a green that ran to yellow-green, 51 degrees apart, split
+    with the default sample and held together with a smaller one. Two voices
+    of different colours leave a gap between them; a ramp does not. Projected
+    onto the segment between the two, the pixels near it fill its middle
+    nearly as densely as its ends, and that is the test.
+    """
+    if len(colors) < 2:
+        return colors, counts
+    counts = counts.copy()
+    keep = np.ones(len(colors), dtype=bool)
+    points = _weighted(colors, cfg.lightness_weight)
+    weighted = _weighted(pixels, cfg.lightness_weight)
+    for i in range(len(colors)):
+        for j in range(i + 1, len(colors)):
+            if not (keep[i] and keep[j]):
+                continue
+            if any(
+                float(np.hypot(c[1] - 128.0, c[2] - 128.0)) < MIN_CHROMA for c in (colors[i], colors[j])
+            ):
+                continue
+            segment = points[j] - points[i]
+            length = float(np.linalg.norm(segment))
+            if length <= 0 or length > cfg.ramp_reach * cfg.color_tolerance:
+                continue
+            direction = segment / length
+            relative = weighted - points[i]
+            along = (relative @ direction) / length
+            off = np.linalg.norm(relative - np.outer(along * length, direction), axis=1)
+            near = along[off < cfg.color_tolerance]
+            bins, _ = np.histogram(near, bins=10, range=(0.0, 1.0))
+            ends = min(float(bins[:2].mean()), float(bins[-2:].mean()))
+            middle = float(bins[3:7].min())
+            if ends <= 0 or middle < cfg.ramp_floor * ends:
+                continue
+            # The one colour stands at the ramp's middle, not at either end.
+            # Kept at an end, the far end sat outside the acceptance radius
+            # and its tiles went unseen: on the recording above, a quarter of
+            # the notes. The ramp is at most twice the tolerance long, so from
+            # its middle each end is within reach, and the spread measured
+            # afterwards widens the radius over the ramp as for a gradient
+            # tile. The middle, not the pixel-weighted mean: the denser end
+            # would pull the colour back toward itself and out of reach of the
+            # other.
+            source, blend = (i, j) if _farther_from(
+                colors[i], colors[j], background, cfg.lightness_weight, cfg.source_near_tie
+            ) else (j, i)
+            colors = colors.copy()
+            colors[source] = (colors[source] + colors[blend]) / 2.0
+            points = _weighted(colors, cfg.lightness_weight)
+            counts[source] += counts[blend]
+            keep[blend] = False
+            log.debug("palette: colours %d and %d are one ramp", i, j)
+    return colors[keep], counts[keep]
 
 
 def _same_hue(a: np.ndarray, b: np.ndarray, tolerance_degrees: float) -> bool:
@@ -733,14 +797,114 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
     ]
 
 
+def _lane_samples(
+    mask: np.ndarray, calibration: Calibration, config: Config
+) -> list[tuple[float, float, float]]:
+    """(column at the strike line, lean, weight) for each tall single tile."""
+    cfg = config.tiles
+    width = calibration.white_width
+    min_rows = int(cfg.lane_tile_rows * width)
+    samples = []
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if h < min_rows or w > 1.6 * width:
+            continue
+        rows = mask[y : y + h, x : x + w] > 0
+        counts = rows.sum(axis=1)
+        if counts.min() == 0:
+            continue
+        filled = np.where(rows, np.arange(w), -1)
+        widths = filled.max(axis=1) - np.where(rows, np.arange(w), w).min(axis=1) + 1
+        if widths.max() - widths.min() > 0.5 * width:
+            continue  # two tiles touching, not one lane
+        centres = x + (rows * np.arange(w)).sum(axis=1) / counts
+        ys = np.arange(y, y + h)
+        slope, intercept = np.polyfit(ys, centres, 1)
+        samples.append((intercept + slope * calibration.strike_y, float(slope), float(h)))
+    return samples
+
+
+def measure_lanes(
+    frames: Sequence[Frame], palette: Palette, calibration: Calibration, config: Config = DEFAULT
+) -> tuple[float, float]:
+    """How the tile lanes lean, as ``(a, b)`` with lean ``a + b * x``.
+
+    Fitted through the slant of every tall single tile in the sample frames,
+    weighted by height. Returns zero unless the drift at the top of the
+    picture reaches ``min_lane_shift`` white keys, so a screen recording,
+    whose lanes are vertical to a hundredth of a pixel, is left exactly as it
+    was.
+    """
+    cfg = config.tiles
+    samples: list[tuple[float, float, float]] = []
+    for frame in frames:
+        for mask in _track_masks(frame.image, palette, calibration, config):
+            samples.extend(_lane_samples(mask, calibration, config))
+    if len(samples) < 12:
+        return (0.0, 0.0)
+    xs, slopes, weights = (np.array(column, dtype=float) for column in zip(*samples))
+    width = float(frames[0].image.shape[1])
+
+    def fit(keep: np.ndarray) -> tuple[float, float]:
+        x, s, w = xs[keep], slopes[keep], weights[keep]
+        if x.max() - x.min() < width / 3:
+            return float(np.average(s, weights=w)), 0.0
+        b, a = np.polyfit(x, s, 1, w=np.sqrt(w))
+        return float(a), float(b)
+
+    a, b = fit(np.ones(len(xs), dtype=bool))
+    residual = np.abs(slopes - (a + b * xs))
+    keep = residual <= np.median(residual) * 3 + 1e-3
+    if keep.sum() >= 12:
+        a, b = fit(keep)
+
+    drift = max(abs(a), abs(a + b * width)) * calibration.strike_y
+    if drift < cfg.min_lane_shift * calibration.white_width:
+        return (0.0, 0.0)
+    log.info("tile lanes lean %.4f at the left edge, %.4f at the right", a, a + b * width)
+    return (a, b)
+
+
+def straighten_lanes(
+    frames: Sequence[Frame], palette: Palette, calibration: Calibration, config: Config = DEFAULT
+) -> Calibration:
+    """The calibration with the lanes' lean measured, so detection corrects it."""
+    return replace(calibration, lane_slope=measure_lanes(frames, palette, calibration, config))
+
+
+@lru_cache(maxsize=4)
+def _lane_maps(a: float, b: float, strike_y: int, width: int) -> tuple[np.ndarray, np.ndarray]:
+    columns = np.arange(width, dtype=np.float32)[None, :]
+    rows = np.arange(strike_y, dtype=np.float32)[:, None]
+    map_x = columns - (strike_y - rows) * (a + b * columns)
+    map_y = np.broadcast_to(rows, (strike_y, width)).astype(np.float32)
+    return np.ascontiguousarray(map_x, dtype=np.float32), map_y
+
+
+def _straightened(image: np.ndarray, calibration: Calibration) -> np.ndarray:
+    """The frame with its leaning lanes pulled vertical above the strike line."""
+    a, b = calibration.lane_slope
+    if a == 0.0 and b == 0.0:
+        return image
+    strike_y = min(calibration.strike_y, image.shape[0])
+    map_x, map_y = _lane_maps(a, b, strike_y, image.shape[1])
+    out = image.copy()
+    out[:strike_y] = cv2.remap(
+        image[:strike_y], map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+    )
+    return out
+
+
 def detect_in_frame(
     frame: Frame, palette: Palette, calibration: Calibration, config: Config = DEFAULT
 ) -> list[Tile]:
     """Every tile visible in one frame, resolved to keys."""
     cfg = config.tiles
     tiles: list[Tile] = []
+    image = _straightened(frame.image, calibration)
 
-    for track, mask in enumerate(_track_masks(frame.image, palette, calibration, config)):
+    for track, mask in enumerate(_track_masks(image, palette, calibration, config)):
         # External contours only: an outlined tile is a ring, and its outer
         # contour is exactly the tile's edge.
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -884,6 +1048,30 @@ def _with_hidden_black_keys(
                 neighbours |= filled_rows(lo, hi, cfg.row_fill_ratio)
         if longest_run(lane & ~neighbours) >= tall_enough:
             claimed.append(pitch)
+            continue
+
+        # Struck together with one white neighbour, the black tile is beside
+        # it on every row, so no row is its own. The blob's far edge says it
+        # is there: it runs straight down the black key's outer edge, a third
+        # of a key into the unclaimed white's lane, where no white tile's edge
+        # can lie.
+        if cfg.black_edge_px <= 0 or ((pitch - 1) in claimed) == ((pitch + 1) in claimed):
+            continue
+        rows = mask[y0:y1, x0:x1] > 0
+        filled = rows.any(axis=1)
+        if (pitch + 1) in claimed:
+            edge = x0 + rows.argmax(axis=1).astype(float)  # leftmost filled column
+            target = left
+        else:
+            edge = x1 - rows[:, ::-1].argmax(axis=1).astype(float)  # one past the rightmost
+            target = right
+        at_edge = filled & (np.abs(edge - target) <= cfg.black_edge_px)
+        # Straight down the whole lane, not just a stretch of it: a spark
+        # cloud off the strike line sat on a key's boundary for a dozen rows
+        # and read as a black key for two frames.
+        steady = lane.sum() > 0 and (lane & at_edge).sum() >= cfg.black_edge_share * lane.sum()
+        if steady and longest_run(lane & at_edge) >= tall_enough:
+            claimed.append(pitch)
 
     return sorted(claimed)
 
@@ -947,4 +1135,5 @@ def detect(
 ) -> tuple[Palette, list[list[Tile]]]:
     """Detect tiles across a sequence of frames."""
     palette = palette or discover_palette(frames, calibration, config)
+    calibration = straighten_lanes(frames, palette, calibration, config)
     return palette, [detect_in_frame(f, palette, calibration, config) for f in frames]

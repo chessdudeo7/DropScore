@@ -20,7 +20,15 @@ from .notes import Hand, Note, NoteSequence, pitch_name
 from .overlay import annotate, dump_frames, dump_video
 from .score import Analysis, ScoreError, analyze, assign_hands, postprocess, quantize
 from .sources import ResolvedSource, SourceError, parse_youtube_id, resolve
-from .tiles import Palette, Tile, TileError, detect, detect_in_frame, discover_palette
+from .tiles import (
+    Palette,
+    Tile,
+    TileError,
+    detect,
+    detect_in_frame,
+    discover_palette,
+    straighten_lanes,
+)
 from .tracking import (
     SpeedEstimate,
     TileTrack,
@@ -54,6 +62,7 @@ __all__ = [
     "detect",
     "detect_in_frame",
     "discover_palette",
+    "straighten_lanes",
     # tracking
     "SpeedEstimate",
     "TileTrack",

@@ -58,6 +58,11 @@ class Calibration:
     # video sits inside a larger frame (a phone's vertical video, a letterbox).
     # A tile top at that row is clipped, not a top.
     picture_top: int = 0
+    # How the tile lanes lean, as (a, b): a lane that meets the strike line at
+    # column x runs at dx/dy = a + b * x. Zero for a screen recording; a board
+    # filmed at an angle leans one way at one end and the other way at the
+    # other. Measured from the sample frames' tiles in stage 4.
+    lane_slope: tuple[float, float] = (0.0, 0.0)
     diagnostics: dict = field(default_factory=dict)
 
     def __str__(self) -> str:

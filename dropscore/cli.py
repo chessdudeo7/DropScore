@@ -225,7 +225,7 @@ def cmd_debug(args: argparse.Namespace) -> int:
     """Write annotated frames or an annotated video showing what was detected."""
     from .calibrate import calibrate  # noqa: PLC0415
     from .overlay import dump_frames, dump_video  # noqa: PLC0415
-    from .tiles import discover_palette  # noqa: PLC0415
+    from .tiles import discover_palette, straighten_lanes  # noqa: PLC0415
     from .tracking import measure_scroll_speed  # noqa: PLC0415
 
     source = resolve(args.source)
@@ -238,6 +238,8 @@ def cmd_debug(args: argparse.Namespace) -> int:
         print(calibration)
 
         palette = None if args.grid_only else discover_palette(samples, calibration, config)
+        if palette is not None:
+            calibration = straighten_lanes(samples, palette, calibration, config)
 
         speed = None
         if not args.grid_only:

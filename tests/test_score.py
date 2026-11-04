@@ -1660,6 +1660,41 @@ def test_beats_keep_counting_across_a_section() -> None:
     )
 
 
+def _on_the_beat_in_two_tempos(boundary: float) -> NoteSequence:
+    """Eight bars at 60 on every beat, then eight at 100 from ``boundary``."""
+    notes = []
+    for beat in range(32):
+        notes.append(Note(onset=beat * 1.0, pitch=60 + (beat % 4) * 2, duration=0.8, hand="R"))
+        if beat % 4 == 0:
+            notes.append(Note(onset=beat * 1.0, pitch=48, duration=3.5, hand="L"))
+    fast = 60.0 / 100
+    for beat in range(32):
+        at = boundary + beat * fast
+        notes.append(Note(onset=at, pitch=72 + (beat % 4) * 2, duration=fast * 0.8, hand="R"))
+        if beat % 4 == 0:
+            notes.append(Note(onset=at, pitch=48, duration=fast * 3.5, hand="L"))
+    return NoteSequence.of(notes)
+
+
+def test_a_later_section_snaps_to_its_own_beats() -> None:
+    """The count runs over the join by a fraction of a beat, and the gridlines
+    of the next section must sit on its beats, not on the whole numbers.
+
+    On a real page the fraction was .22 of a step one day and .39 the next,
+    after one note changed twenty seconds before the page; the second put 96
+    of 266 notes past the shift allowed and cost three written values.
+    """
+    from dropscore.score import quantize  # noqa: PLC0415
+
+    for boundary in (32.0, 32.11, 32.4):
+        sequence = _on_the_beat_in_two_tempos(boundary)
+        config = replace(DEFAULT, score=replace(DEFAULT.score, sections=(boundary,)))
+        analysis = analyze(sequence, config)
+        assert len(analysis.sections) == 2
+        _, skipped = quantize(sequence, analysis, config)
+        assert skipped == 0, f"join at {boundary}s left {skipped} notes unsnapped"
+
+
 def test_a_key_is_the_piece_s_not_the_section_s() -> None:
     """Read from one section alone, a page in D flat major came back as G sharp
     minor: eight bars are not enough to tell a key from its neighbours."""

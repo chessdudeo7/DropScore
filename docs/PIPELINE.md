@@ -77,9 +77,21 @@ Per frame, in the region *above* the strike line:
 2. **Mask + connected components.** Threshold against the palette, morphological
    open to kill particles and glow, then connected components. Filter to
    axis-aligned rectangles with plausible width (≈ one key width from step 2).
+   A board filmed at an angle has lanes that lean, so a tall tile's box reaches
+   over the key beside it: the lean is measured from the sample frames' tall
+   tiles (a line in x, since one end leans left and the other right) and the
+   fall area is pulled straight before masking, once the drift at the top of
+   the picture is a quarter of a key. A screen recording measures nothing and
+   is left untouched.
 3. **Blob → key.** Take the blob's x-centre, map through the calibration to a MIDI
    pitch. Snap: a blob whose width is ~1 key is a note; a wide blob is *two adjacent
-   notes merged* and must be split on the key grid.
+   notes merged* and must be split on the key grid. A black key is only claimed
+   from a merged blob when the pixels say its tile is there: rows the black lane
+   fills that no white neighbour does, or, when it was struck together with one
+   white neighbour, the blob's far edge running straight down the black key's
+   own outer edge, a third of a key into the unclaimed white's lane, on most of
+   the lane's rows. Two merged white tiles end on a key boundary; a spark cloud
+   has no steady edge at all.
 
 Known nastiness:
 - **Glow/bloom** inflates blobs. Erode by a fixed fraction of key width, or
@@ -89,6 +101,17 @@ Known nastiness:
   most pixels sit there, so a particle cloud around flat tiles cannot widen
   the radius (`tiles._member_spread`). On a smoke-effect render it had widened
   from 22 to 37, and every cloud read as a tile.
+- **A tile shaded through hue** clusters into two colours either side of its
+  ramp when the shading runs past the hue tolerance that merges a gradient's
+  shades: one recording's right hand runs from green to yellow-green, 51
+  degrees apart, and split with the default sample while holding together
+  with a smaller one. Its tiles were cut across two track masks and the
+  notes between the shades came back as fragments. Two colours whose own
+  pixels run unbroken along the segment between them are one ramp and are
+  merged (`tiles._merge_ramps`); two hands' colours leave a gap. The one
+  colour stands at the ramp's middle: kept at an end, the far end's tiles
+  sat outside the acceptance radius and a quarter of that recording's notes
+  went unseen.
 - **Vertically adjacent repeated notes** merge into one tall blob. Detect the
   1–2 px seam, or use the fact that repeated notes have a gap of ≥ 1 px at typical
   scroll speeds.
@@ -148,8 +171,24 @@ Known nastiness:
   blank band. The calibration records the first row in which anything moves
   (`picture_top`), and a tile top at that row is clipped, not a top: read as
   one, it timed a 2.4s note as two. A band shallower than 5% of the frame is
-  a player's own bar, and is left alone: the tops clipped under one timed
-  long notes right on two recordings.
+  a player's own bar, and is left alone. A top clipped under that bar, or
+  under anything else, is found the way a clipped bottom is: by standing
+  still while the other edge moves, for more than one frame (a falling top
+  is at its highest once, on its first frame, and that sample is as real as
+  any other). Read as tops, the
+  pinned samples each report the note's end a frame apart, and on one page
+  45 of them against 16 real ones timed a 1.65s note at 1.04 -- and one
+  frame more or less moved it. A top that climbs marks a later tile reaching
+  this one, and the samples after it are the later tile's -- unless the
+  climb ends at the clipped top, which is this tile coming out from under
+  something at the picture's top (a header that dimmed one recording's
+  tiles for their first hundred rows; the top read 98, 58, then 4). Taken
+  for an arrival that threw away every real top sample after it: a
+  six-beat note timed by the one sample before, at 0.4s, and 54 of Fur
+  Elise's notes at a tenth of their length. Any other climb is an arrival
+  even before the tile lands: on a glowing render a tile's halo runs ahead
+  as a blob of its own and the tile reaches it mid-fall, and read on as one
+  the halo took the tile's length and was merged with the real note behind.
 - A board cut off at one side of the picture is placed in the one octave
   where that many white keys fit on a piano.
 - A screen recording can show the video in a window beside other windows.
@@ -176,6 +215,11 @@ Now it is a symbolic-music problem, which is well-trodden:
   the second at its measured onset (`keep_repeats`): snapped together they
   were one note to the MIDI writer, and a waltz lost six repeats played
   faster than a sixteenth.
+  A page in declared sections (`score.sections`) is read in beat positions
+  throughout, and each section snaps to its own beats: the count runs over
+  the join by a fraction of a beat, and against whole numbers that fraction
+  put 96 of 266 notes past the shift allowed once a note twenty seconds
+  before the page changed the first section's reading.
 - **Key signature** via Krumhansl-style pitch-class profile correlation, then spell
   accidentals accordingly (F# vs Gb). As built, each note is spelled by its scale
   degree in the key (`musicxml.spell_in_key`), so F# major gets its E# and C

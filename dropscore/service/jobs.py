@@ -374,12 +374,20 @@ class JobStore:
             )
 
     def active(self, client: str | None = None) -> int:
-        """Jobs queued or running, for one client or for everyone."""
+        """Jobs queued or running, for one client or for everyone.
+
+        A cancelled job is out of the count at once: the refusal tells the
+        client to cancel one before starting another, and a cancelled job
+        still queued behind others would otherwise hold its place until a
+        worker reached it and retired it.
+        """
         with self._lock:
             return sum(
                 1
                 for job in self._jobs.values()
-                if not job.is_finished and (client is None or job.client == client)
+                if not job.is_finished
+                and not job.cancelled
+                and (client is None or job.client == client)
             )
 
     def get(self, job_id: str) -> Job | None:
@@ -504,7 +512,7 @@ def transcribe_job(
     from ..calibrate import calibrate  # noqa: PLC0415
     from ..export import extension, write as export_write  # noqa: PLC0415
     from ..score import ScoreError, postprocess  # noqa: PLC0415
-    from ..tiles import discover_palette  # noqa: PLC0415
+    from ..tiles import discover_palette, straighten_lanes  # noqa: PLC0415
     from ..tracking import transcribe_video  # noqa: PLC0415
     from ..video import VideoReader  # noqa: PLC0415
 
@@ -541,6 +549,9 @@ def transcribe_job(
         job.begin("tiles")
         palette = discover_palette(samples, calibration, config)
         job.say(f"{palette.track_count} tile colour(s) discovered")
+        calibration = straighten_lanes(samples, palette, calibration, config)
+        if calibration.lane_slope != (0.0, 0.0):
+            job.say("tile lanes lean; straightening the picture")
         job.finish("tiles")
         # 60 frames at 720p are 170MB; the main pass does not need them.
         del samples

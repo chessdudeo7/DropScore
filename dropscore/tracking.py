@@ -37,7 +37,7 @@ import numpy as np
 from .calibrate import Calibration, calibrate
 from .config import Config, DEFAULT, TrackingConfig
 from .notes import Hand, Note, NoteSequence
-from .tiles import Palette, Tile, detect_in_frame, discover_palette
+from .tiles import Palette, Tile, detect_in_frame, discover_palette, straighten_lanes
 from .video import Frame, VideoReader
 
 log = logging.getLogger(__name__)
@@ -744,14 +744,43 @@ def track_to_note(
     lowest_top = -np.inf
     rising = max(step, 2.0 * margin)
     arrived = False
-    for time, top, bottom in zip(track.times, track.tops, track.bottoms):
+    # The top edge is clipped the same way at the picture's top, and not only
+    # at `picture_top`: a player's bar inside the edge margin is not promoted
+    # to the picture's edge, and a tile under it showed a top pinned at row 17
+    # for 45 frames with `picture_top` at zero. Those samples each report the
+    # end a frame apart, and the median of them timed a 3.5-beat note at 2 --
+    # right by the page and wrong by the video, and one frame either side of
+    # 45 moved it. A clipped top is found as the clipped bottom is, by where
+    # it stops: anything within half a frame's travel of the highest the top
+    # ever sat -- provided more than one sample sits there. A falling top is
+    # at its highest once, on its first frame, and that sample is as good as
+    # any other.
+    tops = np.asarray(track.tops, dtype=np.float64)
+    ceiling = tops.min() + step * 0.5
+    if np.count_nonzero(tops <= ceiling) < 2:
+        ceiling = -np.inf
+    for k, (time, top, bottom) in enumerate(zip(track.times, track.tops, track.bottoms)):
         if bottom < strike - margin and bottom < plateau:
             bottom_times.append(time)
             bottom_edges.append(bottom)
-        if top < lowest_top - rising:
+        # Unless the climb ends at the clipped top: then it is this tile
+        # coming out from under an overlay at the picture's top -- a header
+        # dimmed one recording's tiles to half their colour for their first
+        # hundred rows, and the top read 98, 58, then 4 as the tile emerged.
+        # Taken for an arrival, that threw away every real top sample after
+        # it and timed a six-beat note by the one sample before: 0.4s. Any
+        # other climb is an arrival, landed or not: on a glowing render a
+        # tile's halo runs ahead of it as a blob of its own, and its tile
+        # reaches it mid-fall; read on as one, the halo took the tile's
+        # length, overlapped the real note behind and was merged with it.
+        if top <= ceiling:
+            # Clipped: nothing read before this was the tile's top either,
+            # and the tops that emerge after it are not climbing past it.
+            lowest_top = -np.inf
+        elif top < lowest_top - rising and tops[k:].min() > ceiling:
             arrived = True
         lowest_top = max(lowest_top, top)
-        if top > calibration.picture_top + margin and not arrived:
+        if top > calibration.picture_top + margin and top > ceiling and not arrived:
             top_times.append(time)
             top_edges.append(top)
 
@@ -1157,6 +1186,7 @@ def prepare_video(reader: VideoReader, config: Config = DEFAULT) -> tuple[Calibr
     samples = reader.sample()
     calibration = calibrate(samples, config)
     palette = discover_palette(samples, calibration, config)
+    calibration = straighten_lanes(samples, palette, calibration, config)
     return calibration, palette
 
 

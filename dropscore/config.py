@@ -195,6 +195,18 @@ class TileConfig:
     # are only nearest to this colour for want of a better match.
     spread_window: float = 2.0
 
+    # Two colours joined by a ramp of their own pixels are one tile colour
+    # whatever their hues: one recording's right hand shades each tile from
+    # green to yellow-green, 51 degrees of hue apart, and with the default
+    # sample those shades clustered apart and split every tile across two
+    # track masks, so the tiles between the shades came back as fragments on
+    # two tracks and four notes were lost. Pairs closer than this multiple of
+    # color_tolerance are tested: along the segment between them, the sparsest
+    # tenth of its middle must hold at least ramp_floor of the pixels the
+    # sparser end does. Two hands' colours have a gap between them instead.
+    ramp_reach: float = 2.0
+    ramp_floor: float = 0.5
+
     # A colour whose own pixels mostly sit in one tight band is a flat tile
     # colour, however far its other members straggle. When at least
     # spread_core_share of them fall within spread_core_width of each other and
@@ -223,6 +235,18 @@ class TileConfig:
     # A key must be this covered by a blob to be claimed from it.
     min_coverage: float = 0.60
 
+    # A board filmed off a screen at an angle has tile lanes that lean: a tile
+    # sits on its key at the strike line and drifts a key or more sideways by
+    # the top of the picture, so a tall tile read by its bounding box also
+    # claims the key beside it. The lean is measured from the sample frames'
+    # tiles and the fall area is straightened before detection, once the drift
+    # at the top of the picture reaches this many white keys. Screen recordings
+    # measure a hundredth of a pixel and are left alone.
+    min_lane_shift: float = 0.25
+    # Only a tile at least this many white keys tall says anything about its
+    # lane's lean; a short one's slant is lost in rounding.
+    lane_tile_rows: float = 1.5
+
     # Rows at least this filled are part of a tile. The bar is low because what
     # separates two repeated notes is *background* — a genuine gap is empty,
     # not half full — whereas a rounded cap or a bloom-softened edge is only
@@ -235,6 +259,19 @@ class TileConfig:
     # Outlined tiles are exempt -- they are hollow on purpose, and are
     # recognised before this applies.
     min_solidity: float = 0.65
+
+    # A black key struck together with the white key beside it merges into
+    # one blob a key and a third wide, which no run of white keys can be, and
+    # the black key is found by the blob's far edge: it lies at the black
+    # key's own edge, straight down the rows, within this many pixels. A spark
+    # wisp off a white tile reaches past the boundary too, but at no steady
+    # column. Zero turns the rule off.
+    black_edge_px: float = 2.0
+    # ... and on at least this share of the rows where the black lane is
+    # solid. A tile's edge is straight down its whole length; a spark cloud
+    # sat on the boundary for a dozen rows of fifty and was read as a black
+    # key for two frames.
+    black_edge_share: float = 0.8
 
     # A region less filled than this is an outlined tile, whose middle is empty
     # by design, rather than two stacked tiles with a seam between them.
