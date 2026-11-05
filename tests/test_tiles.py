@@ -293,7 +293,7 @@ def test_a_second_hand_of_another_hue_is_not_folded() -> None:
     assert len(kept) == 2
 
 
-def test_two_shades_joined_by_a_ramp_are_one_colour() -> None:
+def test_two_shades_joined_by_a_ramp_are_one_track() -> None:
     """A tile shaded through more hue than the merge tolerance clusters into
     two colours either side of its ramp. On one recording a green ran to
     yellow-green, 51 degrees apart, and split every tile across two masks.
@@ -302,24 +302,61 @@ def test_two_shades_joined_by_a_ramp_are_one_colour() -> None:
     from dropscore.tiles import _merge_ramps  # noqa: PLC0415
 
     rng = np.random.default_rng(3)
-    background = np.array([20.0, 128.0, 128.0])
     green, yellow_green = np.array([200.0, 92.0, 122.0]), np.array([185.0, 87.0, 160.0])
     colors = np.stack([green, yellow_green])
-    counts = np.array([5000, 4000])
 
     # One ramp: pixels spread evenly along the segment between the two.
     along = rng.uniform(-0.1, 1.1, size=9000)[:, None]
     ramp = green + along * (yellow_green - green) + rng.normal(0.0, 2.0, size=(9000, 3))
-    kept, merged = _merge_ramps(colors, counts, ramp, background, DEFAULT.tiles)
-    assert len(kept) == 1 and merged[0] == 9000
+    assert _merge_ramps(colors, ramp, DEFAULT.tiles).tolist() == [0, 0]
 
     # Two voices: pixels sit at the ends and nowhere between.
     ends = np.concatenate([
         green + rng.normal(0.0, 2.0, size=(5000, 3)),
         yellow_green + rng.normal(0.0, 2.0, size=(4000, 3)),
     ])
-    kept, _ = _merge_ramps(colors, counts, ends, background, DEFAULT.tiles)
-    assert len(kept) == 2
+    assert _merge_ramps(colors, ends, DEFAULT.tiles).tolist() == [0, 1]
+
+
+def test_shades_of_one_track_share_a_mask_without_widening() -> None:
+    """Two shades feeding one track are one mask, and neither shade's reach
+    grows: merged into one colour at the ramp's middle, the radius widened in
+    every direction and took the tile's halo on the keys either side of it --
+    ten notes on one recording that were never played."""
+    import cv2  # noqa: PLC0415
+
+    from dropscore.tiles import Palette, _to_lab, _track_masks  # noqa: PLC0415
+
+    weight = np.array([DEFAULT.tiles.lightness_weight, 1.0, 1.0])
+    shades = np.array([[200.0, 92.0, 122.0], [185.0, 87.0, 160.0]])
+    middle = shades.mean(axis=0)
+    # Off the ramp, 30 out from its middle in weighted Lab: within a widened
+    # radius of the middle, past the tolerance of either shade and of the
+    # line between them.
+    along = (shades[1] - shades[0]) * weight
+    across = np.cross(along, [1.0, 0.0, 0.0])
+    halo = middle + 30.0 * across / np.linalg.norm(across) / weight
+    mid_ramp = middle + 15.0 * across / np.linalg.norm(across) / weight
+    lab = np.stack([shades[0], shades[1], halo, mid_ramp]).clip(0, 255).astype(np.uint8)
+    strip = cv2.cvtColor(lab[None], cv2.COLOR_LAB2BGR)[0]
+    rows = 40
+    image = np.repeat(strip[None], rows + 10, axis=0)
+    read = _to_lab(image[:1])[0]  # the colours as detection will see them
+
+    calibration = _plain_calibration(strike_y=rows, width=4)
+    background = np.array([0.0, 128.0, 128.0])
+    spreads = np.array([16.0, 16.0])
+    paired = Palette(background, read[:2], np.array([1, 1]), spreads, tracks=np.array([0, 0]))
+    (mask,) = _track_masks(image, paired, calibration, DEFAULT)
+    assert mask[:, 0].all() and mask[:, 1].all()
+    assert not mask[:, 2].any()
+    # Halfway along the ramp and a little off it: past where the two shades
+    # meet, and the tile's all the same.
+    assert mask[:, 3].all()
+
+    merged = Palette(background, read[:2].mean(axis=0)[None], np.array([2]), spreads[:1])
+    (wide,) = _track_masks(image, merged, calibration, DEFAULT)
+    assert wide[:, 2].all()  # what the one-colour merge did
 
 
 def test_the_same_frames_give_the_same_palette_every_time() -> None:

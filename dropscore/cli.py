@@ -205,9 +205,9 @@ def cmd_tiles(args: argparse.Namespace) -> int:
 
     print(calibration)
     print(f"palette: {palette.track_count} track(s)")
-    for index, (color, count) in enumerate(zip(palette.colors, palette.counts)):
+    for color, count, track in zip(palette.colors, palette.counts, palette.track_of()):
         lab = ", ".join(f"{v:.0f}" for v in color)
-        print(f"  track {index}  Lab({lab})  {count} px")
+        print(f"  track {track}  Lab({lab})  {count} px")
 
     total = sum(len(tiles) for tiles in per_frame)
     print(f"{total} tile(s) across {len(per_frame)} sampled frames")

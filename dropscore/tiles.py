@@ -63,9 +63,21 @@ class Palette:
     # gradient one, which is what makes it usable as a signal.
     spreads: np.ndarray | None = None
 
+    # Which track each colour feeds, when two colours are shades of one tile
+    # colour (`_merge_ramps`). None is one track per colour.
+    tracks: np.ndarray | None = None
+
     @property
     def track_count(self) -> int:
-        return len(self.colors)
+        if self.tracks is None:
+            return len(self.colors)
+        return int(self.tracks.max()) + 1
+
+    def track_of(self) -> np.ndarray:
+        """The track each colour feeds."""
+        if self.tracks is None:
+            return np.arange(len(self.colors))
+        return self.tracks
 
 
 @dataclass(frozen=True)
@@ -141,10 +153,12 @@ def discover_palette(
         cfg.source_near_tie,
     )
     colors, counts = _fold_blends(colors, counts, background, cfg)
-    colors, counts = _merge_ramps(colors, counts, pixels, background, cfg)
+    groups = _merge_ramps(colors, pixels, cfg)
 
-    # Drop colours too rare to be a hand; they are usually antialiasing.
-    keep = counts >= counts.sum() * cfg.min_palette_share
+    # Drop colours too rare to be a hand; they are usually antialiasing. A
+    # shade is judged with the rest of its tile colour.
+    group_counts = np.bincount(groups, weights=counts)
+    keep = group_counts[groups] >= counts.sum() * cfg.min_palette_share
 
     # And drop any that the background itself would match. A dim halo can
     # cluster into a "colour" sitting closer to the background than the mask's
@@ -196,6 +210,7 @@ def discover_palette(
         colors=kept_colors,
         counts=counts[keep],
         spreads=spreads,
+        tracks=_renumber(groups[keep]),
     )
     return _drop_line_colours(palette, frames, calibration, config)
 
@@ -272,7 +287,7 @@ def _drop_line_colours(
         for index, mask in enumerate(_track_masks(frame.image, palette, calibration, config)):
             total[index] += mask.sum()
             solid[index] += cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel).sum()
-    solidity = solid / np.maximum(total, 1)
+    solidity = (solid / np.maximum(total, 1))[palette.track_of()]
 
     drop = (
         (chroma < cfg.line_max_chroma)
@@ -288,6 +303,7 @@ def _drop_line_colours(
         colors=palette.colors[keep],
         counts=palette.counts[keep],
         spreads=None if palette.spreads is None else palette.spreads[keep],
+        tracks=None if palette.tracks is None else _renumber(palette.tracks[keep]),
     )
 
 
@@ -371,10 +387,16 @@ PALETTE_ATTEMPTS = 30
 MIN_CHROMA = 12.0
 
 
-def _merge_ramps(
-    colors: np.ndarray, counts: np.ndarray, pixels: np.ndarray, background: np.ndarray, cfg
-) -> tuple[np.ndarray, np.ndarray]:
-    """Merge two chromatic colours whose own pixels run unbroken between them.
+def _renumber(groups: np.ndarray) -> np.ndarray:
+    """Group labels as 0, 1, 2... in order of first appearance."""
+    _, first, inverse = np.unique(groups, return_index=True, return_inverse=True)
+    order = np.argsort(np.argsort(first))
+    return order[inverse].astype(np.intp)
+
+
+def _merge_ramps(colors: np.ndarray, pixels: np.ndarray, cfg) -> np.ndarray:
+    """Which track each colour feeds: two chromatic colours whose own pixels
+    run unbroken between them are shades of one, and feed the same track.
 
     Hue decides most merges, and a tile shaded through more hue than the
     tolerance allows clusters into two colours either side of its ramp: on
@@ -383,16 +405,21 @@ def _merge_ramps(
     of different colours leave a gap between them; a ramp does not. Projected
     onto the segment between the two, the pixels near it fill its middle
     nearly as densely as its ends, and that is the test.
+
+    The two stay two colours to match against, joined into one mask. Merged
+    into one colour, the ramp's spread widened that colour's radius in every
+    direction, not only along the ramp: the two shades had hemmed each other
+    in at 22, and alone the one reached 39, far enough to take a tile's halo
+    on the white keys either side. Ten notes there were halos.
     """
+    groups = np.arange(len(colors))
     if len(colors) < 2:
-        return colors, counts
-    counts = counts.copy()
-    keep = np.ones(len(colors), dtype=bool)
+        return groups
     points = _weighted(colors, cfg.lightness_weight)
     weighted = _weighted(pixels, cfg.lightness_weight)
     for i in range(len(colors)):
         for j in range(i + 1, len(colors)):
-            if not (keep[i] and keep[j]):
+            if groups[i] == groups[j]:
                 continue
             if any(
                 float(np.hypot(c[1] - 128.0, c[2] - 128.0)) < MIN_CHROMA for c in (colors[i], colors[j])
@@ -412,26 +439,9 @@ def _merge_ramps(
             middle = float(bins[3:7].min())
             if ends <= 0 or middle < cfg.ramp_floor * ends:
                 continue
-            # The one colour stands at the ramp's middle, not at either end.
-            # Kept at an end, the far end sat outside the acceptance radius
-            # and its tiles went unseen: on the recording above, a quarter of
-            # the notes. The ramp is at most twice the tolerance long, so from
-            # its middle each end is within reach, and the spread measured
-            # afterwards widens the radius over the ramp as for a gradient
-            # tile. The middle, not the pixel-weighted mean: the denser end
-            # would pull the colour back toward itself and out of reach of the
-            # other.
-            source, blend = (i, j) if _farther_from(
-                colors[i], colors[j], background, cfg.lightness_weight, cfg.source_near_tie
-            ) else (j, i)
-            colors = colors.copy()
-            colors[source] = (colors[source] + colors[blend]) / 2.0
-            points = _weighted(colors, cfg.lightness_weight)
-            counts[source] += counts[blend]
-            keep[blend] = False
+            groups[groups == groups[j]] = groups[i]
             log.debug("palette: colours %d and %d are one ramp", i, j)
-    return colors[keep], counts[keep]
-
+    return groups
 
 def _same_hue(a: np.ndarray, b: np.ndarray, tolerance_degrees: float) -> bool:
     """Whether two Lab colours are the same hue, ignoring how bright or pale."""
@@ -670,8 +680,41 @@ def _track_masks(
     # narrower than the minimum tile width and so discarded entirely. Specks are
     # already excluded by the height and width filters on each contour, which
     # cost nothing and do not damage real tiles.
+    if palette.tracks is None:
+        return [
+            ((nearest == index) & solid).astype(np.uint8)
+            for index in range(palette.track_count)
+        ]
+    # Shades of one tile colour feed one mask. Each keeps its own radius, and
+    # where two shades meet each is bounded at the meeting, as two colours
+    # are: the halo off the ramp stays as narrow as it was for either shade.
+    # Along the ramp itself a pixel within the tolerance of the line between
+    # the two is the tile's: the recording that needed this shades its tiles
+    # by height, and halfway down the fall a tile sat 21 from either shade,
+    # against a meeting bound of 22 -- an F#4 was followed for six frames,
+    # lost for most of a second, and dropped.
+    track = palette.tracks[nearest]
+    points = _weighted(palette.colors, cfg.lightness_weight)
+    for i in range(len(points)):
+        for j in range(i + 1, len(points)):
+            if palette.tracks[i] != palette.tracks[j]:
+                continue
+            segment = points[j] - points[i]
+            span = float(segment @ segment)
+            if span <= 0:
+                continue
+            along = np.zeros(weighted.shape[:2], dtype=np.float32)
+            for c in range(3):
+                along += (weighted[..., c] - points[i][c]) * (segment[c] / span)
+            np.clip(along, 0.0, 1.0, out=along)
+            off = np.zeros_like(along)
+            for c in range(3):
+                gap = weighted[..., c] - (points[i][c] + along * segment[c])
+                off += gap * gap
+            on_ramp = (off < cfg.color_tolerance**2) & np.isin(nearest, (i, j))
+            solid = solid | on_ramp
     return [
-        ((nearest == index) & solid).astype(np.uint8)
+        ((track == index) & solid).astype(np.uint8)
         for index in range(palette.track_count)
     ]
 

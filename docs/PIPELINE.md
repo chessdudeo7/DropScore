@@ -107,11 +107,15 @@ Known nastiness:
   degrees apart, and split with the default sample while holding together
   with a smaller one. Its tiles were cut across two track masks and the
   notes between the shades came back as fragments. Two colours whose own
-  pixels run unbroken along the segment between them are one ramp and are
-  merged (`tiles._merge_ramps`); two hands' colours leave a gap. The one
-  colour stands at the ramp's middle: kept at an end, the far end's tiles
-  sat outside the acceptance radius and a quarter of that recording's notes
-  went unseen.
+  pixels run unbroken along the segment between them are shades of one ramp
+  and feed one track (`tiles._merge_ramps`, `Palette.tracks`); two hands'
+  colours leave a gap. They stay two colours to match against. Merged into
+  one colour, the ramp's spread widened its radius in every direction, from
+  the 22 the two shades held each other to, to 39, and the tile's halo on
+  the white keys either side read as ten short notes. Along the ramp a pixel
+  within the tolerance of the line between the shades is the tile's: that
+  recording shades by height, and halfway down the fall its tiles sat just
+  past where the two shades meet and vanished for most of a second.
 - **Vertically adjacent repeated notes** merge into one tall blob. Detect the
   1–2 px seam, or use the fact that repeated notes have a gap of ≥ 1 px at typical
   scroll speeds.

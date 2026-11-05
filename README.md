@@ -14,7 +14,7 @@ real recordings scored against their printed music:
 
 ```
 corpus F1 0.9996   hands 0.9677   key 15/15   tempo 15/15
-written 354/370    staff 588/593  639 tests
+written 354/370    staff 588/593  640 tests
 ```
 
 **Read that F1 with care.** The synthetic clips are rendered by this repository's
@@ -163,7 +163,7 @@ Reading from a YouTube URL needs the optional extra (`pip install -e ".[youtube]
 and violates YouTube's Terms of Service — it exists for local experimentation.
 Pass a local file for anything else.
 
-Run the tests with `pytest` — 639 of them, about two minutes. They render their
+Run the tests with `pytest` — 640 of them, about two minutes. They render their
 own synthetic clip, so there are no fixture files to check out. A few in
 `test_service.py` are timing-sensitive and can fail on a loaded machine; re-run
 them on their own before believing a failure.
