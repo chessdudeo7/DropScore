@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -398,12 +399,34 @@ def run_clip(video: str | Path, truth: str | Path, config: Config = DEFAULT) -> 
     )
 
 
+def _log_like_the_caller(level: int, fmt: str) -> None:
+    logging.basicConfig(level=level, format=fmt, stream=sys.stderr)
+
+
 def run_corpus(
     pairs: Sequence[tuple[Path, Path]], config: Config = DEFAULT
 ) -> Report:
     report = Report()
-    for video, truth in pairs:
-        result = run_clip(video, truth, config)
+    workers = min(config.evaluation.corpus_workers, len(pairs))
+    if workers <= 1:
+        results = [run_clip(video, truth, config) for video, truth in pairs]
+    else:
+        from concurrent.futures import ProcessPoolExecutor  # noqa: PLC0415
+
+        # A worker starts with logging unset; give it the caller's, so the
+        # per-clip progress lines still reach the console.
+        root = logging.getLogger()
+        handler = root.handlers[0] if root.handlers else None
+        fmt = handler.formatter._fmt if handler and handler.formatter else "%(message)s"
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_log_like_the_caller,
+            initargs=(root.level, fmt),
+        ) as pool:
+            results = list(
+                pool.map(run_clip, [v for v, _ in pairs], [t for _, t in pairs], [config] * len(pairs))
+            )
+    for result in results:
         report.clips.append(result)
         log.info("%s: %s", result.name, result.error or result.metrics)
     return report

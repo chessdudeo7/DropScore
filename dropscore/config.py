@@ -938,6 +938,12 @@ class EvaluationConfig:
     # as a regression rather than noise.
     regression_tolerance: float = 0.02
 
+    # Clips scored at once, each in its own process. Every clip is read on its
+    # own, so the report is the same at any count; each process holds one
+    # clip's decode (about 300MB at 720p) and reads its frames on its own
+    # ``detect_threads``, so two is enough to keep the cores busy.
+    corpus_workers: int = 2
+
 
 @dataclass(frozen=True)
 class Config:

@@ -313,3 +313,30 @@ def test_a_clip_that_fell_since_the_last_run_is_reported(tmp_path: Path) -> None
     assert since_last_run(last, good) == []
     assert [r.name for r in since_last_run(last, worse)] == ["a"]
     assert since_last_run(last, worse) == []
+
+
+def test_a_corpus_run_scores_each_clip_and_survives_a_broken_one(tmp_path: Path) -> None:
+    """The eval's own loop: clips in name order, a clip that cannot be read is
+    reported as failed and the rest are still scored."""
+    from dropscore.evaluate import run_corpus  # noqa: PLC0415
+
+    spec = RenderSpec(width=640, height=360, theme=None)
+    render(generate(seed=3, bars=2), tmp_path / "a_good.mp4", spec)
+    (tmp_path / "b_broken.mp4").write_bytes(b"not a video")
+    (tmp_path / "b_broken.truth.json").write_text(
+        (tmp_path / "a_good.truth.json").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    report = run_corpus(find_clips(tmp_path))
+    assert [c.name for c in report.clips] == ["a_good", "b_broken"]
+    good, broken = report.clips
+    assert good.error is None and good.metrics.f1 == 1.0
+    assert broken.error and broken.metrics.f1 == 0.0
+
+    # Scored in worker processes above; one at a time gives the same report.
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.config import DEFAULT  # noqa: PLC0415
+
+    serial = replace(DEFAULT, evaluation=replace(DEFAULT.evaluation, corpus_workers=1))
+    assert run_corpus(find_clips(tmp_path), serial).to_dict() == report.to_dict()

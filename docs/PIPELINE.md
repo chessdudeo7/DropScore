@@ -148,7 +148,9 @@ Known nastiness:
   built. Measuring the speed from its own decode first used to cost two fifths
   of the runtime. Frames are read for tiles on a small thread pool, in order
   (`detect_threads`, 4): each frame is read on its own, so the notes are the
-  same at any count, and a 27s render takes 43s instead of 94s.
+  same at any count, and a 27s render takes 43s instead of 94s. The eval scores
+  its corpus clips two at a time in worker processes (`corpus_workers`), each
+  with the caller's logging; the report is the same as one at a time.
   The calibration sample (60 frames, 170MB at 720p) is dropped before that
   pass begins (`tracking.prepare_video`); kept in a local, it was a quarter
   of the peak.
