@@ -123,7 +123,9 @@ Known nastiness:
   past where the two shades meet and vanished for most of a second.
 - **Vertically adjacent repeated notes** merge into one tall blob. Detect the
   1–2 px seam, or use the fact that repeated notes have a gap of ≥ 1 px at typical
-  scroll speeds.
+  scroll speeds. Some renderers leave no gap at all: rounded tiles drawn flush
+  meet only in a pinch, both sides of the column stepping in for a few rows
+  between solid rows. That pinch is read as the seam (`waist_*` in TilesConfig).
 - **Particle effects at the strike line** — just ignore everything below the strike
   line + a small margin; the tile has already been measured by then.
 

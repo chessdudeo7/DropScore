@@ -263,6 +263,23 @@ class TileConfig:
     # partly covered and must not be read as a break in the middle of a tile.
     row_fill_ratio: float = 0.20
 
+    # Repeated notes drawn with no gap still show where they meet: both tiles'
+    # rounded corners pinch the column for a few rows. A run of rows narrower
+    # than this share of the tile's usual width, inside the tile and no taller
+    # than waist_max_height times its width, is read as the seam. Measured on
+    # one such render, the pinch fell to 0.73 on most frames and below
+    # row_fill_ratio only on the odd one, which merged 85 repeats out of 846.
+    waist_ratio: float = 0.80
+    waist_max_height: float = 0.6
+    # ...and both its sides must step in by this share of the width.
+    waist_side_indent: float = 0.08
+    # The rows either side of a seam are solid tile: at least this share of the
+    # tile's fullest rows (its 95th percentile; the strip is often wider than
+    # the tile, so an absolute bar refused real seams). Glow speckle pinches
+    # too, but its rows are ragged, and two such cuts on the glow probe cost a
+    # note and added a phantom.
+    waist_solid_fill: float = 0.80
+
     # How much of the region it spans a blob must actually fill to be a tile
     # rather than a visual effect. Set from the gap between the two: solid
     # tiles measure 0.79 to 0.92 across every theme, spark trails 0.28 to 0.57.

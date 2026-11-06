@@ -496,6 +496,30 @@ def test_repeated_notes_are_split_vertically() -> None:
     assert len(tiles) == 2
 
 
+def test_rounded_repeats_with_no_gap_split_at_their_pinch() -> None:
+    """Two rounded tiles drawn flush meet only in a narrower waist, never a gap."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.tiles import _split_vertically  # noqa: PLC0415
+
+    mask = np.zeros((200, 40), np.uint8)
+    mask[20:180, 5:27] = 255
+    # The pinch measured on a real render: 22 columns narrowing to 16 for four
+    # rows, every row still far above row_fill_ratio.
+    mask[98:100, 5:7] = mask[98:100, 25:27] = 0
+    mask[100:104, 5:9] = mask[100:104, 23:27] = 0
+    mask[104:106, 5:7] = mask[104:106, 25:27] = 0
+    # Each tile's own rounded caps must not be cut.
+    mask[20:23, 5:8] = mask[20:23, 24:27] = mask[177:180, 5:8] = mask[177:180, 24:27] = 0
+
+    spans = _split_vertically(mask, (5, 20, 27, 180), DEFAULT)
+    assert len(spans) == 2 and spans[0][1] <= spans[1][0]
+    assert 98 <= spans[0][1] <= 106
+
+    off = replace(DEFAULT, tiles=replace(DEFAULT.tiles, waist_ratio=0.0))
+    assert len(_split_vertically(mask, (5, 20, 27, 180), off)) == 1
+
+
 def test_tile_geometry_matches_what_was_drawn() -> None:
     sequence = NoteSequence.of([Note(onset=0.0, pitch=60, duration=0.8)])
     renderer = _renderer("minimal", sequence)  # no glow, no rounding

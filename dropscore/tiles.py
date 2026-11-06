@@ -820,6 +820,7 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
             start = None
     if start is not None:
         spans.append((y0 + start, y0 + len(filled)))
+    spans = [piece for a, b in spans for piece in _split_at_waists(strip, fill, a - y0, b - y0, cfg, y0)]
 
     # A tile is a solid block of its colour. Effects are not: a video with
     # sparks streaming off the strike line produced ninety blobs a frame where
@@ -839,6 +840,68 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
         if b - a >= cfg.min_tile_height
         and float(strip[a - y0 : b - y0].mean()) >= cfg.min_solidity
     ]
+
+
+def _split_at_waists(
+    strip: np.ndarray, fill: np.ndarray, a: int, b: int, cfg, y0: int
+) -> list[tuple[int, int]]:
+    """Cut a run of filled rows where its rounded tiles meet with no gap.
+
+    Rows are local to the strip; the pieces come back in frame rows. A pinch
+    touching either end is a tile's own rounded cap, not a seam, and only a run
+    of two rows or more counts, so a one-pixel line across the tile does not.
+    A seam also needs nearly full rows on both sides, and must pinch from both sides.
+    """
+    width = strip.shape[1]
+    if width <= 0 or b - a < 3:
+        return [(y0 + a, y0 + b)]
+    run = fill[a:b]
+    usual = float(np.median(run))
+    full = float(np.percentile(run, 95))
+    narrow = run < usual * cfg.waist_ratio
+    longest = max(2, int(width * cfg.waist_max_height))
+    # Tiles meet full width on both sides of their seam. Sparks falling through
+    # a key's column thin and thicken it at random, and without this each
+    # flicker read as a seam: 24 slivers of notes on one test render.
+    solid = longest
+    # Both tiles' corners are rounded, so a seam pinches both sides of the
+    # column. A neighbour's tile ending beside this one steps in one side only:
+    # read as a seam, that cut 19 phantoms out of a sparks render.
+    on = strip[a:b] > 0
+    left = np.where(on.any(axis=1), on.argmax(axis=1), width)
+    right = np.where(on.any(axis=1), width - 1 - on[:, ::-1].argmax(axis=1), -1)
+    indent = max(1.0, width * cfg.waist_side_indent)
+    cuts: list[int] = []
+    row = 0
+    while row < len(run):
+        if not narrow[row]:
+            row += 1
+            continue
+        end = row
+        while end < len(run) and narrow[end]:
+            end += 1
+        if (
+            row >= solid
+            and end + solid <= len(run)
+            and 2 <= end - row <= longest
+            and not narrow[row - solid : row].any()
+            and not narrow[end : end + solid].any()
+        ):
+            cut = row + int(np.argmin(run[row:end]))
+            sides = np.r_[row - solid : row, end : end + solid]
+            if (
+                run[sides].min() >= cfg.waist_solid_fill * full
+                and left[cut] - np.median(left[sides]) >= indent
+                and np.median(right[sides]) - right[cut] >= indent
+            ):
+                cuts.append(cut)
+        row = end
+    pieces, start = [], a
+    for cut in cuts:
+        pieces.append((y0 + start, y0 + a + cut))
+        start = a + cut + 1
+    pieces.append((y0 + start, y0 + b))
+    return pieces
 
 
 def _lane_samples(
