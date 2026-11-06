@@ -20,6 +20,7 @@ from dropscore.printed import (
     regressions,
     score,
     score_sequence,
+    since_last_run,
 )
 
 FIRST_BEAT = 0.37
@@ -328,3 +329,15 @@ def test_lining_up_tolerates_a_few_notes_too_many() -> None:
     played = [60, 61, 90, 62, 63, 64, 91, 65, 66, 67, 68, 92, 69]
 
     assert len(_longest_in_common(printed, played)) == 10
+
+
+def test_a_fall_since_the_last_run_is_reported_even_above_the_baseline(tmp_path: Path) -> None:
+    """Sospiro lost ten notes to spurious ones against a run a day old, and the
+    eval stayed quiet because its baseline was older still."""
+    piece = load(_write_piece(tmp_path))
+    good = PrintedResult(name="pulse", printed=232, detected=232, matched=231)
+    worse = PrintedResult(name="pulse", printed=232, detected=240, matched=230)
+    assert since_last_run(piece, good) == []  # nothing to compare with yet
+    assert piece.last_path.exists()
+    assert any("notes F1" in line for line in since_last_run(piece, worse))
+    assert since_last_run(piece, worse) == []  # the bad run is now the last one

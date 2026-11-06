@@ -221,3 +221,15 @@ def test_a_sound_file_the_backend_refuses_is_still_named_as_sound(tmp_path, monk
     sound.write_bytes(b"ID3")
     with pytest.raises(VideoError, match="no video stream"):
         VideoReader(sound)
+
+
+def test_sample_without_a_frame_count_scans_the_file(clip: Path) -> None:
+    """Some containers report no frame count; sampling walks the file instead
+    and still returns distinct frames spread across it."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    with VideoReader(clip) as reader:
+        counted = [f.index for f in reader.sample(5)]
+        reader.info = replace(reader.info, frame_count=0)
+        scanned = [f.index for f in reader.sample(5)]
+    assert scanned == counted

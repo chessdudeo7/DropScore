@@ -28,6 +28,8 @@ a second of drift over a clip.
 from __future__ import annotations
 
 import logging
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Iterable, Iterator, Sequence
 
@@ -100,7 +102,13 @@ class TileTrack:
         ]
         if not falling:
             return min(self.last_bottom + speed * (time - self.last_time), strike_y)
-        intercept = float(np.median([b - speed * t for t, b in falling]))
+        # The median of at most ``recent`` values, by hand: np.median's setup
+        # cost a sixth of a whole transcription at this size.
+        ordered = sorted(b - speed * t for t, b in falling)
+        half = len(ordered) // 2
+        intercept = float(
+            ordered[half] if len(ordered) % 2 else (ordered[half - 1] + ordered[half]) / 2
+        )
         return min(intercept + speed * time, strike_y)
 
 
@@ -1214,10 +1222,18 @@ def transcribe_video(
     stamps: list[_Stamp] = []
     found: list[list[Tile]] = []
     width = 0
-    for frame in stream:
-        width = frame.image.shape[1]
-        stamps.append(_Stamp(frame.index, frame.time))
-        found.append(detect_in_frame(frame, palette, calibration, config))
+    threads = max(1, config.tracking.detect_threads)
+    with ThreadPoolExecutor(max_workers=threads, thread_name_prefix="detect") as pool:
+        # In order, and never more than two frames a thread ahead of tracking.
+        pending: deque = deque()
+        for frame in stream:
+            width = frame.image.shape[1]
+            stamps.append(_Stamp(frame.index, frame.time))
+            pending.append(pool.submit(detect_in_frame, frame, palette, calibration, config))
+            if len(pending) >= 2 * threads:
+                found.append(pending.popleft().result())
+        while pending:
+            found.append(pending.popleft().result())
 
     if len(stamps) < 2:
         raise TrackingError("need at least two frames to measure speed")

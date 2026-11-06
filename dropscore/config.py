@@ -235,6 +235,16 @@ class TileConfig:
     # A key must be this covered by a blob to be claimed from it.
     min_coverage: float = 0.60
 
+    # A one-tile blob wider than this many black keys, and not centred on the
+    # black key nearest it (off by more than ``black_tile_off_centre`` of a
+    # black key), is a white key's tile, so it goes to the nearest white key.
+    # On the keystone copy the fitted board sits a fifth of a key left of the
+    # tiles at its low end, and every falling C2 was read as C#2. Width alone
+    # is not enough: glow spreads a black key's tile to a white tile's width,
+    # but symmetrically, so a halo stays centred on its key.
+    black_tile_max_ratio: float = 1.2
+    black_tile_off_centre: float = 0.25
+
     # A board filmed off a screen at an angle has tile lanes that lean: a tile
     # sits on its key at the strike line and drifts a key or more sideways by
     # the top of the picture, so a tall tile read by its bounding box also
@@ -289,6 +299,12 @@ class TileConfig:
 @dataclass(frozen=True)
 class TrackingConfig:
     """Following tiles and converting them to times (stage 5)."""
+
+    # Frames read for tiles at once. Each frame is read on its own, so the
+    # notes are the same at any count. On the 27s probe render (16 cores):
+    # one thread 80s, two 54s, four 43s, eight 41s. Four, because the service
+    # runs two jobs at once; each thread holds two frames.
+    detect_threads: int = 4
 
     # Scroll-speed measurement. Correlation runs on the background-subtracted
     # residual, so a pair with nothing falling has almost no signal and is

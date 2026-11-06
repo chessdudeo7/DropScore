@@ -22,6 +22,7 @@ from dropscore.evaluate import (
     find_clips,
     find_regressions,
     load_truth,
+    since_last_run,
 )
 from dropscore.notes import Note, NoteSequence
 from dropscore.synth import RenderSpec, generate, render
@@ -303,3 +304,12 @@ def test_corpus_varies_tempo_and_key() -> None:
     assert len({entry.tempo for entry in CORPUS}) >= 5
     assert len({entry.key for entry in CORPUS}) >= 5
     assert any(entry.sustained for entry in CORPUS)
+
+
+def test_a_clip_that_fell_since_the_last_run_is_reported(tmp_path: Path) -> None:
+    last = tmp_path / "last.json"
+    good = Report(clips=[ClipResult("a", _metrics(10, 10, 10))])
+    worse = Report(clips=[ClipResult("a", _metrics(5, 10, 10))])
+    assert since_last_run(last, good) == []
+    assert [r.name for r in since_last_run(last, worse)] == ["a"]
+    assert since_last_run(last, worse) == []

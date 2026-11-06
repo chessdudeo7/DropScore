@@ -451,6 +451,14 @@ def cmd_eval(args: argparse.Namespace) -> int:
                 print(f"  {regression}")
             status = 1
 
+    from .evaluate import since_last_run  # noqa: PLC0415
+
+    fell = since_last_run(args.last, report, _config_from_args(args))
+    if fell:
+        print(f"\n{len(fell)} clip(s) worse than the last run ({args.last}):")
+        for regression in fell:
+            print(f"  {regression}")
+
     if not args.no_printed:
         status = max(status, _eval_printed(args))
     return status
@@ -466,7 +474,7 @@ def _eval_printed(args: argparse.Namespace) -> int:
     """
     import json  # noqa: PLC0415
 
-    from .printed import PrintedResult, find_pieces, load, regressions, score  # noqa: PLC0415
+    from .printed import PrintedResult, find_pieces, load, regressions, score, since_last_run  # noqa: PLC0415
 
     paths = find_pieces(args.printed)
     if not paths:
@@ -489,6 +497,8 @@ def _eval_printed(args: argparse.Namespace) -> int:
 
         result = score(piece, config)
         print(f"  {piece.name}  {result}")
+        for line in since_last_run(piece, result):
+            print(f"    worse than the last run: {line}")
 
         if args.save_baseline:
             if result.error:
@@ -801,6 +811,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("-b", "--baseline", help="baseline JSON to compare against")
     evaluate.add_argument("--save-baseline", metavar="PATH", help="write a new baseline")
+    evaluate.add_argument(
+        "--last",
+        default="out/last_eval.json",
+        help="where the previous run is kept, to report what fell since it (default %(default)s)",
+    )
     evaluate.add_argument(
         "--printed",
         default="out/printed",

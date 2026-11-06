@@ -158,6 +158,11 @@ class PrintedPiece:
     def baseline_path(self) -> Path:
         return self.path.with_name(f"{self.name}.baseline.json")
 
+    @property
+    def last_path(self) -> Path:
+        """Where the previous run's result is kept, beside the baseline."""
+        return self.path.with_name(f"{self.name}.last.json")
+
 
 def load(path: str | Path) -> PrintedPiece:
     path = Path(path)
@@ -590,6 +595,22 @@ def score(piece: PrintedPiece, config: Config = DEFAULT) -> PrintedResult:
         log.exception("could not transcribe %s", piece.video)
         return PrintedResult(name=piece.name, title=piece.title, error=str(exc))
     return score_sequence(piece, sequence, config)
+
+
+def since_last_run(piece: PrintedPiece, result: PrintedResult) -> list[str]:
+    """What got worse since the previous run, then keep this run for the next.
+
+    A baseline is saved by hand and can be months old: a run that loses ten
+    notes against last week still beats a baseline from before those ten were
+    found, and passes. The previous run is always the fresh comparison.
+    """
+    worse = []
+    if piece.last_path.exists():
+        before = PrintedResult.from_dict(json.loads(piece.last_path.read_text(encoding="utf-8")))
+        worse = regressions(before, result)
+    if not result.error:
+        piece.last_path.write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
+    return worse
 
 
 def regressions(before: PrintedResult, after: PrintedResult) -> list[str]:

@@ -166,3 +166,14 @@ def test_a_wide_black_key_tile_is_still_that_black_key() -> None:
 
     assert layout.keys_covered(x0, x1) == [71]
     assert layout.nearest_key((x0 + x1) / 2) == 70
+
+
+@pytest.mark.parametrize("taper", [0.0, 0.08])
+def test_cached_spans_and_centres_match_the_working(taper: float) -> None:
+    layout = KeyboardLayout(x0=13.0, width=1250.0, taper=taper,
+                            black_offsets=(-0.1, 0.1, -0.15, 0.0, 0.15))
+    for pitch in layout.pitches:
+        assert layout.key_span(pitch) == layout._span_of(pitch)
+        assert layout.key_center(pitch) == layout._center_of(pitch)
+    with pytest.raises(ValueError):
+        layout.key_center(layout.first_pitch - 1)

@@ -39,6 +39,7 @@ import numpy as np
 
 from .calibrate import Calibration, median_images
 from .config import Config, DEFAULT
+from .keyboard import KeyboardLayout, is_black
 from .video import Frame
 
 log = logging.getLogger(__name__)
@@ -967,7 +968,16 @@ def detect_in_frame(
             # It must still cover most of that key: a spark's wisp is centred on
             # some key too, and coverage was what kept it from being a note.
             if w <= calibration.white_width:
-                nearest = calibration.layout.nearest_key(x + w / 2)
+                layout = calibration.layout
+                nearest = layout.nearest_key(x + w / 2)
+                if (
+                    nearest is not None
+                    and is_black(nearest)
+                    and w > layout.black_width * cfg.black_tile_max_ratio
+                    and abs(x + w / 2 - layout.key_center(nearest))
+                    > layout.black_width * cfg.black_tile_off_centre
+                ):
+                    nearest = _nearest_white(layout, x + w / 2)
                 pitches = []
                 if nearest is not None:
                     left, right = calibration.layout.key_span(nearest)
@@ -1022,6 +1032,15 @@ def detect_in_frame(
                     )
 
     return tiles
+
+
+def _nearest_white(layout: KeyboardLayout, x: float) -> int | None:
+    """The white key whose centre is closest to column ``x``, if ``x`` lies on it."""
+    pitch = layout.pitch_at(x, 1.0)  # below the black keys every column is white
+    if pitch is None:
+        return None
+    left, right = layout.key_span(pitch)
+    return pitch if left <= x <= right else None
 
 
 def _with_hidden_black_keys(

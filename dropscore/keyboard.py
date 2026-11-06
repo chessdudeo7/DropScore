@@ -172,7 +172,12 @@ class KeyboardLayout:
         White keys sit at the middle of their slot; black keys sit on the
         boundary between the white keys either side of them.
         """
+        if self.first_pitch <= pitch <= self.last_pitch:
+            return self._centers[pitch - self.first_pitch]
         self._require_in_range(pitch)
+        return self._center_of(pitch)
+
+    def _center_of(self, pitch: int) -> float:
         if is_white(pitch):
             left, right = self.white_span(pitch)
             return (left + right) / 2
@@ -185,10 +190,21 @@ class KeyboardLayout:
     def _centers(self) -> tuple[float, ...]:
         # nearest_key runs for every narrow blob of every frame, and asking
         # key_center for all 88 keys each time was a tenth of detection.
-        return tuple(self.key_center(p) for p in self.pitches)
+        return tuple(self._center_of(p) for p in self.pitches)
+
+    @cached_property
+    def _spans(self) -> tuple[tuple[float, float], ...]:
+        # Tracking asks for the same few dozen spans millions of times a video;
+        # a frozen layout's spans never change, so they are worked out once.
+        return tuple(self._span_of(p) for p in self.pitches)
 
     def key_span(self, pitch: int) -> tuple[float, float]:
         """Left and right edges of any key, as drawn."""
+        if self.first_pitch <= pitch <= self.last_pitch:
+            return self._spans[pitch - self.first_pitch]
+        return self._span_of(pitch)
+
+    def _span_of(self, pitch: int) -> tuple[float, float]:
         if is_white(pitch):
             return self.white_span(pitch)
         center = self.key_center(pitch)

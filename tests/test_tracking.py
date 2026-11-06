@@ -1220,3 +1220,25 @@ def test_a_top_clipped_at_the_picture_edge_times_nothing() -> None:
 
     assert seen is not None and truth is not None
     assert seen.duration == pytest.approx(truth.duration, abs=0.02)
+
+
+def test_threaded_detection_gives_the_notes_one_thread_does() -> None:
+    """Frames are read for tiles in parallel and must come back in order."""
+    import dataclasses  # noqa: PLC0415
+
+    from dropscore.tracking import transcribe_video  # noqa: PLC0415
+
+    renderer = _renderer(bars=3)
+    frames = _all_frames(renderer)
+    calibration = _calibration(renderer)
+    palette = discover_palette(frames[:: max(1, len(frames) // 24)], calibration, DEFAULT)
+
+    def run(threads: int) -> NoteSequence:
+        config = dataclasses.replace(
+            DEFAULT, tracking=dataclasses.replace(DEFAULT.tracking, detect_threads=threads)
+        )
+        return transcribe_video(None, calibration, palette, config, frames=iter(frames))[0]
+
+    one, four = run(1), run(4)
+    assert len(one) > 0
+    assert one.notes == four.notes

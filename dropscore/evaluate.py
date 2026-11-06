@@ -323,6 +323,18 @@ def find_regressions(
     return sorted(regressions, key=lambda r: r.delta)
 
 
+def since_last_run(path: str | Path, report: Report, config: Config = DEFAULT) -> list[Regression]:
+    """Clips that fell since the previous run, then keep this run for the next.
+
+    The saved baseline is the contract, but it is only as fresh as its last
+    save; the previous run catches a fall the baseline is too old to see.
+    """
+    path = Path(path)
+    worse = find_regressions(json.loads(path.read_text(encoding="utf-8")), report, config) if path.exists() else []
+    report.save(path)
+    return worse
+
+
 # ── running the corpus ───────────────────────────────────────────────
 
 

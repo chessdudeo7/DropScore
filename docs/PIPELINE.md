@@ -91,7 +91,12 @@ Per frame, in the region *above* the strike line:
    white neighbour, the blob's far edge running straight down the black key's
    own outer edge, a third of a key into the unclaimed white's lane, on most of
    the lane's rows. Two merged white tiles end on a key boundary; a spark cloud
-   has no steady edge at all.
+   has no steady edge at all. A one-tile blob takes the key with the nearest
+   centre, except that a blob too wide for a black key's tile (1.2 black keys)
+   and off its centre goes to the nearest white key: where the fitted board
+   sits a fifth of a key off the tiles (one end of a keystoned copy), a white
+   tile's centre falls nearer the black key beside it. Glow spreads a black
+   tile to a white tile's width, but evenly, so a halo stays on its key's centre.
 
 Known nastiness:
 - **Glow/bloom** inflates blobs. Erode by a fixed fraction of key width, or
@@ -141,7 +146,9 @@ Known nastiness:
   is detected, the detections are kept (a few rectangles a frame), the speed is
   measured from them at eight windows across the clip, and only then are tracks
   built. Measuring the speed from its own decode first used to cost two fifths
-  of the runtime.
+  of the runtime. Frames are read for tiles on a small thread pool, in order
+  (`detect_threads`, 4): each frame is read on its own, so the notes are the
+  same at any count, and a 27s render takes 43s instead of 94s.
   The calibration sample (60 frames, 170MB at 720p) is dropped before that
   pass begins (`tracking.prepare_video`); kept in a local, it was a quarter
   of the peak.

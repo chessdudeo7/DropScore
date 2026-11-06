@@ -1089,3 +1089,28 @@ def test_a_black_key_struck_with_its_white_neighbour_is_found() -> None:
     off = replace(DEFAULT, tiles=replace(DEFAULT.tiles, black_edge_px=0.0))
     found = {tile.pitch for tile in detect_in_frame(frame, palette, calibration, off)}
     assert found == {62}, found
+
+
+def test_a_white_tile_off_its_fitted_key_is_not_read_as_the_black_beside_it() -> None:
+    """The keystone copy's board was fitted a fifth of a key left of its tiles at
+    one end, so each C2's centre sat nearer C#2 and every one was read as C#2.
+    A tile as wide as that cannot be a black key's."""
+    sequence = NoteSequence.of(
+        [Note(onset=0.0, pitch=60, duration=1.0), Note(onset=2.0, pitch=66, duration=1.0)]
+    )
+    renderer = _renderer(sequence=sequence)
+    truth = _truth_calibration(renderer)
+    palette = discover_palette(_frames(renderer), truth)
+    shifted = replace(truth, layout=replace(truth.layout, x0=truth.layout.x0 - 0.3 * truth.white_width))
+
+    white = _frame_at(renderer, renderer.notes[0].onset - 0.5)
+    black = _frame_at(renderer, renderer.notes[1].onset - 0.5)
+    def read(frame, near, calibration, config=DEFAULT):
+        found = detect_in_frame(frame, palette, calibration, config)
+        return {t.pitch for t in found if abs(t.pitch - near) <= 1}
+
+    assert read(white, 60, shifted) == {60}
+    assert read(black, 66, truth) == {66}
+
+    off = replace(DEFAULT, tiles=replace(DEFAULT.tiles, black_tile_max_ratio=99.0))
+    assert read(white, 60, shifted, off) == {61}

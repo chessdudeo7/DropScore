@@ -102,6 +102,22 @@ class Theme:
     strike_line: bool = False
     strike_color: RGB = (255, 255, 255)
 
+    # Tiles shaded by how far they have fallen: at the top of the picture a
+    # tile's hue is turned by this many degrees, at the strike line not at
+    # all. A real recording (sospiro) does this; its two ends clustered as two
+    # colours, and the tiles between them were lost or read as halo notes.
+    height_hue_shift: float = 0.0
+
+    # A glow above each struck key, in its hand's colour, this many rows tall
+    # and a key either side wide. A tile reaching the strike line beside a
+    # held note sinks into it, the way sospiro's arpeggio peaks did.
+    strike_glow: int = 0
+
+    # A dimmed bar across the top of the picture, this many rows tall, that
+    # tiles fall out from under (a title bar; interstellar has one).
+    header: int = 0
+    header_dim: float = 0.35
+
     # Seconds of lookahead visible above the keybed. Sets the scroll speed
     # together with the frame height, which is what stage 5 has to recover.
     lead_time: float = 3.0

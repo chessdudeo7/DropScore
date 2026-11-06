@@ -14,7 +14,7 @@ real recordings scored against their printed music:
 
 ```
 corpus F1 0.9996   hands 0.9677   key 15/15   tempo 15/15
-written 354/370    staff 588/593  640 tests
+written 354/370    staff 588/593  655 tests
 ```
 
 **Read that F1 with care.** The synthetic clips are rendered by this repository's

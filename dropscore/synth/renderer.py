@@ -353,7 +353,7 @@ class SynthRenderer:
                 break  # sorted by onset: nothing later is visible yet
             rect = self._tile_rect(note, t)
             if rect is not None:
-                rects.append((rect, theme.color_for(note.hand)))
+                rects.append((rect, self._shaded(theme.color_for(note.hand), rect)))
             if note.onset <= t < note.offset:
                 active.append(note)
 
@@ -362,6 +362,12 @@ class SynthRenderer:
 
         for rect, color in rects:
             self._draw_tile(canvas, rect, color)
+
+        if theme.strike_glow > 0 and active:
+            self._draw_strike_glow(canvas, active)
+        if theme.header > 0:
+            rows = min(theme.header, self.strike_y)
+            canvas[:rows] = (canvas[:rows] * theme.header_dim).astype(np.uint8)
 
         if self._sparks:
             self._draw_sparks(canvas, t)
@@ -374,6 +380,32 @@ class SynthRenderer:
         if theme.caption and self.bottom_margin > 8:
             self._draw_caption(canvas)
         return canvas
+
+    def _shaded(self, color: RGB, rect: tuple[int, int, int, int]) -> RGB:
+        """The tile's colour turned toward ``height_hue_shift`` the higher it is."""
+        shift = self.theme.height_hue_shift
+        if not shift:
+            return color
+        middle = (rect[1] + rect[3]) / 2
+        height = 1.0 - min(1.0, max(0.0, middle / self.strike_y))
+        hsv = cv2.cvtColor(np.uint8([[color]]), cv2.COLOR_RGB2HSV_FULL)[0, 0].astype(np.int32)
+        hsv[0] = (hsv[0] + int(round(shift * height * 256 / 360))) % 256
+        rgb = cv2.cvtColor(np.uint8([[hsv]]), cv2.COLOR_HSV2RGB_FULL)[0, 0]
+        return (int(rgb[0]), int(rgb[1]), int(rgb[2]))
+
+    def _draw_strike_glow(self, canvas: np.ndarray, active: list[Note]) -> None:
+        """A glow above each struck key, a key either side, fading upward."""
+        rows = min(self.theme.strike_glow, self.strike_y)
+        top = self.strike_y - rows
+        fade = np.linspace(0.0, 0.8, rows, dtype=np.float32)[:, None, None]
+        band = canvas[top : self.strike_y].astype(np.float32)
+        for note in active:
+            left, right = self.layout.key_span(note.pitch)
+            reach = self.layout.white_width
+            x0, x1 = max(0, int(left - reach)), min(canvas.shape[1], int(right + reach))
+            colour = np.array(_bgr(self.theme.color_for(note.hand)), dtype=np.float32)
+            band[:, x0:x1] = band[:, x0:x1] * (1 - fade) + colour * fade
+        canvas[top : self.strike_y] = band.astype(np.uint8)
 
     def _draw_sparks(self, canvas: np.ndarray, t: float) -> None:
         """Draw the sparks alive at time ``t``.

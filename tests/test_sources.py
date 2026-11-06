@@ -64,3 +64,11 @@ def test_resolve_rejects_missing_file() -> None:
 def test_resolve_rejects_non_youtube_url() -> None:
     with pytest.raises(SourceError, match="only YouTube URLs and local"):
         resolve("https://vimeo.com/12345678")
+
+
+def test_a_youtube_link_without_the_extra_says_what_to_install(monkeypatch) -> None:
+    import sys  # noqa: PLC0415
+
+    monkeypatch.setitem(sys.modules, "yt_dlp", None)  # import raises ImportError
+    with pytest.raises(SourceError, match="pip install"):
+        resolve("https://www.youtube.com/watch?v=dQw4w9WgXcQ")

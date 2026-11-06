@@ -409,3 +409,35 @@ def test_generator_honours_a_requested_tempo() -> None:
         # The finest spacing must scale with the beat, or the tempo argument
         # is being recorded but not used.
         assert spacing < 60.0 / bpm
+
+
+def test_stress_options_shade_glow_and_dim() -> None:
+    """The three looks from real recordings the corpus had no clip of."""
+    import dataclasses  # noqa: PLC0415
+
+    plain = get_theme("classic")
+    stressed = dataclasses.replace(plain, height_hue_shift=30.0, strike_glow=12, header=40)
+    seq = _one_note(pitch=60, onset=2.0, duration=1.0)
+    spec = RenderSpec(width=640, height=360, theme=stressed)
+    renderer = SynthRenderer(seq, spec)
+
+    # High in the fall the tile is turned in hue; at the strike line it is not.
+    high = renderer._shaded(plain.right_color, (0, 0, 10, 20))
+    low = renderer._shaded(plain.right_color, (0, renderer.strike_y - 20, 10, renderer.strike_y))
+    def off(c): return sum(abs(a - b) for a, b in zip(c, plain.right_color))
+    assert off(high) > 40 and off(low) < 8
+
+    # While the key sounds, a key's width beside it glows above the strike line.
+    left, right = renderer.layout.key_span(60)
+    beside = int(right + renderer.layout.white_width / 2)
+    sounding = int((renderer.notes[0].onset + 0.5) * spec.fps)
+    struck = renderer.frame(sounding)
+    silent = SynthRenderer(seq, RenderSpec(width=640, height=360, theme=plain)).frame(sounding)
+    row = renderer.strike_y - 2
+    assert struck[row, beside].astype(int).sum() > silent[row, beside].astype(int).sum() + 60
+
+    # The header dims a tile falling under it.
+    under = SynthRenderer(seq, spec).frame(int(0.0 * spec.fps))
+    clear = SynthRenderer(seq, RenderSpec(width=640, height=360, theme=plain)).frame(0)
+    rows = np.nonzero(clear[:40].reshape(40, -1).max(axis=1) > 100)[0]
+    assert rows.size and under[rows[0]].max() < clear[rows[0]].max()
