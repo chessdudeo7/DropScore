@@ -546,6 +546,31 @@ class TrackingConfig:
     # it had cost on `sparks`, where sparks bridged two strikes of one key, and
     # lifted the glow render 0.823 -> 0.843 (0.754 -> 0.776 at 30fps).
     merge_same_end: float = 0.04
+    # A track first seen only after the note before it on the key had been
+    # struck, starting within this many seconds of that note's end, is what
+    # was left of the same tile, lost at the strike line and picked up again.
+    # A new tile is on screen for the whole fall before. On the Alkan render
+    # these were most of its 19 phantoms: flickers just after a note's end,
+    # and the second halves of notes taller than the screen. At 0.4, 13 go
+    # and one missed note comes back (F1 0.987 -> 0.995); at 1.0 real notes
+    # start to be swallowed.
+    tail_reach: float = 0.4
+    # And first seen no more than this many seconds before its own onset:
+    # picked up at the line, not falling. Without it a real capture's repeated
+    # eighths, each tile first seen after the one before was struck but half
+    # a second ahead of its own strike, were merged (Interstellar 133 -> 130).
+    # The Alkan pieces were seen 0.11 to 0.2s ahead.
+    tail_lead: float = 0.3
+    # A note is kept only if the earliest track feeding it was first seen at
+    # least this share of the fall before its onset (or on the first frame).
+    # Real tiles on the Alkan render: 0.96 or more, and 0.33 at the least on a
+    # desaturated copy; sparks the copy let in: median 0.24. At 0.4 that copy
+    # goes from F1 0.766 to 0.960 for one real note, the clean render from
+    # 0.994 to 0.998, the glow probe from 0.9305 to 0.9778. Off, because it
+    # also removes two B3s under a B5 in Fur Elise, 30 seconds outside its
+    # page, which by every sign are phantoms -- and without them the piece's
+    # metre reads 3/4 and its page's written values fall from 89 to 0.
+    min_fall_seen: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -599,6 +624,11 @@ class ScoreConfig:
     # on every clip and page where they decide it correctly, and 2.95 apart on
     # the page they misled.
     accent_max_gap_beats: float = 2.0
+    # Where they decide it, no beat longer than this many of their typical
+    # spacings is on offer. Long notes a quarter apart repeat a bar later too,
+    # and a bar of 3/4 at 130 is slow enough to pass for a beat: 9 of 120
+    # generated waltzes were read in bars, as 12/8 at half speed.
+    accent_beat_span: float = 2.0
 
     # Seconds per step when tracking where the beats fall, and how hard the
     # tracker is held to the tempo it started at. The inertia is deliberately
@@ -813,6 +843,9 @@ class ScoreConfig:
     # genuinely held under a moving line is being cut, and one page lost
     # three of its values.
     legato_reach: float = 0.5
+    # Unless the note is part of a chord held while a line moves above it:
+    # that is a voice, not a slur.
+    held_chord_is_voice: bool = True
 
     # How near a beat line a note must start, in beats, before its value is
     # taken out to the end of that beat. A note on a beat, released early and

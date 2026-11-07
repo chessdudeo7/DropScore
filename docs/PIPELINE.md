@@ -103,9 +103,10 @@ Known nastiness:
   threshold on the saturated core rather than the halo. As built, there is no
   erosion: each colour accepts pixels within a radius set by how tightly its
   own pixels cluster. That spread is read from the colour's densest band when
-  most pixels sit there, so a particle cloud around flat tiles cannot widen
+  enough pixels sit there, so a particle cloud around flat tiles cannot widen
   the radius (`tiles._member_spread`). On a smoke-effect render it had widened
-  from 22 to 37, and every cloud read as a tile.
+  from 22 to 37, and every cloud read as a tile. "Enough" is 28%
+  (`spread_core_share`): a 68-second read of a render with sparks held 33%.
 - **A tile shaded through hue** clusters into two colours either side of its
   ramp when the shading runs past the hue tolerance that merges a gradient's
   shades: one recording's right hand runs from green to yellow-green, 51
@@ -204,6 +205,12 @@ Known nastiness:
   even before the tile lands: on a glowing render a tile's halo runs ahead
   as a blob of its own and the tile reaches it mid-fall, and read on as one
   the halo took the tile's length and was merged with the real note behind.
+- A tile lost at the strike line and picked up again is a new track that
+  first appears only after the previous note on its key was struck, a few
+  frames before its own onset (`tail_lead`), and near that note's end
+  (`tail_reach`). It is merged into that note; a real next tile has been
+  falling for longer. On the Alkan render these were flickers after a note's
+  end and the second halves of notes taller than the screen.
 - A board cut off at one side of the picture is placed in the one octave
   where that many white keys fit on a piano.
 - A screen recording can show the video in a window beside other windows.
@@ -221,6 +228,11 @@ Now it is a symbolic-music problem, which is well-trodden:
 - **Tempo + downbeat.** Onset intervals cluster around multiples of the beat. Fit
   a tempo grid (autocorrelation of the onset histogram, or a simple DP over
   candidate BPMs) and allow a slow tempo curve for rubato.
+  As built, where long notes decide the beat, no beat longer than twice their
+  usual spacing is on offer (`accent_beat_span`): they repeat a bar later too,
+  and a 3/4 bar at 130 is slow enough to pass for a beat. Quick beats whose
+  weight comes round every six, clearly more than every three or four, are
+  eighths in 6/8 (`six_eight_*`).
 - **Quantize** to 1/16 or 1/32, with a penalty for moving a note far — never snap
   blindly, snapping is what makes machine transcriptions unreadable.
   As built, a note that misses the steady grid is tried again against its
@@ -230,6 +242,9 @@ Now it is a symbolic-music problem, which is well-trodden:
   the second at its measured onset (`keep_repeats`): snapped together they
   were one note to the MIDI writer, and a waltz lost six repeats played
   faster than a sixteenth.
+- **Written values.** A note held into the next one in its hand is legato and
+  is written ending there, unless it is a chord note with the next notes all
+  above it: that is a voice held under a moving line (`held_chord_is_voice`).
   A page in declared sections (`score.sections`) is read in beat positions
   throughout, and each section snaps to its own beats: the count runs over
   the join by a fraction of a beat, and against whole numbers that fraction

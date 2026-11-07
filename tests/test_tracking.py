@@ -615,6 +615,44 @@ def test_a_second_tile_seen_before_the_first_struck_is_its_own_note() -> None:
     assert len(_merge_overlaps([bridged, second], first_seen=seen_late)) == 1
 
 
+@pytest.mark.parametrize(
+    ("note", "tail"),
+    [
+        ((19.50, 0.50), (19.88, 0.18)),  # overlapping, ending 58ms after it
+        ((22.50, 0.50), (23.09, 0.05)),  # a flicker after the note's end
+        ((56.01, 2.97), (59.20, 1.81)),  # the rest of a tile taller than the screen
+    ],
+)
+def test_a_tile_picked_up_again_at_the_line_is_the_same_note(
+    note: tuple[float, float], tail: tuple[float, float]
+) -> None:
+    """On a render with sparks the track lost a tile at the strike line and
+    picked up what was left as a new one, only after the note had sounded:
+    nine flickers just after a note's end and four held notes cut in two were
+    19 phantoms on the Alkan render. A new tile would have been falling for
+    seconds before."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.tracking import _merge_overlaps  # noqa: PLC0415
+
+    first = Note(onset=note[0], pitch=55, duration=note[1], hand="R", velocity=80)
+    rest = Note(onset=tail[0], pitch=55, duration=tail[1], hand="R", velocity=80)
+    seen = {id(first): first.onset - 3.0, id(rest): rest.onset - 0.15}
+    merged = _merge_overlaps([first, rest], first_seen=seen)
+    assert len(merged) == 1 and merged[0].offset == pytest.approx(rest.offset)
+
+    early = {id(first): first.onset - 3.0, id(rest): first.onset - 1.0}
+    assert len(_merge_overlaps([first, rest], first_seen=early)) == 2
+
+    # Interstellar's repeated E4s were each first seen after the one before
+    # was struck, but half a second ahead of their own onset: real tiles.
+    ahead = {id(first): first.onset - 3.0, id(rest): rest.onset - 0.5}
+    assert len(_merge_overlaps([first, rest], first_seen=ahead)) == 2
+
+    off = replace(DEFAULT, tracking=replace(DEFAULT.tracking, tail_reach=0.0))
+    assert len(_merge_overlaps([first, rest], off, first_seen=seen)) == 2
+
+
 def test_fragments_of_one_tile_still_merge() -> None:
     """The bound must not undo what the merge is for: one tile broken into
     pieces a few frames apart is still one note."""
@@ -1242,3 +1280,28 @@ def test_threaded_detection_gives_the_notes_one_thread_does() -> None:
     one, four = run(1), run(4)
     assert len(one) > 0
     assert one.notes == four.notes
+
+
+def test_a_note_never_seen_falling_is_a_spark() -> None:
+    """A compressed copy of a render with sparks widened the tile colour until
+    sparks at the strike line read as tiles: 447 phantoms, each first seen a
+    fraction of a fall before its onset, where every real tile had been seen
+    for nearly the whole fall."""
+    from dataclasses import replace  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from dropscore.tracking import _seen_falling  # noqa: PLC0415
+
+    calibration = SimpleNamespace(strike_y=450, picture_top=0)  # a 3s fall at 150px/s
+    tile = Note(onset=10.0, pitch=60, duration=0.5, hand="R", velocity=80)
+    spark = Note(onset=10.0, pitch=62, duration=0.2, hand="R", velocity=80)
+    early = Note(onset=2.5, pitch=64, duration=0.5, hand="R", velocity=80)
+    seen = {id(tile): 7.1, id(spark): 9.7, id(early): 2.3}
+    notes = [tile, spark, early]
+
+    on = replace(DEFAULT, tracking=replace(DEFAULT.tracking, min_fall_seen=0.4))
+    kept = _seen_falling(notes, notes, seen, 150.0, calibration, 0.0, on)
+    assert [n.pitch for n in kept] == [60, 64]  # struck within the first fall: kept
+
+    # Off by default: it is a trade (see min_fall_seen).
+    assert len(_seen_falling(notes, notes, seen, 150.0, calibration, 0.0)) == 3

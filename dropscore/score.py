@@ -776,18 +776,20 @@ def _beat_from_tatum(
     # offer, and was read at half its tempo. Everywhere they are evidence they
     # sit about a beat apart.
     chosen = onsets
+    longest = math.inf
     if accented is not None and len(accented) >= cfg.min_accented_onsets:
         spacing = np.diff(np.unique(np.round(accented, 2)))
         spacing = spacing[spacing > tatum / 2]
         conventional_beat = tatum * cfg.steps_per_beat
         if len(spacing) and np.median(spacing) <= cfg.accent_max_gap_beats * conventional_beat:
             chosen = accented
+            longest = cfg.accent_beat_span * float(np.median(spacing))
 
     best: tuple[float, float] | None = None
     for multiple in BEAT_MULTIPLES:
         beat = tatum * multiple
         bpm = 60.0 / beat
-        if not cfg.min_bpm <= bpm <= cfg.max_bpm:
+        if not cfg.min_bpm <= bpm <= cfg.max_bpm or beat > longest + tatum / 2:
             continue
 
         support = _repeats_over_windows(
@@ -1430,6 +1432,20 @@ def _next_in_line(
     return later[0].onset if later else None
 
 
+def _held_under(voice: list[Note], note: Note, following: float) -> bool:
+    """Whether a chord note runs on under a line moving above it.
+
+    Alkan's op. 31 no. 2 holds two-note chords for a quarter while the melody
+    over them moves in eighths. The chord outlasts the next onset in its hand
+    by a whole eighth, which reads as legato overlap, and 41 of its quarters
+    were cut to eighths. A single note overlapping the next is still legato:
+    the arpeggios of Fur Elise's left hand overlap as far, and are not chords.
+    """
+    chord = [n.pitch for n in voice if abs(n.onset - note.onset) < 1e-6]
+    after = [n.pitch for n in voice if abs(n.onset - following) < 1e-6]
+    return len(chord) >= 2 and bool(after) and min(after) > note.pitch
+
+
 def notate_durations(
     sequence: NoteSequence, analysis: Analysis, config: Config = DEFAULT
 ) -> NoteSequence:
@@ -1626,6 +1642,7 @@ def notate_durations(
                     and duration <= note.duration + 1e-9
                     and following <= end
                     and (beyond is None or end <= beyond + cfg.legato_reach * step)
+                    and not (cfg.held_chord_is_voice and _held_under(voice, note, following))
                 ):
                     duration = gap
                 elif duration <= note.duration + 1e-9 and following <= end:

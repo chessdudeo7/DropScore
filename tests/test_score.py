@@ -173,6 +173,18 @@ def test_quick_eighths_whose_bass_comes_round_every_six_are_six_eight() -> None:
     assert analyze(piece, off).beats_per_bar != 6
 
 
+@pytest.mark.parametrize("seed", [10, 34])
+def test_a_waltz_whose_long_notes_come_a_quarter_apart_is_not_beaten_in_bars(seed: int) -> None:
+    """Long notes a quarter apart repeat a bar later too, and in three a bar is
+    slow enough to be a beat: these waltzes came back 12/8 at half speed."""
+    piece = generate(seed=seed, bars=16, tempo=130.0, beats_per_bar=3)
+    result = analyze(piece)
+    assert (result.beats_per_bar, result.beat_type) == (3, 4)
+    assert result.tempo == pytest.approx(130.0, rel=0.05)
+    off = replace(DEFAULT, score=replace(DEFAULT.score, accent_beat_span=1e9))
+    assert analyze(piece, off).beats_per_bar == 12
+
+
 def test_a_steady_pulse_under_a_slow_melody_is_heard_in_three() -> None:
     """The shape of a real capture that came back in four: a short repeated
     note on every beat, and over it a melody and bass moving once a bar in
@@ -1266,6 +1278,30 @@ def test_a_note_overlapping_only_its_neighbour_is_written_as_ending_there() -> N
     assert all(abs(v - 1.0) < 0.05 for v in values), (
         f"an overlapping note kept its overlap as written value: {values[:4]}"
     )
+
+
+def test_a_chord_held_under_a_moving_line_keeps_its_value() -> None:
+    """Alkan holds two-note chords a quarter while the melody above moves in
+    eighths; read as legato overlap, 41 of those quarters were cut to eighths."""
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = []
+    for i in range(8):
+        start = i * beat
+        notes += [Note(onset=start, pitch=p, duration=beat, hand="R") for p in (55, 58)]
+        notes += [
+            Note(onset=start, pitch=65, duration=beat / 2, hand="R"),
+            Note(onset=start + beat / 2, pitch=67, duration=beat / 2, hand="R"),
+        ]
+
+    def chord_values(config: Config) -> list[float]:
+        written = notate_durations(NoteSequence.of(notes), _analysis(), config)
+        return [n.duration / beat for n in sorted(written) if n.pitch in (55, 58)][:-2]
+
+    assert all(abs(v - 1.0) < 0.05 for v in chord_values(DEFAULT))
+    off = replace(DEFAULT, score=replace(DEFAULT.score, held_chord_is_voice=False))
+    assert all(abs(v - 0.5) < 0.05 for v in chord_values(off))
 
 
 def test_a_note_on_a_beat_is_written_as_filling_that_beat() -> None:

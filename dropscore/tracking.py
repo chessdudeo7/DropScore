@@ -890,7 +890,58 @@ def tracks_to_notes(
         if note is not None:
             notes.append(note)
             first_seen[id(note)] = track.times[0]
-    return NoteSequence.of(_merge_overlaps(notes, config, first_seen))
+    merged = _merge_overlaps(notes, config, first_seen)
+    start = min((t.times[0] for t in tracks if t.times), default=0.0)
+    return NoteSequence.of(
+        _seen_falling(merged, notes, first_seen, speed, calibration, start, config)
+    )
+
+
+def _seen_falling(
+    merged: list[Note],
+    pieces: list[Note],
+    first_seen: dict[int, float],
+    speed: float,
+    calibration: Calibration,
+    start: float,
+    config: Config = DEFAULT,
+) -> list[Note]:
+    """Keep the notes whose tile was seen falling before it was struck.
+
+    A tile is on screen for the whole fall, so the earliest track feeding a
+    note is first seen most of a fall before its onset: on the Alkan render
+    every real note was, at 0.96 of the fall or more. Sparks thrown up at the
+    strike line are not: once a compressed copy widened the tile colour enough
+    to take them in, they came back as 447 phantoms beside 803 real notes,
+    first seen a median 0.24 of a fall ahead. A note struck within one fall of
+    the video's start is kept: its fall began before the first frame, or
+    while the picture was still fading in (Interstellar's first E4).
+    """
+    share = config.tracking.min_fall_seen
+    fall = (calibration.strike_y - calibration.picture_top) / speed if speed > 0 else 0.0
+    if share <= 0 or fall <= 0:
+        return merged
+    by_pitch: dict[int, list[tuple[float, float]]] = {}
+    for piece in pieces:
+        by_pitch.setdefault(piece.pitch, []).append((piece.onset, first_seen[id(piece)]))
+    kept = []
+    for note in merged:
+        seen = min(
+            (
+                when
+                for onset, when in by_pitch.get(note.pitch, [])
+                if note.onset - 0.12 <= onset <= note.offset + 0.05
+            ),
+            default=note.onset,
+        )
+        if note.onset <= start + fall or note.onset - seen >= share * fall:
+            kept.append(note)
+        else:
+            log.debug(
+                "dropping pitch %d at %.2fs: first seen %.2f of a fall before it",
+                note.pitch, note.onset, (note.onset - seen) / fall,
+            )
+    return kept
 
 
 def _merge_overlaps(
@@ -973,7 +1024,14 @@ def _merge_overlaps(
                 abs(following.offset - current.offset) <= config.tracking.merge_same_end
                 and (seen is None or seen >= current.onset)
             )
-            if overlaps and far and not close and not fragment and not one_end:
+            tail = (
+                config.tracking.tail_reach > 0
+                and seen is not None
+                and seen >= current.onset
+                and following.onset - seen <= config.tracking.tail_lead
+                and following.onset - current.offset <= config.tracking.tail_reach
+            )
+            if overlaps and far and not close and not fragment and not one_end and not tail:
                 if following.onset > current.onset:
                     merged.append(
                         Note(
@@ -987,7 +1045,7 @@ def _merge_overlaps(
                 current = following
                 continue
 
-            if close or overlaps:
+            if close or overlaps or tail:
                 end = max(current.offset, following.offset)
                 current = Note(
                     onset=current.onset,
