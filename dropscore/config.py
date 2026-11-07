@@ -214,9 +214,12 @@ class TileConfig:
     # gradient has no such band; a particle cloud around flat tiles does.
     spread_core_width: float = 4.0
     # The glow render's band held 0.41 at 60fps and 0.38 at 30fps, where the
-    # encoder blurs the tile a little more. Nothing that should keep its
-    # median holds more than 0.34 with the median outside its band.
-    spread_core_share: float = 0.35
+    # encoder blurs the tile a little more. The first 68 seconds of a render
+    # with sparks held 0.33 (the whole video 0.52): its sparks fill more of a
+    # short sample, and at 0.35 the median let them in as 89 phantom notes.
+    # Every colour that keeps its median is held there by the gap below or by
+    # its median sitting under the band; by share alone the closest is 0.21.
+    spread_core_share: float = 0.28
     # ...and only when the next spread_core_width past the band holds fewer than
     # this share of the band's members: smoke stands apart, real variation does
     # not. The glow render's gap reads 0.05 at 60fps and 0.11 at 30fps; the
@@ -658,6 +661,14 @@ class ScoreConfig:
     # The slowest a unit of two tatums may move and still be written as an
     # eighth (0.5s is 120 to the minute); slower, it is a quarter.
     max_eighth_seconds: float = 0.5
+    # A beat this quick or quicker whose weight comes round every six beats
+    # rather than three or four is an eighth in 6/8. Alkan's op. 31 no. 2
+    # opens at 120 eighths to the minute and repeats at six (0.28) far more
+    # than three (-0.05); read as 3/4, every bar was half the page's.
+    six_eight_max_beat: float = 0.55
+    # ...and it must match at six this much better than at three, four or not
+    # at all.
+    six_eight_margin: float = 0.2
 
     # Third, how idiomatic the commonest note value looks against the beat.
     # A piece written almost entirely in sixteenths is far rarer than one in

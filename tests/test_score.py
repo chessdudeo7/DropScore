@@ -153,6 +153,26 @@ def test_the_meter_is_measured_not_assumed(beats_per_bar: int) -> None:
         assert analyze(piece).beats_per_bar == beats_per_bar, f"seed {seed}"
 
 
+def test_quick_eighths_whose_bass_comes_round_every_six_are_six_eight() -> None:
+    """The shape of Alkan's op. 31 no. 2: eighths at 120 over a bass held the
+    whole bar. Read as 3/4, every bar line fell mid-bar and no value was right."""
+    eighth = 0.5
+    notes = []
+    for bar in range(12):
+        start = bar * 6 * eighth
+        notes.append(Note(onset=start, pitch=41, duration=5.7 * eighth, hand="L"))
+        notes += [
+            Note(onset=start + k * eighth, pitch=p, duration=0.9 * eighth)
+            for k, p in enumerate((60, 64, 67, 65, 64, 62))
+        ]
+    piece = NoteSequence.of(notes)
+
+    result = analyze(piece)
+    assert (result.beats_per_bar, result.beat_type) == (6, 8)
+    off = replace(DEFAULT, score=replace(DEFAULT.score, six_eight_max_beat=0.0))
+    assert analyze(piece, off).beats_per_bar != 6
+
+
 def test_a_steady_pulse_under_a_slow_melody_is_heard_in_three() -> None:
     """The shape of a real capture that came back in four: a short repeated
     note on every beat, and over it a melody and bass moving once a bar in

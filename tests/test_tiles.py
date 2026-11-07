@@ -979,6 +979,18 @@ def test_spread_of_a_flat_colour_ignores_the_smoke_around_it():
     assert _spread(distances) < 7.0
 
 
+def test_spread_ignores_sparks_that_fill_two_thirds_of_a_short_sample():
+    # The first 68 seconds of a sparks render: 33% of the members in the band,
+    # the sparks set apart from it, the median out among them at 12.
+    rng = np.random.default_rng(4)
+    band = rng.uniform(2.0, 5.5, 330)
+    sparks = np.concatenate([rng.uniform(10.0, 13.0, 300), rng.uniform(16.0, 44.0, 370)])
+    distances = np.concatenate([band, sparks])
+    assert np.median(distances) > 10.0
+    assert _spread(distances) < 5.0
+    assert _spread(distances, spread_core_share=0.35) > 10.0
+
+
 def test_spread_of_a_gradient_keeps_its_median():
     # A ramp spreads its pixels evenly: no band holds 40% of them.
     distances = np.random.default_rng(1).uniform(0.0, 30.0, 1000)

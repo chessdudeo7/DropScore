@@ -444,7 +444,7 @@ def beat_time(position: float, analysis: Analysis) -> float:
 def estimate_meter(
     sequence: NoteSequence, beat: float, phase: float, config: Config = DEFAULT
 ) -> int:
-    """Beats in a bar: three or four.
+    """Beats in a bar: three or four, or six eighths.
 
     Read from how the weight of the music repeats. Where the long and low notes
     fall is a series over beats, and in three it comes round every three while
@@ -482,7 +482,15 @@ def estimate_meter(
     def match(lag: int) -> float:
         return float(np.dot(centred[:-lag], centred[lag:])) / energy
 
-    return 3 if match(3) > match(4) else 4
+    three, four = match(3), match(4)
+    # A quick beat may be the eighth of a compound bar: 6/8 repeats at six
+    # and only weakly at its half bar of three. A 3/4 page measured the
+    # other way round (0.39 at three, 0.24 at six). Short pieces in four
+    # match at no lag, and six had won 58 of 120 such by being least negative.
+    six = match(6) if series.size > 12 else 0.0
+    if beat <= cfg.six_eight_max_beat and six >= cfg.six_eight_margin + max(three, four, 0.0):
+        return 6
+    return 3 if three > four else 4
 
 
 def _meter(
@@ -547,7 +555,8 @@ def _meter(
 
         return count, 8, eighth
 
-    return estimate_meter(sequence, beat, phase, config), 4, beat
+    count = estimate_meter(sequence, beat, phase, config)
+    return count, 8 if count == 6 else 4, beat
 
 
 def _pitch_returns(sequence: NoteSequence, tatum: float, lag: int) -> float:
