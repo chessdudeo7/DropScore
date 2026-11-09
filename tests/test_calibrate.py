@@ -403,6 +403,28 @@ def test_finds_the_keyboard_of_a_video_playing_in_a_window() -> None:
         assert result.layout.key_center(pitch) == pytest.approx(expected, abs=1.5)
 
 
+def test_a_busy_lane_does_not_cut_the_window_in_two() -> None:
+    """A key held through most of the sampled frames leaves its lane's median
+    off the background colour. On a corner-window copy of the Alkan render
+    three such lanes cut the video at its middle and half the keyboard was
+    lost; inside the motion they are lanes, not the window's edge."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.calibrate import video_columns  # noqa: PLC0415
+
+    renderer = _render()
+    frames = [replace(f, image=_on_a_desktop(f.image)) for f in _frames(renderer)]
+    fall = renderer.layout.key_span(60)
+    lo, hi = 18 + int(fall[0] / 2), 18 + int(fall[1] / 2)
+    for f in frames:
+        f.image[45 : 40 + int(renderer.strike_y / 2) - 4, lo:hi] = (230, 80, 200)  # held all along
+    found = video_columns(frames)
+    assert found is not None and found[0] <= 20 and found[1] >= 18 + renderer.layout.width / 2 - 2
+    narrow = replace(DEFAULT, calibration=replace(DEFAULT.calibration, video_lane_share=0.0))
+    cut = video_columns(frames, narrow)
+    assert cut is None or cut[0] > lo or cut[1] < hi
+
+
 def test_a_board_cut_off_on_the_left_starts_on_the_piano() -> None:
     """A full piano with its lowest four white keys cut off by the picture
     shows 48 white keys from an E. Centred on middle C those would start at

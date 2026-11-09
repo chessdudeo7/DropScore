@@ -1150,3 +1150,40 @@ def test_a_white_tile_off_its_fitted_key_is_not_read_as_the_black_beside_it() ->
 
     off = replace(DEFAULT, tiles=replace(DEFAULT.tiles, black_tile_max_ratio=99.0))
     assert read(white, 60, shifted, off) == {61}
+
+
+def test_a_seam_blurred_into_the_mask_is_found_in_the_colour() -> None:
+    """Recompressed, a copy widens each colour's radius until the rounded
+    corners at a seam pass for tile and the mask is full width throughout;
+    the colour still turns at both edges for a row or two."""
+    from dropscore.config import DEFAULT  # noqa: PLC0415
+    from dropscore.tiles import _graded_seams  # noqa: PLC0415
+
+    distance = np.full((120, 24), 7.0, dtype=np.float32)
+    distance[:, :2] = distance[:, -2:] = 60.0  # the halo the radius took in
+    distance[70:72, 2:5] = 18.0  # both corners turn at the seam
+    distance[70:72, 19:22] = 20.0
+    assert _graded_seams(distance, 0, 120, DEFAULT.tiles, 100) == [(100, 170), (171, 220)]
+
+    one_side = distance.copy()
+    one_side[70:72, 19:22] = 7.0  # a neighbour's edge beside one side only
+    assert _graded_seams(one_side, 0, 120, DEFAULT.tiles, 100) == [(100, 220)]
+
+
+def test_colours_are_found_over_the_board_not_the_desktop() -> None:
+    """A video in a window beside a desktop: over the whole frame the desktop
+    outweighed the video's background, which was then taken for a tile colour."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.calibrate import calibrate  # noqa: PLC0415
+    from dropscore.config import DEFAULT  # noqa: PLC0415
+    from dropscore.tiles import discover_palette  # noqa: PLC0415
+    from tests.test_calibrate import _frames, _on_a_desktop, _render  # noqa: PLC0415
+
+    renderer = _render()
+    frames = [replace(f, image=_on_a_desktop(f.image)) for f in _frames(renderer)]
+    calibration = calibrate(frames)
+    found = discover_palette(frames, calibration)
+    assert found.background[0] < 20  # the video's dark ground, not the desktop
+    whole = replace(DEFAULT, tiles=replace(DEFAULT.tiles, palette_in_board=False))
+    assert discover_palette(frames, calibration, whole).background[0] > 20

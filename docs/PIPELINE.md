@@ -127,6 +127,9 @@ Known nastiness:
   scroll speeds. Some renderers leave no gap at all: rounded tiles drawn flush
   meet only in a pinch, both sides of the column stepping in for a few rows
   between solid rows. That pinch is read as the seam (`waist_*` in TilesConfig).
+  On a blurred or recompressed copy the widened colour match fills the pinch
+  in; the seam is then read from the colour itself, where both edge bands turn
+  from the tile colour against the middle of the same row (`graded_seams`).
 - **Particle effects at the strike line** — just ignore everything below the strike
   line + a small margin; the tile has already been measured by then.
 
@@ -221,6 +224,9 @@ Known nastiness:
   When the whole picture will not calibrate, `calibrate.video_columns` finds
   the columns whose fall-area rows are the moving region's background colour,
   and the keyboard is fitted inside them and shifted back into the frame.
+  A busy key lane inside the motion is not taken for the window's edge
+  (`video_lane_share`), and the tile colours are found over the keyboard's
+  columns only (`palette_in_board`), so the desktop is not read as background.
 
 ## 5. Notes → score
 
@@ -237,7 +243,9 @@ Now it is a symbolic-music problem, which is well-trodden:
   (`accent_beat_span`): they repeat a bar later too, and a 3/4 bar at 130 is
   slow enough to pass for a beat. A tracked beat chain begins on the beat read
   from the opening's first 8 beats, offset and pace both
-  (`anchor_tracked_beats`), not on whatever note comes first. Quick beats whose
+  (`anchor_tracked_beats`), not on whatever note comes first. Four bars of a
+  waltz (12 beats) are enough to be asked about the metre at all
+  (`meter_min_beats`). Quick beats whose
   weight comes round every six, clearly more than every three or four, are
   eighths in 6/8 (`six_eight_*`).
 - **Quantize** to 1/16 or 1/32, with a penalty for moving a note far — never snap
@@ -251,7 +259,9 @@ Now it is a symbolic-music problem, which is well-trodden:
   faster than a sixteenth.
 - **Written values.** A note held into the next one in its hand is legato and
   is written ending there, unless it is a chord note with the next notes all
-  above it: that is a voice held under a moving line (`held_chord_is_voice`).
+  above it: that is a voice held under a moving line (`held_chord_is_voice`);
+  or the note is still down when everything struck next in its hand has been
+  let go: a line held over them (`held_over_is_voice`).
   A page in declared sections (`score.sections`) is read in beat positions
   throughout, and each section snaps to its own beats: the count runs over
   the join by a fraction of a beat, and against whole numbers that fraction

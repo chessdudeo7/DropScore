@@ -551,6 +551,16 @@ def build_tracks(
                     )
                     error = abs(tile.bottom - predicted)
                     tolerance = max(cfg.min_match_px, cfg.match_ratio * speed * dt)
+                    # A tile's top falls at the scroll speed and no faster.
+                    # Matched on its bottom alone, a tile held from above the
+                    # picture to the line took the key's flash under the line
+                    # as its last frame -- its top leapt from 0 to 438 in one
+                    # frame -- and a five-second note was read as 0.02s.
+                    if (
+                        cfg.top_continuity
+                        and tile.top > candidate.tops[-1] + speed * dt + tolerance
+                    ):
+                        continue
                     if error < tolerance:
                         pairings.append((error, tile_index, track_index))
 

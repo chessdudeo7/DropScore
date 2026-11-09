@@ -115,7 +115,16 @@ def discover_palette(
 ) -> Palette:
     """Find the background and tile colours from the fall area."""
     cfg = config.tiles
-    region = [f.image[: calibration.strike_y] for f in frames]
+    # Over the keyboard's columns only. A screen recording plays the video in
+    # a window, and the desktop beside it outweighed the video's own black:
+    # the desktop's grey was taken for the background and the black for a
+    # tile colour -- 12,000 tiles in a corner-window copy of the Alkan render.
+    lo, hi = 0, None
+    if cfg.palette_in_board:
+        layout = calibration.layout
+        lo = max(0, int(layout.key_span(layout.first_pitch)[0]))
+        hi = int(np.ceil(layout.key_span(layout.last_pitch)[1]))
+    region = [f.image[: calibration.strike_y, lo:hi] for f in frames]
     if not region or region[0].size == 0:
         raise TileError("no fall area above the strike line")
 
@@ -560,9 +569,14 @@ def _cluster(
 
 
 def _track_masks(
-    image: np.ndarray, palette: Palette, calibration: Calibration, config: Config
+    image: np.ndarray, palette: Palette, calibration: Calibration, config: Config,
+    extra: dict | None = None,
 ) -> list[np.ndarray]:
-    """One binary mask per palette colour, for the area above the strike line."""
+    """One binary mask per palette colour, for the area above the strike line.
+
+    Given ``extra``, it receives ``closest``: each pixel's distance to the
+    nearest tile colour.
+    """
     cfg = config.tiles
     # Weighted in place: the Lab array is this call's own, and copying a whole
     # frame of floats to scale one channel was a second of every minute.
@@ -602,6 +616,8 @@ def _track_masks(
         nearest = distances.argmin(axis=0)
         closest = np.take_along_axis(distances, nearest[None], axis=0)[0]
 
+    if extra is not None:
+        extra["closest"] = closest
     # Only pixels genuinely close to a tile colour count. Bloom is a blend of
     # tile and background, so it sits far from both and drops out here.
     #
@@ -774,7 +790,10 @@ def _looks_outlined(strip: np.ndarray, cfg) -> bool:
     return float(band[:, left:right].mean()) < cfg.outline_fill_ratio
 
 
-def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: Config) -> list[tuple[int, int]]:
+def _split_vertically(
+    mask: np.ndarray, box: tuple[int, int, int, int], config: Config,
+    distance: np.ndarray | None = None,
+) -> list[tuple[int, int]]:
     """Split a tall region at rows where it thins out.
 
     Repeated notes on one key render as separate tiles a pixel or two apart. They
@@ -821,6 +840,11 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
     if start is not None:
         spans.append((y0 + start, y0 + len(filled)))
     spans = [piece for a, b in spans for piece in _split_at_waists(strip, fill, a - y0, b - y0, cfg, y0)]
+    if distance is not None:
+        graded = distance[y0:y1, x0:x1]
+        spans = [
+            piece for a, b in spans for piece in _graded_seams(graded, a - y0, b - y0, cfg, y0)
+        ]
 
     # A tile is a solid block of its colour. Effects are not: a video with
     # sparks streaming off the strike line produced ninety blobs a frame where
@@ -840,6 +864,62 @@ def _split_vertically(mask: np.ndarray, box: tuple[int, int, int, int], config: 
         if b - a >= cfg.min_tile_height
         and float(strip[a - y0 : b - y0].mean()) >= cfg.min_solidity
     ]
+
+
+def _graded_seams(
+    distance: np.ndarray, a: int, b: int, cfg, y0: int
+) -> list[tuple[int, int]]:
+    """Cut where both edges of a tile turn from its colour for a row or two.
+
+    The waist cut reads the mask, and a copy that has been blurred or
+    recompressed widens each colour's radius until the rounded corners at a
+    seam pass for tile: on a JPEG-10 copy of the Alkan render the pinch was
+    filled in, every row full width, and 95% of the misses were repeats
+    merged. The colour itself still turns there -- the pixels a few columns
+    in from each edge sat 40-70 from the tile colour at the seam against 5-20
+    on the rows around it -- so the distance is read directly.
+    """
+    height, width = distance.shape
+    if width < 8 or b - a < 3:
+        return [(y0 + a, y0 + b)]
+    inner, outer = max(1, int(round(width * 0.08))), max(2, int(round(width * 0.2)))
+    left = distance[a:b, inner:outer].mean(axis=1)
+    right = distance[a:b, width - outer : width - inner].mean(axis=1)
+    middle = distance[a:b, outer : width - outer].mean(axis=1)
+    rise = cfg.graded_seam_rise
+    # Against the middle of the same row: a shaded tile changes colour down its
+    # length edge and middle alike, and read alone its edges rose wherever the
+    # shade did -- the aurora clips lost 8% of their notes to false cuts.
+    left, right = left - middle, right - middle
+    base_l, base_r = float(np.median(left)), float(np.median(right))
+    turned = (left > base_l + rise) & (right > base_r + rise)
+    calm = ~turned
+    longest = max(2, int(width * cfg.waist_max_height))
+    solid = longest
+    cuts: list[int] = []
+    row = 0
+    while row < len(turned):
+        if not turned[row]:
+            row += 1
+            continue
+        end = row
+        while end < len(turned) and turned[end]:
+            end += 1
+        if (
+            row >= solid
+            and end + solid <= len(turned)
+            and end - row <= longest
+            and calm[row - solid : row].all()
+            and calm[end : end + solid].all()
+        ):
+            cuts.append(row + int(np.argmax(left[row:end] + right[row:end])))
+        row = end
+    pieces, start = [], a
+    for cut in cuts:
+        pieces.append((y0 + start, y0 + a + cut))
+        start = a + cut + 1
+    pieces.append((y0 + start, y0 + b))
+    return pieces
 
 
 def _split_at_waists(
@@ -1011,7 +1091,9 @@ def detect_in_frame(
     tiles: list[Tile] = []
     image = _straightened(frame.image, calibration)
 
-    for track, mask in enumerate(_track_masks(image, palette, calibration, config)):
+    extra: dict | None = {} if cfg.graded_seams else None
+    for track, mask in enumerate(_track_masks(image, palette, calibration, config, extra)):
+        distance = extra.get("closest") if extra else None
         # External contours only: an outlined tile is a ring, and its outer
         # contour is exactly the tile's edge.
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1080,7 +1162,7 @@ def detect_in_frame(
                 if x1 <= x0:
                     continue
 
-                for top, bottom in _split_vertically(mask, (x0, y, x1, y + h), config):
+                for top, bottom in _split_vertically(mask, (x0, y, x1, y + h), config, distance):
                     tiles.append(
                         Tile(
                             frame=frame.index,

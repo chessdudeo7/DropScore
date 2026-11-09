@@ -516,7 +516,7 @@ def estimate_meter(
         if abs(x - round(x)) < 0.2:  # on a beat, not between them
             series[int(round(x)) - first] += weight
 
-    if series.size < 16:
+    if series.size < cfg.meter_min_beats:
         return 4
 
     centred = series - series.mean()
@@ -1444,6 +1444,20 @@ def quantize(
     )
 
 
+def _held_over(voice: Sequence[Note], note: Note, following: float, step: float) -> bool:
+    """Whether everything struck next in the hand is let go before this note.
+
+    Legato hands one note on to the next: the first is released once the next
+    has begun, and the next sounds on after it. A note still down when all of
+    what followed it has stopped is a voice held over them -- Alkan's tenor
+    line, held four beats while its own hand's chord sounds once beneath it,
+    was cut to a beat as if slurred into the chord.
+    """
+    end = note.onset + note.duration
+    struck = [n for n in voice if abs(n.onset - following) < 1e-6]
+    return bool(struck) and max(n.onset + n.duration for n in struck) < end - step
+
+
 def _next_in_line(
     voice: list[Note], index: int, reach: int, wait: float, pedal: int
 ) -> float | None:
@@ -1695,6 +1709,7 @@ def notate_durations(
                     and following <= end
                     and (beyond is None or end <= beyond + cfg.legato_reach * step)
                     and not (cfg.held_chord_is_voice and _held_under(voice, note, following))
+                    and not (cfg.held_over_is_voice and _held_over(voice, note, following, step))
                 ):
                     duration = gap
                 elif duration <= note.duration + 1e-9 and following <= end:

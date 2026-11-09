@@ -198,6 +198,16 @@ def test_no_beat_is_longer_than_the_long_notes_are_apart(seed: int) -> None:
     assert analyze(piece, loose).tempo == pytest.approx(65.0, rel=0.05)
 
 
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_four_bars_of_a_waltz_are_long_enough_to_be_heard_in_three(seed: int) -> None:
+    """Twelve beats were too few to be asked at all, and every four-bar waltz
+    came back in four; no piece in four moved when they were let through."""
+    piece = generate(seed=seed, bars=4, tempo=100.0, beats_per_bar=3)
+    assert analyze(piece).beats_per_bar == 3
+    old = replace(DEFAULT, score=replace(DEFAULT.score, meter_min_beats=16))
+    assert analyze(piece, old).beats_per_bar == 4
+
+
 def test_a_steady_pulse_under_a_slow_melody_is_heard_in_three() -> None:
     """The shape of a real capture that came back in four: a short repeated
     note on every beat, and over it a melody and bass moving once a bar in
@@ -1333,6 +1343,27 @@ def test_a_chord_held_under_a_moving_line_keeps_its_value() -> None:
     assert all(abs(v - 1.0) < 0.05 for v in chord_values(DEFAULT))
     off = replace(DEFAULT, score=replace(DEFAULT.score, held_chord_is_voice=False))
     assert all(abs(v - 0.5) < 0.05 for v in chord_values(off))
+
+
+def test_a_line_held_over_its_own_hand_s_chord_keeps_its_value() -> None:
+    """Alkan's tenor line holds four beats while a chord in the same hand
+    sounds once beneath it; read as slurred into the chord, it was cut to one."""
+    from dropscore.score import notate_durations  # noqa: PLC0415
+
+    beat = 0.6
+    notes = []
+    for i in range(6):
+        start = i * 4 * beat
+        notes.append(Note(onset=start, pitch=53 + i % 2, duration=4 * beat, hand="L"))
+        notes += [Note(onset=start + beat, pitch=p, duration=beat, hand="L") for p in (41, 46)]
+
+    def held(config: Config) -> list[float]:
+        written = notate_durations(NoteSequence.of(notes), _analysis(), config)
+        return [n.duration / beat for n in sorted(written) if n.pitch in (53, 54)][:-1]
+
+    assert all(abs(v - 4.0) < 0.05 for v in held(DEFAULT)), held(DEFAULT)
+    off = replace(DEFAULT, score=replace(DEFAULT.score, held_over_is_voice=False))
+    assert all(abs(v - 1.0) < 0.05 for v in held(off)), held(off)
 
 
 def test_a_note_on_a_beat_is_written_as_filling_that_beat() -> None:

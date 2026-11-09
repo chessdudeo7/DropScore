@@ -292,6 +292,31 @@ def _frame(time: float) -> Frame:
     return Frame(int(time * 100), time, np.zeros((1, 1, 3), np.uint8), 1.0)
 
 
+def test_a_flash_at_the_line_does_not_take_over_a_tall_tile() -> None:
+    """A tile taller than the picture reaches the line with its top still off
+    screen. The key's flash under the line, its bottom a little nearer the
+    prediction, took the track's last frame and its top leapt from 0 to near
+    the line: a five-second note on the Alkan render came out 0.02s long."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.tracking import build_tracks  # noqa: PLC0415
+
+    calibration = _plain_calibration(strike_y=400)
+    speed = 100.0
+    tall = lambda b, t: _tile(60, b, t, height=b)  # top clipped at row 0  # noqa: E731
+    detections = [(_frame(i / 10), [tall(350 + 10 * i, i / 10)]) for i in range(4)]
+    # Next frame: the tile held at 386 and a flash at 385-391, its bottom
+    # nearer the 390 predicted.
+    detections.append((_frame(0.4), [tall(386, 0.4), _tile(60, 391, 0.4, height=6.0)]))
+
+    on = replace(DEFAULT, tracking=replace(DEFAULT.tracking, top_continuity=True))
+    off = replace(DEFAULT, tracking=replace(DEFAULT.tracking, top_continuity=False))
+    for config, expect in ((on, 0.0), (off, 385.0)):
+        tracks = build_tracks(detections, speed, calibration, config)
+        first = min(tracks, key=lambda t: t.times[0])
+        assert first.tops[-1] == pytest.approx(expect)
+
+
 def test_a_tile_joined_from_below_is_matched_by_its_top() -> None:
     """Smoke under a tile moves its bottom edge ahead of the scroll in one
     frame. Matched by bottom alone, the tile began a fresh track whose onset

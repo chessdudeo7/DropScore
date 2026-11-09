@@ -126,6 +126,9 @@ class CalibrationConfig:
     picture_band_min: float = 0.05
     video_colour_tolerance: float = 20.0
     video_plain_share: float = 0.5
+    # A non-plain run of columns this share of the moving width or narrower,
+    # inside the motion, is a busy lane, not the video's edge.
+    video_lane_share: float = 0.06
 
     # Reject the fit below this black-key pattern match rate. A one-key offset
     # typically scores around 0.4, so 0.8 separates cleanly.
@@ -282,6 +285,16 @@ class TileConfig:
     # too, but its rows are ragged, and two such cuts on the glow probe cost a
     # note and added a phantom.
     waist_solid_fill: float = 0.80
+    # Colours are discovered over the keyboard's columns, not the whole frame.
+    palette_in_board: bool = True
+    # Seams read from the colour distance at a tile's edge columns, for copies
+    # whose widened radius fills the pinch in (see _graded_seams); how far
+    # both edges must turn from the tile colour, against the middle of the
+    # same row. On Alkan copies jpeg10 0.929 -> 0.961, jpeg25 0.951 -> 0.981,
+    # res240 0.932 -> 0.947, the clean render unchanged; read without the
+    # middle, the shaded aurora tiles were cut (1.000 -> 0.921).
+    graded_seams: bool = True
+    graded_seam_rise: float = 8.0
 
     # How much of the region it spans a blob must actually fill to be a tile
     # rather than a visual effect. Set from the gap between the two: solid
@@ -554,6 +567,13 @@ class TrackingConfig:
     # and the second halves of notes taller than the screen. At 0.4, 13 go
     # and one missed note comes back (F1 0.987 -> 0.995); at 1.0 real notes
     # start to be swallowed.
+    # A track's next tile may not have its top further down than the scroll
+    # carries it (see build_tracks). Off: a trade. On, the glow probe goes
+    # 0.9778 -> 0.9873, pietschmann3 staff 63 -> 64, five sparks-clip notes
+    # get their true lengths and a five-second Alkan note 0.02s -> 2.92s; but
+    # one of those corrected sparks notes then flips hand in the one-colour
+    # split (sparks hands 0.8964 -> 0.8912).
+    top_continuity: bool = False
     tail_reach: float = 0.4
     # And first seen no more than this many seconds before its own onset:
     # picked up at the line, not falling. Without it a real capture's repeated
@@ -633,6 +653,10 @@ class ScoreConfig:
     # coin toss between 0.51s and 1.35s; at one, 1440 generated pieces lose
     # none and both waltzes are fixed.
     accent_beat_span: float = 1.0
+    # Beats of music the metre is read from at the least; fewer is four.
+    # At 16, four bars of a waltz (12 beats) were never asked and read four
+    # 120 times in 120; at 12, 62 read three, and no piece in four moves.
+    meter_min_beats: int = 12
 
     # Seconds per step when tracking where the beats fall, and how hard the
     # tracker is held to the tempo it started at. The inertia is deliberately
@@ -855,6 +879,9 @@ class ScoreConfig:
     # Unless the note is part of a chord held while a line moves above it:
     # that is a voice, not a slur.
     held_chord_is_voice: bool = True
+    # And a note still held when everything struck after it in its hand has
+    # been let go is a voice held over them, not slurred into them.
+    held_over_is_voice: bool = True
 
     # How near a beat line a note must start, in beats, before its value is
     # taken out to the end of that beat. A note on a beat, released early and

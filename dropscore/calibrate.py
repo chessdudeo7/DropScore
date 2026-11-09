@@ -649,8 +649,16 @@ def video_columns(frames: Sequence[Frame], config: Config = DEFAULT) -> tuple[in
     gap = max(2, int(cfg.min_key_px))
     closed = inside.copy()
     false_runs = _runs_above((~inside).astype(np.float32), 0.5, 1)
+    # Inside the moving region a lane can be busy enough that its median is
+    # not the background: a key held through most of the sampled frames, or
+    # smoke over it. On a window-in-a-corner copy of the Alkan render three
+    # such lanes, 5 to 8 columns wide, cut the video at column 310 and half
+    # the keyboard was lost. A real window edge lies outside the motion.
+    lane = cfg.video_lane_share * (c1 - c0)
     for start, end in false_runs:
-        if end - start <= gap and start > 0 and end < inside.size:
+        if start > 0 and end < inside.size and (
+            end - start <= gap or (c0 < start and end < c1 and end - start <= lane)
+        ):
             closed[start:end] = True
 
     middle = (c0 + c1) // 2
