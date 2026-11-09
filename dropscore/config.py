@@ -566,11 +566,12 @@ class TrackingConfig:
     # Real tiles on the Alkan render: 0.96 or more, and 0.33 at the least on a
     # desaturated copy; sparks the copy let in: median 0.24. At 0.4 that copy
     # goes from F1 0.766 to 0.960 for one real note, the clean render from
-    # 0.994 to 0.998, the glow probe from 0.9305 to 0.9778. Off, because it
-    # also removes two B3s under a B5 in Fur Elise, 30 seconds outside its
-    # page, which by every sign are phantoms -- and without them the piece's
-    # metre reads 3/4 and its page's written values fall from 89 to 0.
-    min_fall_seen: float = 0.0
+    # 0.994 to 0.998, the glow probe from 0.9305 to 0.9778. It also removes
+    # two phantom B3s in Fur Elise and four pieces of its last chord picked up
+    # again as their tiles shrank into the line; their going once tipped the
+    # piece's beat to 1.35s, until the beat was held to the long notes'
+    # spacing (accent_beat_span).
+    min_fall_seen: float = 0.4
 
 
 @dataclass(frozen=True)
@@ -627,8 +628,11 @@ class ScoreConfig:
     # Where they decide it, no beat longer than this many of their typical
     # spacings is on offer. Long notes a quarter apart repeat a bar later too,
     # and a bar of 3/4 at 130 is slow enough to pass for a beat: 9 of 120
-    # generated waltzes were read in bars, as 12/8 at half speed.
-    accent_beat_span: float = 2.0
+    # generated waltzes were read in bars, as 12/8 at half speed. At two
+    # spacings 2 still were, and Fur Elise, its long notes 1.2s apart, was a
+    # coin toss between 0.51s and 1.35s; at one, 1440 generated pieces lose
+    # none and both waltzes are fixed.
+    accent_beat_span: float = 1.0
 
     # Seconds per step when tracking where the beats fall, and how hard the
     # tracker is held to the tempo it started at. The inertia is deliberately
@@ -636,6 +640,11 @@ class ScoreConfig:
     # and the notes it places are worse than a steady grid's.
     beat_resolution: float = 0.01
     beat_inertia: float = 5.0
+    # The tracked chain begins on the steady grid's beat, within this share of
+    # a beat of it (see track_beats).
+    anchor_tracked_beats: bool = True
+    anchor_tolerance: float = 0.2
+    anchor_beats: float = 8.0  # how much of the opening the start is read from
 
     min_bpm: float = 40.0
     max_bpm: float = 208.0

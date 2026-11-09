@@ -1299,9 +1299,8 @@ def test_a_note_never_seen_falling_is_a_spark() -> None:
     seen = {id(tile): 7.1, id(spark): 9.7, id(early): 2.3}
     notes = [tile, spark, early]
 
-    on = replace(DEFAULT, tracking=replace(DEFAULT.tracking, min_fall_seen=0.4))
-    kept = _seen_falling(notes, notes, seen, 150.0, calibration, 0.0, on)
+    kept = _seen_falling(notes, notes, seen, 150.0, calibration, 0.0, DEFAULT)
     assert [n.pitch for n in kept] == [60, 64]  # struck within the first fall: kept
 
-    # Off by default: it is a trade (see min_fall_seen).
-    assert len(_seen_falling(notes, notes, seen, 150.0, calibration, 0.0)) == 3
+    off = replace(DEFAULT, tracking=replace(DEFAULT.tracking, min_fall_seen=0.0))
+    assert len(_seen_falling(notes, notes, seen, 150.0, calibration, 0.0, off)) == 3

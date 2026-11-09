@@ -306,6 +306,40 @@ def _beat_phase(
     return best[1]
 
 
+def _opening_phase(
+    sequence: NoteSequence, beat: float, tatum: float, phase: float, cfg
+) -> float:
+    """Where the beat lies in the first few beats, for the tracker to start on.
+
+    The steady phase is fitted to the whole piece, and a performance that
+    pushes and slows carries it away from the opening: on generated pieces
+    played 8% loose it sat 0.45 of a beat off where they begin, and starting
+    the chain there cost 7 notes of 40 a piece. The tatum grid drifts with
+    it, so choosing among its lines does not help; every offset within a beat
+    is tried on the opening alone, and the one the weight falls on is taken.
+    """
+    notes = sorted(sequence, key=lambda n: n.onset)
+    if not notes or beat <= 0:
+        return phase
+    early = [n for n in notes if n.onset < notes[0].onset + cfg.anchor_beats * beat]
+    if len(early) < cfg.min_onsets_for_tempo:
+        return phase
+    onsets = np.array([n.onset for n in early])
+    weights = np.array(_accents(NoteSequence.of(early), beat))
+    # The opening's own pace, too: 8% loose, eight beats at the piece's
+    # average period smear the offset across a third of a beat.
+    best, chosen = -1.0, phase
+    start = float(onsets[0])
+    for scale in sorted(np.linspace(0.92, 1.08, 9), key=lambda x: abs(x - 1.0)):
+        local = beat * scale
+        for offset in np.arange(0.0, local, cfg.beat_resolution):
+            position = (onsets - start - offset) / local
+            score = float(weights[np.abs(position - np.round(position)) < cfg.anchor_tolerance].sum())
+            if score > best + 1e-9:
+                best, chosen = score, start + float(offset)
+    return chosen
+
+
 def track_beats(
     sequence: NoteSequence, beat: float, phase: float, config: Config = DEFAULT
 ) -> tuple[float, ...]:
@@ -342,6 +376,17 @@ def track_beats(
     accent = np.zeros(bins)
     for when, weight in zip(onsets, weights):
         accent[int(round((when - start) / resolution))] += weight
+    # The chain may begin only on the steady grid. Every chain is better for
+    # starting earlier, so left free it begins on the first note, beat or
+    # not -- and where the off-beats weigh what the beats do it stays there:
+    # Fur Elise's first note is a sixteenth past the beat and its chain ran a
+    # sixteenth out for thirteen bars, eight of its held eighths read as
+    # sixteenths. The steady phase had it right.
+    if cfg.anchor_tracked_beats:
+        times = start + np.arange(bins) * resolution
+        offset = ((times - phase) / beat) % 1.0
+        early = times < start + beat
+        accent[early & (np.minimum(offset, 1.0 - offset) > cfg.anchor_tolerance)] = 0.0
     peak = accent.max()
     if peak <= 0:
         return ()
@@ -783,7 +828,14 @@ def _beat_from_tatum(
         conventional_beat = tatum * cfg.steps_per_beat
         if len(spacing) and np.median(spacing) <= cfg.accent_max_gap_beats * conventional_beat:
             chosen = accented
-            longest = cfg.accent_beat_span * float(np.median(spacing))
+            # Only where the long notes stand apart from the rest. In an
+            # unbroken stream of equal notes every one is "long", their
+            # spacing is the onsets', and capping the beat there read a
+            # stream of eighths at 100 as quarters at 200.
+            gaps = np.diff(np.unique(np.round(onsets, 2)))
+            gaps = gaps[gaps > tatum / 2]
+            if not len(gaps) or np.median(spacing) >= 1.5 * float(np.median(gaps)):
+                longest = cfg.accent_beat_span * float(np.median(spacing))
 
     best: tuple[float, float] | None = None
     for multiple in BEAT_MULTIPLES:
@@ -1853,7 +1905,7 @@ def analyze(sequence: NoteSequence, config: Config = DEFAULT) -> Analysis:
     if beat != counted:
         phase = _beat_phase(sequence, tatum, phase % tatum, beat)
     beat_times = (
-        track_beats(sequence, beat, phase, config)
+        track_beats(sequence, beat, _opening_phase(sequence, beat, tatum, phase, cfg), config)
         if tempo_confidence < cfg.steady_tempo
         else ()
     )

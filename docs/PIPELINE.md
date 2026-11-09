@@ -211,6 +211,10 @@ Known nastiness:
   (`tail_reach`). It is merged into that note; a real next tile has been
   falling for longer. On the Alkan render these were flickers after a note's
   end and the second halves of notes taller than the screen.
+- A note whose earliest track was first seen less than 0.4 of a fall before
+  it sounds is a spark, not a tile (`min_fall_seen`), unless it sounds within
+  the first fall of the video. On blurred, desaturated or compressed copies the
+  sparks at the strike line pass for tile colour.
 - A board cut off at one side of the picture is placed in the one octave
   where that many white keys fit on a piano.
 - A screen recording can show the video in a window beside other windows.
@@ -228,9 +232,12 @@ Now it is a symbolic-music problem, which is well-trodden:
 - **Tempo + downbeat.** Onset intervals cluster around multiples of the beat. Fit
   a tempo grid (autocorrelation of the onset histogram, or a simple DP over
   candidate BPMs) and allow a slow tempo curve for rubato.
-  As built, where long notes decide the beat, no beat longer than twice their
-  usual spacing is on offer (`accent_beat_span`): they repeat a bar later too,
-  and a 3/4 bar at 130 is slow enough to pass for a beat. Quick beats whose
+  As built, where long notes decide the beat and stand apart from the other
+  onsets, no beat longer than their usual spacing is on offer
+  (`accent_beat_span`): they repeat a bar later too, and a 3/4 bar at 130 is
+  slow enough to pass for a beat. A tracked beat chain begins on the beat read
+  from the opening's first 8 beats, offset and pace both
+  (`anchor_tracked_beats`), not on whatever note comes first. Quick beats whose
   weight comes round every six, clearly more than every three or four, are
   eighths in 6/8 (`six_eight_*`).
 - **Quantize** to 1/16 or 1/32, with a penalty for moving a note far — never snap

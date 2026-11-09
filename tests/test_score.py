@@ -185,6 +185,19 @@ def test_a_waltz_whose_long_notes_come_a_quarter_apart_is_not_beaten_in_bars(see
     assert analyze(piece, off).beats_per_bar == 12
 
 
+@pytest.mark.parametrize("seed", [32, 36])
+def test_no_beat_is_longer_than_the_long_notes_are_apart(seed: int) -> None:
+    """Long notes sit about a beat apart wherever they decide the beat. A beat
+    allowed twice their spacing still read these waltzes in bars, and read
+    Fur Elise at 44 to the minute once two phantom notes were gone."""
+    piece = generate(seed=seed, bars=16, tempo=130.0, beats_per_bar=3)
+    result = analyze(piece)
+    assert (result.beats_per_bar, result.beat_type) == (3, 4)
+    assert result.tempo == pytest.approx(130.0, rel=0.05)
+    loose = replace(DEFAULT, score=replace(DEFAULT.score, accent_beat_span=2.0))
+    assert analyze(piece, loose).tempo == pytest.approx(65.0, rel=0.05)
+
+
 def test_a_steady_pulse_under_a_slow_melody_is_heard_in_three() -> None:
     """The shape of a real capture that came back in four: a short repeated
     note on every beat, and over it a melody and bass moving once a bar in
@@ -524,6 +537,24 @@ def _played_with_rubato(sequence: NoteSequence, depth: float = 0.06) -> NoteSequ
               n.hand, n.velocity) for n in notes],
         tempo=sequence.tempo,
     )
+
+
+def test_a_tracked_beat_starts_on_the_beat_not_on_a_pickup() -> None:
+    """A long, low pickup a sixteenth before the beat, then an even stream:
+    left to begin anywhere, the chain began on the pickup and ran a sixteenth
+    out for the whole piece, as it did for thirteen bars of Fur Elise."""
+    from dropscore.score import track_beats  # noqa: PLC0415
+
+    notes = [
+        Note(onset=0.25 + i * 0.25, pitch=48 if i == 0 else 60 + i % 5,
+             duration=0.45 if i == 0 else 0.2, hand="R")
+        for i in range(64)
+    ]
+    sequence = NoteSequence.of(notes)
+    chain = track_beats(sequence, 0.5, 0.0, DEFAULT)
+    assert all(abs(t / 0.5 - round(t / 0.5)) < 0.1 for t in chain[:20])
+    free = replace(DEFAULT, score=replace(DEFAULT.score, anchor_tracked_beats=False))
+    assert track_beats(sequence, 0.5, 0.0, free)[0] == pytest.approx(0.25, abs=0.02)
 
 
 def test_a_steady_performance_is_not_tracked() -> None:
