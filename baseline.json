@@ -171,7 +171,7 @@
         "matched": 193,
         "onset_mae": 0.0017524683327410223,
         "onset_p95": 0.0025675522515534507,
-        "duration_mae": 0.015325415060696712,
+        "duration_mae": 0.015339893720190144,
         "hand_accuracy": 1.0,
         "precision": 1.0,
         "recall": 1.0,
@@ -181,12 +181,12 @@
         "first_pitch_correct": true,
         "white_width_error": 0.020949263502455295,
         "strike_y_error": 0,
-        "speed_error": 0.017052602811986617
+        "speed_error": 0.01707544390811222
       },
       "error": null,
       "key_expected": "G major",
       "key_found": "G major",
-      "key_confidence": 0.0754572541849279,
+      "key_confidence": 0.07539846461585356,
       "tempo_expected": 96.0,
       "tempo_found": 96.00452084407881
     },
@@ -304,9 +304,9 @@
         "reference_count": 193,
         "estimate_count": 193,
         "matched": 193,
-        "onset_mae": 0.008434100145285664,
-        "onset_p95": 0.009249184064097448,
-        "duration_mae": 0.017612585740690623,
+        "onset_mae": 0.008424823920791453,
+        "onset_p95": 0.00923990783960269,
+        "duration_mae": 0.018738599054290084,
         "hand_accuracy": 0.8963730569948186,
         "precision": 1.0,
         "recall": 1.0,
@@ -316,12 +316,12 @@
         "first_pitch_correct": true,
         "white_width_error": 0.020949263502455295,
         "strike_y_error": 2,
-        "speed_error": -0.05769543484194628
+        "speed_error": -0.054442320037566105
       },
       "error": null,
       "key_expected": "G major",
       "key_found": "G major",
-      "key_confidence": 0.07569604023976537,
+      "key_confidence": 0.07767386407509391,
       "tempo_expected": 96.0,
       "tempo_found": 96.00452084407881
     },
