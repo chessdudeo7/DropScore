@@ -422,6 +422,33 @@ class TrackingConfig:
     min_match_px: float = 8.0
     match_ratio: float = 0.60
     max_gap: float = 0.12  # seconds a track survives unmatched
+
+    # What is left of a tile that landed short of the strike line is joined
+    # back onto the track that lost it (see ``_join_held``): its bottom stands
+    # within `held_bottom_drift` px, starts within `held_bottom_reach` px of
+    # where the track's was, and its top is out of the picture (within
+    # `held_top_margin` px of its edge) or within `held_top_slack` px of where
+    # the scroll carries it. On the Alkan render three notes of 6 and 12
+    # seconds read as 2.95s come back whole (lengths 840 -> 842 of 843).
+    # A track that gets taller at more than this share of the scroll speed
+    # while its bottom falls as fast, with its top deeper than `grow_depth` of
+    # the fall, is not a tile (see ``_grows_as_it_falls``). 0 turns it off.
+    # The depth keeps real fragments: a capture with an overlay 0.21 of the
+    # way down pins the tops of 27 real tracks there, and at 0.2 they went.
+    grow_rate: float = 0.5
+    grow_depth: float = 0.35
+    grow_landing: float = 30.0  # px above the line within which a bottom has landed
+
+    # Reach and drift are wide enough for a generated capture that lands its
+    # tiles 15px short and wobbles 4px there: its 6.67s and 20s notes read
+    # 2.36s (mean length error 2.0s on that clip) until they were.
+    join_held: bool = True
+    held_bottom_drift: float = 6.0
+    held_bottom_reach: float = 20.0
+    held_top_margin: float = 2.0
+    held_top_slack: float = 3.0
+    held_min_height: float = 12.0
+    held_rate_tolerance: float = 0.3  # of the scroll speed, for a top in view
     # Match a track by its top edge when its bottom found nothing
     # (build_tracks): smoke joining a tile from below moves its bottom ahead
     # of the scroll. Only a track seen `match_by_top_seen` times has a course
@@ -573,6 +600,9 @@ class TrackingConfig:
     # get their true lengths and a five-second Alkan note 0.02s -> 2.92s; but
     # one of those corrected sparks notes then flips hand in the one-colour
     # split (sparks hands 0.8964 -> 0.8912).
+    # Superseded (2026-11-10): with `lead_must_fall`, `tail_needs_open_end` and
+    # `join_held` the glow probe and pietschmann3 already have those gains,
+    # and turning this on only costs the Alkan probe a note (0.9982 -> 0.9976).
     top_continuity: bool = False
     tail_reach: float = 0.4
     # And first seen no more than this many seconds before its own onset:
@@ -581,6 +611,12 @@ class TrackingConfig:
     # a second ahead of its own strike, were merged (Interstellar 133 -> 130).
     # The Alkan pieces were seen 0.11 to 0.2s ahead.
     tail_lead: float = 0.3
+    # And only for a note whose end was not read from its tile's top edge
+    # (one taller than the screen, bounded from below by its tallest sighting).
+    # A measured end needs no tail, and smoke over the key after it, or in its
+    # last frames, was merged on as one: on the Sonatine render 36 of 571
+    # notes came back too long (a sixteenth read as 0.71s). Off restores it.
+    tail_needs_open_end: bool = True
     # A note is kept only if the earliest track feeding it was first seen at
     # least this share of the fall before its onset (or on the first frame).
     # Real tiles on the Alkan render: 0.96 or more, and 0.33 at the least on a
@@ -592,6 +628,11 @@ class TrackingConfig:
     # piece's beat to 1.35s, until the beat was held to the long notes'
     # spacing (accent_beat_span).
     min_fall_seen: float = 0.4
+
+    # A piece never seen falling is dropped, not merged, when a tile that was
+    # seen falling is struck on the same key before the piece ends: smoke ahead
+    # of a real note otherwise moves the note's onset. Off restores the merge.
+    lead_must_fall: bool = True
 
 
 @dataclass(frozen=True)
@@ -657,6 +698,10 @@ class ScoreConfig:
     # At 16, four bars of a waltz (12 beats) were never asked and read four
     # 120 times in 120; at 12, 62 read three, and no piece in four moves.
     meter_min_beats: int = 12
+
+    # A bar of three must repeat better at three beats than at two, not only
+    # better than at four. Off restores the old test.
+    three_beats_two: bool = True
 
     # Seconds per step when tracking where the beats fall, and how hard the
     # tracker is held to the tempo it started at. The inertia is deliberately
@@ -802,6 +847,11 @@ class ScoreConfig:
     # asserting a sharp nothing ever sounds is the worse description of it.
     unfounded_accidental: float = 0.2
 
+    # Charged per share of a signature's accidentals that sound for less time
+    # than the naturals they replace (the Sonatine in C read as G major with F
+    # at 8.6% of the sounding time and F sharp at 2.1%). 0 turns it off.
+    outweighed_accidental: float = 0.1
+
     out_of_scale_penalty: float = 0.3
 
     # How much of the way to the next onset a note must cover before it is
@@ -908,6 +958,15 @@ class ScoreConfig:
     # duration was picked. Measured on 30 held-out pieces at 60-144bpm, this
     # is flat from 8 to 10 and falls away by 5 and 14.
     hand_neighbours: int = 8
+
+    # In a one-colour video, two notes struck together while the other hand
+    # is silent are given one to each hand (see ``_part_lone_pairs``). Off: a
+    # trade. On, the Sonatine goes 534 -> 555 of 571, the probe 134 -> 138 of
+    # 158 and forty generated pieces 7093 -> 7275 of 7847, but of the corpus's
+    # one-colour clips one rises (capture 0.8912 -> 0.9223) and three fall
+    # (classic 0.8964 -> 0.8601, its D minor twin 0.886 -> 0.8601, sparks
+    # 0.8964 -> 0.8756).
+    lone_pairs_are_two_hands: bool = False
 
     # How far from middle C the boundary between the staves may travel, in
     # semitones. It follows the music within that, which is what carries a

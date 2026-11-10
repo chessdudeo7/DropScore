@@ -27,6 +27,7 @@ a second of drift over a clip.
 
 from __future__ import annotations
 
+import bisect
 import logging
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
@@ -710,14 +711,55 @@ def _fall_rate(times: Sequence[float], edges: Sequence[float]) -> float | None:
     return float(np.polyfit(t, np.asarray(edges, dtype=np.float64), 1)[0])
 
 
+def _grows_as_it_falls(
+    track: TileTrack, speed: float, calibration: Calibration, cfg: TrackingConfig
+) -> bool:
+    """A blob whose bottom falls while its top stays where it is.
+
+    A tile keeps its height all the way down. What gets taller at the scroll
+    speed with its top well inside the picture is not one: on a brightened
+    copy of a render with smoke, each bar line carried the lit smoke above it
+    down with it, across a dozen keys at once, and 117 of 240 phantoms were
+    these. A tile coming in under the picture's top edge grows too, and so
+    does a real one under an overlay near the top (see
+    ``test_a_fragment_with_a_pinned_top_edge_is_still_a_note``), so only a top
+    deeper than ``grow_depth`` of the fall is judged.
+    """
+    if cfg.grow_rate <= 0 or speed <= 0:
+        return False
+    times = np.asarray(track.times, dtype=np.float64)
+    tops = np.asarray(track.tops, dtype=np.float64)
+    bottoms = np.asarray(track.bottoms, dtype=np.float64)
+    # Before the bottom lands, if it does: a blob lost in mid-air is judged
+    # on every sample (three or four frames of one were enough to be a note).
+    landed = bottoms.max() >= calibration.strike_y - cfg.grow_landing
+    falling = bottoms < bottoms.max() - 1.0 if landed else np.ones(len(bottoms), dtype=bool)
+    if np.count_nonzero(falling) < 3:
+        return False
+    times, tops, bottoms = times[falling], tops[falling], bottoms[falling]
+    if times[-1] <= times[0]:
+        return False
+    depth = calibration.picture_top + cfg.grow_depth * (calibration.strike_y - calibration.picture_top)
+    if float(np.median(tops)) < depth:
+        return False
+    taller = float(np.polyfit(times, bottoms - tops, 1)[0])
+    lower = float(np.polyfit(times, bottoms, 1)[0])
+    return taller > cfg.grow_rate * speed and lower > cfg.grow_rate * speed
+
+
 def track_to_note(
     track: TileTrack,
     speed: float,
     calibration: Calibration,
     config: Config = DEFAULT,
     hands: dict[int, Hand] | None = None,
+    ended: set[int] | None = None,
 ) -> Note | None:
-    """Convert one tile track into a note, or None if it is not usable."""
+    """Convert one tile track into a note, or None if it is not usable.
+
+    ``ended`` collects (by ``id``) the notes whose end was read from the
+    tile's top edge, rather than bounded from below by its tallest sighting.
+    """
     hands = hands or {}
     cfg = config.tracking
     # Frames and seconds both, whichever asks for more. A frame count alone
@@ -731,6 +773,10 @@ def track_to_note(
 
     strike = calibration.strike_y
     margin = cfg.edge_margin
+
+    if _grows_as_it_falls(track, speed, calibration, cfg):
+        log.debug("dropping pitch %d: it grows as it falls", track.pitch)
+        return None
 
     # A bottom edge that has reached the strike line stops advancing, and a
     # stationary edge carries no timing: every frame it sits there reports a
@@ -857,12 +903,15 @@ def track_to_note(
     # was read badly, not phantoms.
     duration = max(duration, cfg.min_duration)
 
-    return Note(
+    note = Note(
         onset=max(0.0, onset),
         pitch=track.pitch,
         duration=duration,
         hand=hands.get(track.track, "R"),
     )
+    if ended is not None and top_times:
+        ended.add(id(note))
+    return note
 
 
 def hands_by_register(tracks: Sequence[TileTrack]) -> dict[int, Hand]:
@@ -892,19 +941,163 @@ def hands_by_register(tracks: Sequence[TileTrack]) -> dict[int, Hand]:
 def tracks_to_notes(
     tracks: Sequence[TileTrack], speed: float, calibration: Calibration, config: Config = DEFAULT
 ) -> NoteSequence:
+    tracks = _join_held(tracks, speed, calibration, config)
     hands = hands_by_register(tracks)
     notes: list[Note] = []
     first_seen: dict[int, float] = {}
+    ended: set[int] = set()
     for track in tracks:
-        note = track_to_note(track, speed, calibration, config, hands)
+        note = track_to_note(track, speed, calibration, config, hands, ended)
         if note is not None:
             notes.append(note)
             first_seen[id(note)] = track.times[0]
-    merged = _merge_overlaps(notes, config, first_seen)
     start = min((t.times[0] for t in tracks if t.times), default=0.0)
+    notes = _without_leading_sparks(notes, first_seen, speed, calibration, start, config, ended)
+    merged = _merge_overlaps(notes, config, first_seen, ended)
     return NoteSequence.of(
         _seen_falling(merged, notes, first_seen, speed, calibration, start, config)
     )
+
+
+def _join_held(
+    tracks: Sequence[TileTrack], speed: float, calibration: Calibration, config: Config = DEFAULT
+) -> list[TileTrack]:
+    """Join what is left of a landed tile back onto the track that lost it.
+
+    A track expects its tile's bottom to reach the strike line. A renderer
+    that stops its tiles short of it (430 against a line at 450 on the Alkan
+    render) breaks a held tile into a new track every six frames, each with
+    its bottom pinned and none ever seen falling, so none becomes a note: a
+    six-second note was read by its tallest sighting, 2.95s, and a twelve-
+    second one the same. A piece that begins the frame after a track on its
+    key ends, with its bottom where that track's was and standing still, and
+    its top either still out of the picture or where the scroll carries the
+    old one, is the same tile. Its bottoms are recorded at the track's own
+    plateau, so they time nothing; its tops then time the note's end.
+    """
+    cfg = config.tracking
+    if not cfg.join_held:
+        return list(tracks)
+    edge = calibration.picture_top + cfg.held_top_margin
+    lanes: dict[tuple[int, int], list[TileTrack]] = {}
+    for track in tracks:
+        if track.times:
+            lanes.setdefault((track.pitch, track.track), []).append(track)
+    joined: list[TileTrack] = []
+    for lane in lanes.values():
+        lane.sort(key=lambda track: track.times[0])
+        kept: list[TileTrack] = []
+        resting: dict[int, float] = {}  # where a joined track's bottom really sits
+        for piece in lane:
+            host = None
+            if max(piece.bottoms) - min(piece.bottoms) <= cfg.held_bottom_drift:
+                for track in reversed(kept):
+                    # The frame after the track's last, or between its frames:
+                    # a track that goes on catching the tile every few frames
+                    # leaves the frames between to pieces of their own.
+                    before = bisect.bisect_left(track.times, piece.times[0]) - 1
+                    if before < 0:
+                        continue
+                    gap = piece.times[0] - track.times[before]
+                    if not 0 < gap <= cfg.max_gap:
+                        continue
+                    if before + 1 < len(track.times) and set(piece.times) & set(track.times[before + 1:]):
+                        continue
+                    rest = resting.get(id(track), track.bottoms[before])
+                    if abs(piece.bottoms[0] - rest) > cfg.held_bottom_reach:
+                        continue
+                    step = speed * gap
+                    clipped = piece.tops[0] <= edge and track.tops[before] <= edge
+                    follows = abs(piece.tops[0] - (track.tops[before] + step)) <= max(
+                        cfg.held_top_slack, 0.75 * step
+                    )
+                    if not (clipped or follows):
+                        continue
+                    # Smoke standing at the line has a top that stands too.
+                    free = [(t, y) for t, y in zip(piece.times, piece.tops) if y > edge]
+                    if len(free) >= 3 and free[-1][0] > free[0][0]:
+                        rate = (free[-1][1] - free[0][1]) / (free[-1][0] - free[0][0])
+                        if abs(rate / speed - 1.0) > cfg.held_rate_tolerance:
+                            continue
+                    if not follows and piece.bottoms[0] - piece.tops[0] < cfg.held_min_height:
+                        continue
+                    host = track
+                    break
+            if host is None:
+                # A copy: the caller's tracks are not edited under it.
+                kept.append(
+                    TileTrack(piece.pitch, piece.track, list(piece.times), list(piece.tops),
+                              list(piece.bottoms))
+                )
+                continue
+            resting[id(host)] = piece.bottoms[-1]
+            floor = max(host.bottoms)
+            host.times.extend(piece.times)
+            host.tops.extend(piece.tops)
+            host.bottoms.extend([floor] * len(piece.times))
+            if host.times[-len(piece.times) - 1] > piece.times[0]:  # joined between its frames
+                order = sorted(range(len(host.times)), key=host.times.__getitem__)
+                host.times[:] = [host.times[k] for k in order]
+                host.tops[:] = [host.tops[k] for k in order]
+                host.bottoms[:] = [host.bottoms[k] for k in order]
+        joined.extend(kept)
+    return joined
+
+
+def _without_leading_sparks(
+    pieces: list[Note],
+    first_seen: dict[int, float],
+    speed: float,
+    calibration: Calibration,
+    start: float,
+    config: Config = DEFAULT,
+    ended: set[int] | None = None,
+) -> list[Note]:
+    """Drop a piece never seen falling that a falling tile's note runs into.
+
+    ``_seen_falling`` judges a merged note by its earliest piece, so smoke
+    read as a short note just ahead of a real one on the same key passed on
+    the real tile's fall and moved its onset: on the Sonatine render a puff
+    first seen 0.13 of a fall ahead was timed at 62.16s, the C5 behind it at
+    62.30s, and the two came back as one note 0.14s early (9 misses and their
+    9 phantoms of 571 notes). A piece picked up after its parent lost the tile
+    at the line comes after the parent, not before it, and is kept --
+    unless the parent's end was read from its tile's top edge (``ended``):
+    then a piece that starts inside it adds nothing but a later end, and four
+    Sonatine sixteenths came back 0.4 to 0.7s long that way.
+    """
+    share = config.tracking.min_fall_seen
+    fall = (calibration.strike_y - calibration.picture_top) / speed if speed > 0 else 0.0
+    if not config.tracking.lead_must_fall or share <= 0 or fall <= 0:
+        return pieces
+    by_pitch: dict[int, list[Note]] = {}
+    for piece in pieces:
+        by_pitch.setdefault(piece.pitch, []).append(piece)
+    kept = []
+    for piece in pieces:
+        seen = first_seen[id(piece)]
+        fell = piece.onset <= start + fall or piece.onset - seen >= share * fall
+        if not fell and any(
+            first_seen[id(other)] < seen
+            and other.onset - first_seen[id(other)] >= share * fall
+            and (
+                piece.onset < other.onset <= piece.offset + 0.05
+                or (
+                    ended is not None
+                    and id(other) in ended
+                    # ...and a note in its own right. A real capture's 3.5-beat
+                    # note came as a 0.06s reading of its tile's top and a
+                    # late piece carrying its true length.
+                    and other.duration >= config.tracking.min_repeat
+                    and other.onset <= piece.onset < other.offset
+                )
+            )
+            for other in by_pitch[piece.pitch]
+        ):
+            log.debug("dropping a spark ahead of pitch %d at %.2fs", piece.pitch, piece.onset)
+            continue
+        kept.append(piece)
+    return kept
 
 
 def _seen_falling(
@@ -955,7 +1148,10 @@ def _seen_falling(
 
 
 def _merge_overlaps(
-    notes: list[Note], config: Config = DEFAULT, first_seen: dict[int, float] | None = None
+    notes: list[Note],
+    config: Config = DEFAULT,
+    first_seen: dict[int, float] | None = None,
+    ended: set[int] | None = None,
 ) -> list[Note]:
     """Fuse notes that are really one note on the same key.
 
@@ -1004,6 +1200,8 @@ def _merge_overlaps(
     for pitch, group in by_pitch.items():
         group.sort(key=lambda note: note.onset)
         current = group[0]
+        # Was the current note's end read from a top edge?
+        measured = ended is not None and id(current) in ended
         previous_onset = current.onset
         for following in group[1:]:
             fragment = (
@@ -1040,6 +1238,9 @@ def _merge_overlaps(
                 and seen >= current.onset
                 and following.onset - seen <= config.tracking.tail_lead
                 and following.onset - current.offset <= config.tracking.tail_reach
+                # A note whose end was read from its tile's top edge has no
+                # tail to find (``tail_needs_open_end``).
+                and not (measured and config.tracking.tail_needs_open_end)
             )
             if overlaps and far and not close and not fragment and not one_end and not tail:
                 if following.onset > current.onset:
@@ -1053,9 +1254,12 @@ def _merge_overlaps(
                         )
                     )
                 current = following
+                measured = ended is not None and id(following) in ended
                 continue
 
             if close or overlaps or tail:
+                if following.offset > current.offset:
+                    measured = ended is not None and id(following) in ended
                 end = max(current.offset, following.offset)
                 current = Note(
                     onset=current.onset,
@@ -1067,6 +1271,7 @@ def _merge_overlaps(
             else:
                 merged.append(current)
                 current = following
+                measured = ended is not None and id(following) in ended
         merged.append(current)
 
     return merged

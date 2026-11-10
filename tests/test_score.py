@@ -2068,3 +2068,62 @@ def test_two_strikes_inside_one_step_stay_two_notes() -> None:
     merged, _ = quantize(sequence, analysis, off)
     together = sorted(n.onset for n in merged if n.pitch == 71)
     assert together[0] == together[1]
+
+
+def test_a_piece_in_c_that_visits_its_dominant_is_not_written_in_g() -> None:
+    """A sharp the piece plays less than its natural does not make the signature.
+
+    Sounding time by pitch class, measured on a sonatina in C: G major matches
+    the shape better, and F sounds four times as long as F sharp.
+    """
+    shares = [0.195, 0.004, 0.186, 0.001, 0.123, 0.085, 0.024, 0.199, 0.003, 0.063, 0.001, 0.115]
+    notes, onset = [], 0.0
+    for pitch_class, share in enumerate(shares):
+        for _ in range(4):
+            notes.append(Note(onset=onset, pitch=60 + pitch_class, duration=share * 25, hand="R"))
+            onset += 0.25
+    sequence = NoteSequence.of(notes)
+
+    assert estimate_key(sequence)[0] == "C major"
+    off = DEFAULT.evolve(score=replace(DEFAULT.score, outweighed_accidental=0.0))
+    assert estimate_key(sequence, off)[0] == "G major"
+
+
+def test_a_bar_of_three_must_repeat_better_at_three_than_at_two() -> None:
+    """Strong and weak beats in turn, with the turn slipping now and then.
+
+    That is music in two with blurred bars: it repeats best at two beats, and
+    by chance a little better at three than at four.
+    """
+    from dropscore.score import estimate_meter
+
+    weights = [
+        1.15, 0.41, 1.28, 1.04, 0.59, 1.15, 0.48, 1.24, 0.55, 1.16, 0.46, 1.15,
+        0.58, 1.24, 0.44, 1.08, 1.27, 0.44, 1.06, 0.47, 0.46, 1.14, 0.61, 1.01,
+        0.7, 1.21, 1.01, 0.58, 1.1, 1.05, 1.25, 0.44, 1.06, 1.18, 0.41, 1.06,
+        1.01, 0.62, 1.26, 0.49, 1.29, 0.5, 1.09, 0.41, 0.52, 1.25, 0.56, 1.21,
+    ]
+    sequence = NoteSequence.of(
+        [Note(onset=i * 0.5, pitch=60, duration=w * 0.5, hand="R") for i, w in enumerate(weights)]
+    )
+
+    assert estimate_meter(sequence, 0.5, 0.0) == 4
+    off = DEFAULT.evolve(score=replace(DEFAULT.score, three_beats_two=False))
+    assert estimate_meter(sequence, 0.5, 0.0, off) == 3
+
+
+def test_a_pair_struck_with_the_other_hand_silent_is_one_note_in_each() -> None:
+    """Two lines a third apart, both above middle C, in one colour."""
+    from dropscore.score import assign_hands
+
+    notes = []
+    for step, low in enumerate((64, 65, 67, 69, 71, 72, 74, 72)):
+        notes.append(Note(onset=step * 0.5, pitch=low, duration=0.5, hand="R"))
+        notes.append(Note(onset=step * 0.5, pitch=low + 4, duration=0.5, hand="R"))
+    sequence = NoteSequence.of(notes)
+
+    on = DEFAULT.evolve(score=replace(DEFAULT.score, lone_pairs_are_two_hands=True))
+    parted = sorted(assign_hands(sequence, on), key=lambda n: (n.onset, n.pitch))
+    assert [n.hand for n in parted] == ["L", "R"] * 8
+
+    assert len({n.hand for n in assign_hands(sequence)}) == 1  # off by default: a trade

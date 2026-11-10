@@ -214,10 +214,23 @@ Known nastiness:
   (`tail_reach`). It is merged into that note; a real next tile has been
   falling for longer. On the Alkan render these were flickers after a note's
   end and the second halves of notes taller than the screen.
+  Only a note whose end was not read from its tile's top edge has a tail to
+  find (`tail_needs_open_end`): on a render with smoke over the keys, puffs
+  after a note were merged on and 36 of 571 notes came back too long.
 - A note whose earliest track was first seen less than 0.4 of a fall before
   it sounds is a spark, not a tile (`min_fall_seen`), unless it sounds within
   the first fall of the video. On blurred, desaturated or compressed copies the
   sparks at the strike line pass for tile colour.
+  A piece never seen falling is dropped before any merging when a falling
+  tile's note on the same key runs into it, or when it starts inside a note
+  with a measured end (`lead_must_fall`): merged, smoke just ahead of a note
+  moved its onset 0.14s early.
+- A track that gets taller as it falls, with its top well inside the picture,
+  is not a tile (`grow_rate`): on a brightened copy each bar line carried lit
+  smoke down with it across a dozen keys.
+- What is left of a tile that lands short of the strike line is joined back
+  onto the track that lost it (`join_held`), so a note longer than the screen
+  is timed by its top edge instead of its tallest sighting.
 - A board cut off at one side of the picture is placed in the one octave
   where that many white keys fit on a piano.
 - A screen recording can show the video in a window beside other windows.
@@ -245,7 +258,11 @@ Now it is a symbolic-music problem, which is well-trodden:
   from the opening's first 8 beats, offset and pace both
   (`anchor_tracked_beats`), not on whatever note comes first. Four bars of a
   waltz (12 beats) are enough to be asked about the metre at all
-  (`meter_min_beats`). Quick beats whose
+  (`meter_min_beats`). From six bars up, a bar of three must repeat better
+  at three beats than at two, not only better than at four
+  (`three_beats_two`). A major key whose signature's accidental sounds for
+  less time than the natural it replaces is charged for it
+  (`outweighed_accidental`): a piece in C that visits G is not in G. Quick beats whose
   weight comes round every six, clearly more than every three or four, are
   eighths in 6/8 (`six_eight_*`).
 - **Quantize** to 1/16 or 1/32, with a penalty for moving a note far — never snap

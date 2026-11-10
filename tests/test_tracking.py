@@ -732,9 +732,11 @@ def test_a_fragment_with_a_pinned_top_edge_is_still_a_note() -> None:
     calibration = _plain_calibration()
     track = TileTrack(pitch=60, track=0)
     for index in range(8):
-        bottom = 250.0 + index * 10.0
-        # Top stays at 240 while the bottom falls, so the blob grows.
-        track.observe(_tile(60, bottom, index * 0.1, height=bottom - 240.0))
+        bottom = 110.0 + index * 10.0
+        # Top stays at 100 while the bottom falls, so the blob grows. Held
+        # in the upper part of the fall, where overlays sit (one capture's is
+        # at 0.21 of it); lower down a growing blob is smoke (`grow_depth`).
+        track.observe(_tile(60, bottom, index * 0.1, height=bottom - 100.0))
 
     assert track_to_note(track, 100.0, calibration) is not None
 
@@ -1329,3 +1331,144 @@ def test_a_note_never_seen_falling_is_a_spark() -> None:
 
     off = replace(DEFAULT, tracking=replace(DEFAULT.tracking, min_fall_seen=0.0))
     assert len(_seen_falling(notes, notes, seen, 150.0, calibration, 0.0, off)) == 3
+
+
+def test_smoke_ahead_of_a_note_does_not_move_its_onset() -> None:
+    """A puff read as a short note just before a real one on the same key is
+    dropped rather than merged into it; a piece picked up after its parent is
+    kept, and so is a spark with no tile behind it (left to the later filter)."""
+    from dataclasses import replace  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from dropscore.tracking import _without_leading_sparks  # noqa: PLC0415
+
+    calibration = SimpleNamespace(strike_y=450, picture_top=0)  # a 3s fall at 150px/s
+    puff = Note(onset=10.0, pitch=72, duration=0.3, hand="R", velocity=80)
+    tile = Note(onset=10.14, pitch=72, duration=0.14, hand="R", velocity=80)
+    parent = Note(onset=20.0, pitch=60, duration=0.5, hand="R", velocity=80)
+    tail = Note(onset=20.3, pitch=60, duration=0.2, hand="R", velocity=80)
+    alone = Note(onset=30.0, pitch=64, duration=0.2, hand="R", velocity=80)
+    seen = {id(puff): 9.6, id(tile): 7.2, id(parent): 17.1, id(tail): 20.1, id(alone): 29.8}
+    notes = [puff, tile, parent, tail, alone]
+
+    kept = _without_leading_sparks(notes, seen, 150.0, calibration, 0.0, DEFAULT)
+    assert kept == [tile, parent, tail, alone]
+
+    # ...unless the parent's end was read from its tile's top edge: then a
+    # piece starting inside it can only stretch it.
+    inside = Note(onset=20.3, pitch=60, duration=0.6, hand="R", velocity=80)
+    seen[id(inside)] = 20.1
+    with_end = _without_leading_sparks(
+        [parent, inside], seen, 150.0, calibration, 0.0, DEFAULT, {id(parent)}
+    )
+    assert with_end == [parent]
+
+    off = replace(DEFAULT, tracking=replace(DEFAULT.tracking, lead_must_fall=False))
+    assert len(_without_leading_sparks(notes, seen, 150.0, calibration, 0.0, off)) == 5
+
+
+def test_a_note_with_a_measured_end_has_no_tail() -> None:
+    """Smoke over a key just after its note ended was merged on as the rest of
+    the tile, and a sixteenth came back 0.71s long. Where the end was read
+    from the tile's top edge there is no rest of the tile to find."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    from dropscore.tracking import _merge_overlaps  # noqa: PLC0415
+
+    first = Note(onset=56.68, pitch=71, duration=0.14, hand="R", velocity=80)
+    puff = Note(onset=57.16, pitch=71, duration=0.23, hand="R", velocity=80)
+    seen = {id(first): 53.69, id(puff): 56.92}
+
+    assert len(_merge_overlaps([first, puff], first_seen=seen, ended={id(first)})) == 2
+    assert len(_merge_overlaps([first, puff], first_seen=seen, ended=set())) == 1  # taller than the screen
+
+    off = replace(DEFAULT, tracking=replace(DEFAULT.tracking, tail_needs_open_end=False))
+    assert len(_merge_overlaps([first, puff], off, first_seen=seen, ended={id(first)})) == 1
+
+
+def test_a_tile_landed_short_of_the_line_is_one_note() -> None:
+    """A renderer stops its tiles 20px above the calibrated line. The track
+    loses a held tile there, and what is left comes back as a new track every
+    few frames with its bottom standing still: a six-second note was read as
+    2.95s, by its tallest sighting."""
+    from dataclasses import replace  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from dropscore.tracking import TileTrack, tracks_to_notes  # noqa: PLC0415
+
+    calibration = SimpleNamespace(strike_y=450, picture_top=0)
+    speed, fps, height = 150.0, 60.0, 900.0  # a six-second tile
+    falling = TileTrack(pitch=48, track=0)
+    pieces: list[TileTrack] = []
+    for k in range(int(9.2 * fps)):
+        time = k / fps
+        bottom = speed * time
+        top = max(0.0, bottom - height)
+        if bottom <= 430:
+            falling.times.append(time); falling.tops.append(top); falling.bottoms.append(bottom)
+            continue
+        if top >= 428:
+            break
+        if not pieces or len(pieces[-1].times) == 6:
+            pieces.append(TileTrack(pitch=48, track=0))
+        pieces[-1].times.append(time); pieces[-1].tops.append(top); pieces[-1].bottoms.append(430.0)
+    # Smoke standing at the line beside it is no part of the tile.
+    smoke = TileTrack(pitch=48, track=0)
+    for k in range(6):
+        smoke.times.append(4.0 + k / fps); smoke.tops.append(436.0); smoke.bottoms.append(442.0)
+
+    notes = list(tracks_to_notes([falling, smoke, *pieces], speed, calibration, DEFAULT))
+    assert len(notes) == 1 and notes[0].duration == pytest.approx(6.0, abs=0.1)
+
+    off = replace(DEFAULT, tracking=replace(DEFAULT.tracking, join_held=False))
+    short = list(tracks_to_notes([falling, smoke, *pieces], speed, calibration, off))
+    assert max(n.duration for n in short) < 3.5
+
+    # A track that keeps catching the tile every fourth frame leaves the
+    # frames between to pieces of their own (a generated capture's 6.67s notes
+    # read 2.36s); they are joined between its frames.
+    alive = TileTrack(pitch=48, track=0, times=list(falling.times), tops=list(falling.tops),
+                      bottoms=list(falling.bottoms))
+    between: list[TileTrack] = []
+    for piece in pieces:
+        for k, (time, top) in enumerate(zip(piece.times, piece.tops)):
+            if k % 4 == 0:
+                alive.times.append(time); alive.tops.append(top); alive.bottoms.append(434.0)
+            else:
+                if k % 4 == 1:
+                    between.append(TileTrack(pitch=48, track=0))
+                between[-1].times.append(time); between[-1].tops.append(top); between[-1].bottoms.append(430.0)
+    notes = list(tracks_to_notes([alive, *between], speed, calibration, DEFAULT))
+    assert len(notes) == 1 and notes[0].duration == pytest.approx(6.0, abs=0.1)
+
+
+def test_a_blob_that_grows_as_it_falls_is_not_a_tile() -> None:
+    """A bar line carrying lit smoke down with it: the bottom falls at the
+    scroll speed and the top stays put, halfway down the picture."""
+    from dataclasses import replace  # noqa: PLC0415
+    from types import SimpleNamespace  # noqa: PLC0415
+
+    from dropscore.tracking import TileTrack, track_to_note  # noqa: PLC0415
+
+    calibration = SimpleNamespace(strike_y=450, picture_top=0)
+    speed = 150.0
+    blob, tile, entering = (TileTrack(pitch=p, track=0) for p in (55, 57, 59))
+    for k in range(12):
+        time = 10.0 + k / 30.0
+        blob.times.append(time); blob.tops.append(238.0); blob.bottoms.append(250.0 + speed * k / 30.0)
+        tile.times.append(time); tile.tops.append(200.0 + speed * k / 30.0); tile.bottoms.append(250.0 + speed * k / 30.0)
+        entering.times.append(time); entering.tops.append(0.0); entering.bottoms.append(40.0 + speed * k / 30.0)
+
+    assert track_to_note(blob, speed, calibration) is None
+    assert track_to_note(tile, speed, calibration) is not None
+    assert track_to_note(entering, speed, calibration) is not None  # coming in under the top edge
+
+    # Lost in mid-air after four frames, as most of them are.
+    short = TileTrack(pitch=55, track=0, times=blob.times[:4], tops=blob.tops[:4], bottoms=blob.bottoms[:4])
+    assert DEFAULT.tracking.grow_rate > 0
+    from dropscore.tracking import _grows_as_it_falls  # noqa: PLC0415
+    assert _grows_as_it_falls(short, speed, calibration, DEFAULT.tracking)
+    assert not _grows_as_it_falls(tile, speed, calibration, DEFAULT.tracking)
+
+    off = replace(DEFAULT, tracking=replace(DEFAULT.tracking, grow_rate=0.0))
+    assert track_to_note(blob, speed, calibration, off) is not None

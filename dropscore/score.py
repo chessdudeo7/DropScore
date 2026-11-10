@@ -535,7 +535,14 @@ def estimate_meter(
     six = match(6) if series.size > 12 else 0.0
     if beat <= cfg.six_eight_max_beat and six >= cfg.six_eight_margin + max(three, four, 0.0):
         return 6
-    return 3 if three > four else 4
+    # Three has to beat two as well. Music in two or four comes round every
+    # two beats, a waltz does not: the Sonatine (2/2) matched 0.32 at two,
+    # 0.14 at three and 0.10 at four once a few merged notes had blurred its
+    # bars, and was written in 3/4.
+    # Only with six bars to compare: four bars of a waltz are too few for the
+    # match at two to mean anything (3 of 120 such flipped to four).
+    two = match(2) if cfg.three_beats_two and series.size >= 24 else -1.0
+    return 3 if three > four and three > two else 4
 
 
 def _meter(
@@ -991,10 +998,29 @@ def estimate_key(
             )
             unfounded = missing / len(signature) if signature else 0.0
 
+            # A sharp in the signature says the note is played sharp as a
+            # rule. A sonatina in C that visits its dominant has every note of
+            # G major and a heavy G and D, and matched G major's shape better
+            # (0.873 to 0.842) though it plays F four times as long as F sharp:
+            # the one note the two keys differ by sided with C and was charged
+            # only as a fraction of the whole. So an accidental whose natural
+            # sounds longer than it does is charged as well.
+            # Major keys only: a minor piece raises its sixth and seventh as a
+            # matter of course, and a page in D minor that plays B natural
+            # more than B flat was sent to A minor by the same charge.
+            home = tonic if quality == "major" else (tonic + 3) % 12
+            down = 1 if (home * 7) % 12 <= 6 else -1  # sharps displace the note below
+            outweighed = sum(
+                1 for step in signature
+                if weights[(tonic + step) % 12] < weights[(tonic + step - down) % 12]
+            )
+            contested = outweighed / len(signature) if signature and quality == "major" else 0.0
+
             score = (
                 correlation
                 - cfg.out_of_scale_penalty * outside
                 - cfg.unfounded_accidental * unfounded
+                - cfg.outweighed_accidental * contested
             )
             names = MINOR_KEY_NAMES if quality == "minor" else MAJOR_KEY_NAMES
             results.append((score, f"{names[tonic]} {quality}"))
@@ -1033,7 +1059,7 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
     if mode == "split":
         return _relabel(sequence, lambda note: "R" if note.pitch >= 60 else "L")
     if mode == "pitch":
-        return _split_by_pitch(sequence, config, clamp=False)
+        return _part_lone_pairs(_split_by_pitch(sequence, config, clamp=False), config)
 
     left = sequence.hand("L")
     right = sequence.hand("R")
@@ -1048,7 +1074,59 @@ def assign_hands(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequen
                                    source=sequence.source)
         return sequence
 
-    return _split_by_pitch(sequence, config, clamp=False)
+    return _part_lone_pairs(_split_by_pitch(sequence, config, clamp=False), config)
+
+
+def _part_lone_pairs(sequence: NoteSequence, config: Config = DEFAULT) -> NoteSequence:
+    """Two notes struck together with the other hand silent are one in each.
+
+    A boundary by register gives two lines running close together to one
+    hand: a sonatina's left hand climbing into the treble under the right, a
+    third or a sixth below it, came back as the right hand's (37 of 571 notes
+    in the wrong hand). With the other hand's notes all released, a pair
+    struck at once is more often the two hands than one hand's interval:
+    measured on answer keys with the colours taken away, the Sonatine went
+    534 -> 555 of 571, the probe 134 -> 138 of 158, forty generated pieces
+    7093 -> 7275 of 7847, and Alkan's prelude stayed at 718 of 846. Chords of
+    three or more are left alone (splitting them at their widest gap lost
+    more than it won), and so is a pair under a sounding note of the other
+    hand (6890 if split anyway).
+
+    Off by default: on the corpus's own one-colour clips it raised one and
+    lowered three (see ``lone_pairs_are_two_hands``).
+
+    Hands only. The staff is decided by register (``assign_staves``).
+    """
+    if not config.score.lone_pairs_are_two_hands:
+        return sequence
+    notes = sorted(sequence, key=lambda n: (n.onset, n.pitch))
+    hands: list[Hand] = [n.hand for n in notes]
+    together = config.score.repeat_min_gap
+    start = 0
+    for index in range(1, len(notes) + 1):
+        if index < len(notes) and notes[index].onset - notes[start].onset < together:
+            continue
+        group = range(start, index)
+        start = index
+        if len(group) != 2:
+            continue
+        low, high = group
+        if hands[low] != hands[high] or notes[low].pitch == notes[high].pitch:
+            continue
+        other: Hand = "L" if hands[low] == "R" else "R"
+        when = notes[low].onset
+        # Labels as they stand now, earlier pairs already parted.
+        if any(
+            hands[k] == other and notes[k].onset <= when + 1e-6 < notes[k].offset
+            for k in range(len(notes))
+            if when - 30.0 < notes[k].onset <= when + 1e-6
+        ):
+            continue
+        hands[low], hands[high] = "L", "R"
+    return NoteSequence.of(
+        [Note(n.onset, n.pitch, n.duration, h, n.velocity) for n, h in zip(notes, hands)],
+        tempo=sequence.tempo, key=sequence.key, source=sequence.source,
+    )
 
 
 def _looks_like_hands(sequence: NoteSequence, config: Config = DEFAULT) -> bool:
